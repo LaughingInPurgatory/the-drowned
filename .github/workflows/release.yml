@@ -1,0 +1,67 @@
+# Build installers on GitHub-hosted runners and attach them to a release.
+# Trigger: push a version tag (v3.0.0) or manual workflow_dispatch.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to upload to (e.g. v3.0.0)'
+        required: true
+        default: 'v3.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --mac --arm64 --x64 -c.mac.identity=null
+            artifacts: 'release/*.dmg'
+          - os: ubuntu-latest
+            args: --linux --x64 --arm64
+            artifacts: 'release/*.AppImage'
+          - os: windows-latest
+            args: --win --x64 --arm64
+            artifacts: 'release/*setup.exe'
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build + package
+        # --publish never: electron-builder auto-publishes (and uploads its own
+        # latest*.yml / .blockmap update-metadata) whenever it sees a GH token —
+        # we only want the explicit "Upload to release" step below to touch the
+        # release, with just the installer files matched by `artifacts`.
+        run: npx electron-vite build && npx electron-builder ${{ matrix.args }} --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: ${{ matrix.artifacts }}
+          fail_on_unmatched_files: false
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

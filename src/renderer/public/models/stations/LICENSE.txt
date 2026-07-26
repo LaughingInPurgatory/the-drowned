@@ -1,0 +1,6 @@
+Kenney Space Kit (https://kenney.nl/assets/space-kit)
+License: Creative Commons CC0 1.0 Universal (public domain)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Individual modules converted to glTF/GLB and assembled into three station
+archetypes for Whispers In The Void. No attribution required.

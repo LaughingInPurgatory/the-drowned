@@ -1,0 +1,334 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Whispers In The Void</title>
+    <style>
+      html, body { margin: 0; padding: 0; overflow: hidden; background: #000; }
+      #app { position: fixed; inset: 0; }
+
+      /*
+       * Game UI scrollbars — thin cyan chrome matching HUD / panel borders.
+       * Covers docking lists, inventory, maps, menus, overview, etc.
+       * Elements with scrollbar-width:none (e.g. toast strips) still hide.
+       */
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.5) rgba(var(--ui-bg-track-r),var(--ui-bg-track-g),var(--ui-bg-track-b), 0.92);
+      }
+      *::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      *::-webkit-scrollbar-track {
+        background: rgba(var(--ui-bg-track-r),var(--ui-bg-track-g),var(--ui-bg-track-b), 0.9);
+        border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.22);
+        border-radius: 6px;
+        box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.45);
+      }
+      *::-webkit-scrollbar-thumb {
+        background: linear-gradient(
+          180deg,
+          rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.32) 0%,
+          rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb), 0.58) 100%
+        );
+        border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.5);
+        border-radius: 6px;
+        box-shadow: 0 0 8px rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb), 0.28);
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background: linear-gradient(
+          180deg,
+          rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.48) 0%,
+          rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.78) 100%
+        );
+        border-color: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.75);
+        box-shadow: 0 0 12px rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb), 0.45);
+      }
+      *::-webkit-scrollbar-thumb:active {
+        background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.7);
+        border-color: var(--ui-accent);
+      }
+      *::-webkit-scrollbar-corner {
+        background: rgba(var(--ui-bg-track-r),var(--ui-bg-track-g),var(--ui-bg-track-b), 0.9);
+        border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab), 0.15);
+      }
+      *::-webkit-scrollbar-button {
+        display: none;
+        width: 0;
+        height: 0;
+      }
+
+      /*
+       * Subtle rounded corners on game UI chrome.
+       * Exception: HUD (and main-menu) canopy L-braces stay sharp.
+       */
+      :root {
+        --ui-radius: 9px;
+        --ui-radius-sm: 7px;
+        /* Default cyan UI accent (overridden by preferences / UI Colour panel). */
+        --ui-hue: 191;
+        --ui-accent: #7fe6ff;
+        --ui-accent-mid: #6fd8f2;
+        --ui-glow: #4fc3d9;
+        --ui-text: #cfe3ff;
+        --ui-deep: #2e8fa8;
+        --ui-key: #a8d8ea;
+        --ui-soft: #b8d4f0;
+        --ui-muted: #7a9ab8;
+        --ui-dim: #7fa8c9;
+        --ui-bright: #eaffff;
+        --ui-pale: #e8f4ff;
+        --ui-ar: 127;
+        --ui-ag: 230;
+        --ui-ab: 255;
+        --ui-gr: 79;
+        --ui-gg: 195;
+        --ui-gb: 217;
+        --ui-tr: 207;
+        --ui-tg: 227;
+        --ui-tb: 255;
+        /* Panel fill (navy) — independent of accent; retinted via UI Colour. */
+        --ui-bg-hue: 220;
+        --ui-bg-r: 12;
+        --ui-bg-g: 20;
+        --ui-bg-b: 36;
+        --ui-bg2-r: 7;
+        --ui-bg2-g: 12;
+        --ui-bg2-b: 22;
+        --ui-bg-solid: var(--ui-bg-solid);
+        --ui-bg-solid-mid: var(--ui-bg-solid-mid);
+        --ui-bg-scrim-r: 4;
+        --ui-bg-scrim-g: 6;
+        --ui-bg-scrim-b: 12;
+        --ui-bg-track-r: 8;
+        --ui-bg-track-g: 14;
+        --ui-bg-track-b: 26;
+      }
+      #hud .status-panel,
+      #hud .velocity-panel,
+      #hud .system-label,
+      #hud .target-panel,
+      #hud #radar .radar-frame,
+      #hud .system-scan-btn,
+      #hud .bar,
+      #radar .radar-frame,
+      #system-overview,
+      #docking-ui .panel,
+      #docking-ui .side-panel,
+      #docking-ui button,
+      #docking-ui select,
+      #inventory-ui select,
+      #nav-map select,
+      #docking-ui input,
+      #docking-ui textarea,
+      #inventory-ui .panel,
+      #inventory-ui button,
+      #inventory-ui input,
+      #inventory-ui .tab,
+      #nav-map .panel,
+      #nav-map button,
+      #nav-map input,
+      #system-scan-map .ssm-panel,
+      #system-scan-map button,
+      #character-ui .panel,
+      #character-ui button,
+      #character-ui input,
+      #character-ui .portrait-frame,
+      #character-ui .stat-row,
+      #character-ui .ship-stats-panel,
+      #missions-ui .panel,
+      #missions-ui button,
+      #pause-menu .panel,
+      #pause-menu button,
+      #main-menu .panel,
+      #main-menu button,
+      #main-menu input,
+      #main-menu select,
+      #main-menu .new-game-portrait,
+      .game-dialog-overlay .game-dialog,
+      .game-dialog-overlay .game-dialog button,
+      .game-dialog-overlay .game-dialog input,
+      #death-screen .panel,
+      #death-screen button,
+      #datacore-hack .dh-panel,
+      #datacore-hack .dh-track,
+      #datacore-hack button {
+        border-radius: var(--ui-radius);
+      }
+      #hud .bar,
+      #hud .sec-badge,
+      #docking-ui .craft-progress,
+      #inventory-ui .craft-progress {
+        border-radius: var(--ui-radius-sm);
+      }
+      /* L-shaped canopy braces — stay square */
+      #hud .cockpit-frame .corner,
+      #main-menu .frame .corner {
+        border-radius: 0 !important;
+      }
+
+      /*
+       * ── Metallic interface pass ───────────────────────────────────────────
+       * Panels, buttons and inputs read as machined metal plate rather than
+       * flat translucent cards: a fine brushed grain, a specular sweep, and a
+       * bevelled edge lit from above (bright top lip, dark bottom lip).
+       *
+       * Every colour still resolves through the --ui-* custom properties, so
+       * the UI Colour picker (accent + panel hue) keeps working untouched —
+       * the sheen is white-alpha over the themed fill, so it rides whatever
+       * hue the player picks instead of fighting it.
+       *
+       * Selectors are html-prefixed only for specificity: each UI module
+       * injects its own <style> into <head> at runtime, so an equal-specificity
+       * rule here would lose on source order.
+       */
+      :root {
+        --ui-sheen: rgba(255, 255, 255, 0.06);
+        --ui-sheen-hot: rgba(255, 255, 255, 0.115);
+        --ui-grain: rgba(255, 255, 255, 0.02);
+        /* Top lip catches the accent colour like anodised metal. */
+        --ui-lip: rgba(var(--ui-ar), var(--ui-ag), var(--ui-ab), 0.32);
+        --ui-lip-soft: rgba(var(--ui-ar), var(--ui-ag), var(--ui-ab), 0.12);
+        --ui-shade: rgba(0, 0, 0, 0.55);
+      }
+
+      /* Raised plate: panels and cards. */
+      html #hud .status-panel,
+      html #hud .velocity-panel,
+      html #hud .system-label,
+      html #hud .target-panel,
+      html #radar .radar-frame,
+      html #system-overview,
+      html #docking-ui .panel,
+      html #docking-ui .side-panel,
+      html #inventory-ui .panel,
+      html #nav-map .panel,
+      html #system-scan-map .ssm-panel,
+      html #character-ui .panel,
+      html #character-ui .ship-stats-panel,
+      html #character-ui .portrait-frame,
+      html #missions-ui .panel,
+      html #pause-menu .panel,
+      /* .main-view is a transparent full-screen layout container, not a card —
+         plating it would cover the starfield behind the title. */
+      html #main-menu .panel:not(.main-view),
+      html .game-dialog-overlay .game-dialog,
+      html #death-screen .panel,
+      html #datacore-hack .dh-panel {
+        background-image:
+          linear-gradient(103deg, transparent 32%, var(--ui-sheen) 44%,
+            var(--ui-sheen-hot) 50%, var(--ui-sheen) 56%, transparent 68%),
+          repeating-linear-gradient(92deg, var(--ui-grain) 0 1px, transparent 1px 3px),
+          linear-gradient(168deg,
+            rgba(var(--ui-bg-r), var(--ui-bg-g), var(--ui-bg-b), 0.97) 0%,
+            rgba(var(--ui-bg-r), var(--ui-bg-g), var(--ui-bg-b), 0.9) 46%,
+            rgba(var(--ui-bg2-r), var(--ui-bg2-g), var(--ui-bg2-b), 0.95) 100%);
+        box-shadow:
+          inset 0 1px 0 var(--ui-lip),
+          inset 1px 0 0 var(--ui-lip-soft),
+          inset -1px 0 0 var(--ui-lip-soft),
+          inset 0 -1px 0 var(--ui-shade),
+          inset 0 0 26px rgba(0, 0, 0, 0.32),
+          0 3px 12px rgba(0, 0, 0, 0.45);
+      }
+
+      /* Tactile keys: raised, with a real press. */
+      html #hud .system-scan-btn,
+      html #docking-ui button,
+      html #inventory-ui button,
+      html #nav-map button,
+      html #system-scan-map button,
+      html #character-ui button,
+      html #missions-ui button,
+      html #pause-menu button,
+      html #main-menu button,
+      html .game-dialog-overlay .game-dialog button,
+      html #death-screen button,
+      html #datacore-hack button {
+        background-image:
+          linear-gradient(100deg, transparent 30%, var(--ui-sheen) 46%,
+            var(--ui-sheen-hot) 52%, transparent 70%),
+          linear-gradient(180deg,
+            rgba(255, 255, 255, 0.07) 0%,
+            rgba(255, 255, 255, 0.015) 42%,
+            rgba(0, 0, 0, 0.22) 100%),
+          linear-gradient(180deg,
+            rgba(var(--ui-bg-r), var(--ui-bg-g), var(--ui-bg-b), 0.98),
+            rgba(var(--ui-bg2-r), var(--ui-bg2-g), var(--ui-bg2-b), 0.98));
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.16),
+          inset 0 -2px 0 rgba(0, 0, 0, 0.5),
+          0 2px 0 rgba(0, 0, 0, 0.45),
+          0 3px 8px rgba(0, 0, 0, 0.4);
+        transition: box-shadow 90ms ease, transform 90ms ease, filter 90ms ease;
+      }
+      html #hud .system-scan-btn:hover,
+      html #docking-ui button:hover,
+      html #inventory-ui button:hover,
+      html #nav-map button:hover,
+      html #system-scan-map button:hover,
+      html #character-ui button:hover,
+      html #missions-ui button:hover,
+      html #pause-menu button:hover,
+      html #main-menu button:hover,
+      html .game-dialog-overlay .game-dialog button:hover,
+      html #death-screen button:hover,
+      html #datacore-hack button:hover {
+        filter: brightness(1.22);
+        box-shadow:
+          inset 0 1px 0 rgba(255, 255, 255, 0.24),
+          inset 0 -2px 0 rgba(0, 0, 0, 0.5),
+          0 2px 0 rgba(0, 0, 0, 0.45),
+          0 0 14px rgba(var(--ui-gr), var(--ui-gg), var(--ui-gb), 0.35);
+      }
+      /* Pressed: the key travels down and the drop shadow collapses. */
+      html #hud .system-scan-btn:active,
+      html #docking-ui button:active,
+      html #inventory-ui button:active,
+      html #nav-map button:active,
+      html #system-scan-map button:active,
+      html #character-ui button:active,
+      html #missions-ui button:active,
+      html #pause-menu button:active,
+      html #main-menu button:active,
+      html .game-dialog-overlay .game-dialog button:active,
+      html #death-screen button:active,
+      html #datacore-hack button:active {
+        transform: translateY(2px);
+        box-shadow:
+          inset 0 2px 5px rgba(0, 0, 0, 0.65),
+          inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+      }
+
+      /* Recessed: fields and readouts are milled INTO the plate. */
+      html #docking-ui input,
+      html #docking-ui select,
+      html #docking-ui textarea,
+      html #inventory-ui input,
+      html #inventory-ui select,
+      html #nav-map input,
+      html #nav-map select,
+      html #character-ui input,
+      html #main-menu input,
+      html #main-menu select,
+      html .game-dialog-overlay .game-dialog input,
+      html #hud .bar,
+      html #docking-ui .craft-progress,
+      html #inventory-ui .craft-progress {
+        background-image:
+          linear-gradient(180deg,
+            rgba(0, 0, 0, 0.42) 0%,
+            rgba(0, 0, 0, 0.12) 35%,
+            rgba(255, 255, 255, 0.035) 100%);
+        box-shadow:
+          inset 0 2px 4px rgba(0, 0, 0, 0.6),
+          inset 0 -1px 0 rgba(255, 255, 255, 0.07);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
