@@ -40,7 +40,7 @@ test('autopilot speed is about AUTOPILOT_SPEED_MULTIPLIER times normal handling 
 
   const manualState = afloat()
   for (let i = 0; i < 600; i++) {
-    updateFlight(manualState, shipClass, new Set(['KeyW']), { dx: 0, dy: 0 }, DT)
+    updateFlight(manualState, shipClass, new Set(["KeyW"]), DT)
   }
   const manualSpeed = Math.hypot(...manualState.velocity)
 
@@ -203,7 +203,7 @@ test('the autopilot is never slower than steering by hand', () => {
 
   const manual = afloat()
   for (let i = 0; i < 900; i++) {
-    updateFlight(manual, shipClass, new Set(['KeyW']), { dx: 0, dy: 0 }, DT)
+    updateFlight(manual, shipClass, new Set(["KeyW"]), DT)
   }
   const handSteered = Math.hypot(...manual.velocity)
 

@@ -1237,6 +1237,59 @@ for (const c of SHIP_CLASSES) {
 }
 
 /**
+ * Deepen every hull.
+ *
+ * The sections were drawn shallow — a legacy of hulls that only ever had to
+ * look right in a vacuum, where there is no waterline to sit against. On the
+ * sea a shallow section reads as a raft skimming the surface, half in and half
+ * out with nothing to it. Doubling the depth gives a vessel real topside above
+ * the water and real body below it, so it reads as *floating* rather than
+ * embedded in the surface.
+ *
+ * Heights and vertical offsets scale together on purpose: that preserves the
+ * sheer line and the freeboard *ratio* the roster authored, and simply makes
+ * the whole hull bigger in the one dimension it was short in. Scaling the
+ * height alone would drown every boat.
+ *
+ * One scale here beats redrawing the station bands of a hundred hulls, and it
+ * catches the hand-authored classes as well as the generated ones.
+ *
+ * ponytail: single global multiplier. Split per role if planing hulls and
+ * loaded freighters need different draught than their authored ratio gives.
+ */
+const HULL_DEPTH_SCALE = 2
+/**
+ * Least fraction of a section's depth that must sit above the waterline.
+ *
+ * This is the half of the problem depth alone does not fix. The generated
+ * roster authors a freeboard offset, but the hand-crafted classes carry no
+ * `stationOffsetsY` at all — their sections are centred on y = 0, so they float
+ * exactly half submerged however deep you make them. That is literally "sitting
+ * half in it". Raising every hull to a floor here lifts the flat ones without
+ * flattening the sheer the roster went to the trouble of drawing.
+ */
+const MIN_FREEBOARD_FRACTION = 0.32
+/** Rise of the deck line toward the bow on hulls that had none authored. */
+const DEFAULT_SHEER = 0.22
+
+for (const c of SHIP_CLASSES) {
+  const hull = c?.hull
+  if (!hull?.stationHeights?.length) continue
+  hull.stationHeights = hull.stationHeights.map((h) => h * HULL_DEPTH_SCALE)
+
+  const last = Math.max(1, hull.stationHeights.length - 1)
+  const authored = hull.stationOffsetsY
+  hull.stationOffsetsY = hull.stationHeights.map((h, i) => {
+    const scaled = (authored?.[i] ?? 0) * HULL_DEPTH_SCALE
+    const t = i / last
+    // Classic sheer: lowest around midships where the working deck is, rising
+    // toward the bow so she lifts over a sea, with a little back at the transom.
+    const curve = Math.pow(t, 2.2) * DEFAULT_SHEER + Math.pow(1 - t, 3) * DEFAULT_SHEER * 0.35
+    return Math.max(scaled, h * (MIN_FREEBOARD_FRACTION + curve))
+  })
+}
+
+/**
  * Hulls authored for space carry swept wings and fins. The lofter's "wing" is
  * just a flat slab bolted to a station, so held low, short and level it reads
  * as a sponson or a rubbing strake — swept or raised, it reads as an aircraft.

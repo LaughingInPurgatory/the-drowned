@@ -9,12 +9,18 @@ import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
 import { createSonarPulse } from './render/sonarPulse.js'
 import { createSprayOverlay } from './render/spray.js'
 import {
+  updateTurretAim,
+  centreTurret,
+  aimTurretAt,
+  turretAimPoint,
+  turretMuzzleWorld,
+  turretDirection
+} from './game/turret.js'
+import {
   syncMeshToEntity,
   syncChaseCamera,
   snapChaseCamera,
   resetChaseCameraState,
-  getShipAimPoint,
-  AIM_LOOK_AHEAD,
   adjustChaseZoom,
   resetChaseZoom,
   setChaseFreeLook,
@@ -58,7 +64,6 @@ import { playerSkillBonuses, ensureSkills, getSkillDef } from './game/skills.js'
 import {
   fireProjectile,
   updateProjectiles,
-  prunePlayerLasersOffBoresight,
   updateNpcAI,
   updateCombatFlag,
   prepareCombatFrame,
@@ -489,6 +494,7 @@ function canPlayerFire() {
 }
 
 const _playerAimPoint = new THREE.Vector3()
+const _playerMuzzle = new THREE.Vector3()
 
 /** Fire once if allowed. Cooldowns live on the ship; safe to call every frame while held. */
 function tryPlayerFire(weaponTypeFilter) {
@@ -496,8 +502,11 @@ function tryPlayerFire(weaponTypeFilter) {
   try {
     // Seat first so click-to-fire between frames matches the reticle this frame.
     syncChaseCamera(camera, gameState.player.ship, { cruising })
-    // Boresight only — lasers fly pure ship +Z (never home on a Tab-lock).
-    getShipAimPoint(gameState.player.ship, _playerAimPoint, AIM_LOOK_AHEAD)
+    // Guns go where the turret is laid, not where the bow is pointing — the
+    // crosshair is the projection of this same point, so what you see is what
+    // you hit. Never homes on a Tab-lock.
+    turretAimPoint(gameState.player.ship, playerShipClass, _playerAimPoint)
+    turretMuzzleWorld(gameState.player.ship, playerShipClass, _playerMuzzle)
     fireProjectile(
       gameState,
       gameState.player.ship,
@@ -506,7 +515,8 @@ function tryPlayerFire(weaponTypeFilter) {
       onWeaponFired,
       weaponTypeFilter,
       null,
-      _playerAimPoint.toArray()
+      _playerAimPoint.toArray(),
+      _playerMuzzle.toArray()
     )
     // Pointerdown path doesn't wait for the late animate() mesh pass.
     syncProjectileMeshesNow()
@@ -534,6 +544,33 @@ function syncProjectileMeshesNow() {
   }
 }
 
+/**
+ * MMB hands the mouse back to the UI without leaving the helm.
+ *
+ * With the guns on the mouse there is no spare cursor for the contacts list,
+ * the chart or a menu, and leaving flight entirely just to click something is
+ * heavy-handed. Middle-click releases pointer lock but keeps W/A/S/D driving
+ * the boat; the turret simply stops tracking, because mouseAim only
+ * accumulates while locked. Middle-click again takes the guns back.
+ */
+let mouseFreedForUI = false
+
+function toggleTurretMouseLock() {
+  if (isFlightPointerLocked()) {
+    mouseFreedForUI = true
+    // Without this the unlock is read as an Esc and opens the pause menu.
+    suppressPointerUnlockPause = true
+    document.exitPointerLock()
+    setTimeout(() => {
+      suppressPointerUnlockPause = false
+    }, 400)
+    return
+  }
+  mouseFreedForUI = false
+  systemOverview?.setInteractive(false)
+  requestFlightPointerLock()
+}
+
 // Capture fire buttons independently. Do NOT sync both from e.buttons —
 // under pointer-lock, pressing RMB while LMB is held often delivers a
 // spurious up / buttons mask that would clear the laser (or vice versa).
@@ -543,13 +580,19 @@ function setFireButton(button, down) {
   else if (button === 2) missileFireHeld = down
 }
 function onFireButtonDown(e) {
-  if (e.button !== 0 && e.button !== 2) return
+  if (e.button !== 0 && e.button !== 1 && e.button !== 2) return
   // Ignore UI targets (menus, overview) so we don't steal clicks.
   const t = e.target
   if (t && t !== document && t !== document.body && t !== renderer?.domElement) {
     if (typeof t.closest === 'function' && t.closest('button, input, select, textarea, a, #nav-map, #inventory-ui, #missions-ui, #character-ui, #system-overview.interactive, #docking-ui, #pause-menu, #menu')) {
       return
     }
+  }
+  if (e.button === 1) {
+    // Middle-click is never a fire button — and the default is autoscroll.
+    e.preventDefault()
+    if (gameState && !paused && !docked) toggleTurretMouseLock()
+    return
   }
   setFireButton(e.button, true)
   if (!canPlayerFire()) return
@@ -694,6 +737,7 @@ function hidePointerLockBridge() {
 function forceFlightControlsOn() {
   flightModeWanted = true
   flightMode = true
+  mouseFreedForUI = false
   laserFireHeld = false
   missileFireHeld = false
   setChaseFreeLook(false)
@@ -950,6 +994,18 @@ document.addEventListener('pointerlockchange', () => {
   if (paused || characterOpen || chartOpen || inventoryOpen || missionsOpen || docked) {
     flightMode = false
     hidePointerLockBridge()
+    return
+  }
+
+  // Deliberate MMB release: stay at the helm, hand the cursor to the UI. No
+  // bridge overlay — the whole point is that things underneath are clickable.
+  if (mouseFreedForUI && flightModeWanted && !paused && !docked && !dockEffect) {
+    flightMode = true
+    laserFireHeld = false
+    missileFireHeld = false
+    hidePointerLockBridge()
+    document.body.style.cursor = ''
+    systemOverview?.setInteractive(true)
     return
   }
 
@@ -5090,7 +5146,7 @@ function updateTargetDirectionIndicator() {
   arrow.style.borderBottomColor = color
 }
 
-// Shared with chase cam + guns: ship +Z × AIM_LOOK_AHEAD (see sceneSync).
+// Where the guns are laid — the crosshair is this point projected (see game/turret.js).
 const _boresightAim = new THREE.Vector3()
 const _boresightFwd = new THREE.Vector3()
 const _boresightQuat = new THREE.Quaternion()
@@ -5133,7 +5189,10 @@ function updateCrosshair() {
   hudReticleDot.scale.set(sx, sy, 1)
 
   camera.updateMatrixWorld(true)
-  getShipAimPoint(gameState.player.ship, _boresightAim, AIM_LOOK_AHEAD)
+  // The crosshair is wherever the turret is trained — it moves around the
+  // screen as the mount traverses and elevates, and it is the same point the
+  // guns fire at.
+  turretAimPoint(gameState.player.ship, playerShipClass, _boresightAim)
   const p = _boresightAim.project(camera)
   if (Number.isFinite(p.x) && Number.isFinite(p.y) && p.z <= 1) {
     hudReticleRing.position.set(p.x, p.y, -1)
@@ -5513,13 +5572,17 @@ function animate() {
     audio.setThrustState('accel')
     audio.setEngineRevs(1)
   } else {
+    // Lay the turret first: it is the only consumer of the accumulated mouse
+    // delta, and doing it before the hull moves keeps a click-to-fire between
+    // frames matching the crosshair drawn this frame.
+    if (flightMode) updateTurretAim(gameState.player.ship, mouseAim)
+    else centreTurret(gameState.player.ship, dt)
     {
       const skillB = playerSkillBonuses(gameState)
       updateFlight(
         gameState.player.ship,
         playerShipClass,
         flightMode ? keys : EMPTY_KEYS,
-        mouseAim,
         dt,
         {
           speedMult: skillB.speedMult,
@@ -5534,9 +5597,6 @@ function animate() {
     thrustState = !flightMode ? null : keys.has('KeyW') ? 'accel' : keys.has('KeyS') ? 'brake' : 'idle'
     audio.setThrustState(thrustState)
     if (thrustState) audio.setEngineRevs(Math.abs(gameState.player.ship.throttle ?? 0))
-    // Drop laser bolts from the last turn so a stationary burst isn't buried
-    // under ~1s of off-boresight trail (ttl 1.2s otherwise).
-    prunePlayerLasersOffBoresight(gameState)
   }
   // The sea has the final say on where the hull sits — after handling, before
   // anything reads the pose. Every other mover goes through the same clamp

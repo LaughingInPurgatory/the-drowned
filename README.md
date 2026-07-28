@@ -104,14 +104,16 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | Input | Action |
 | --- | --- |
 | **Space** | Take / leave the helm |
-| **Mouse movement** | Rudder — steers even at a standstill |
+| **Mouse movement** | Lay the gun — traverses and elevates the turret |
 | **Alt + mouse** | Free-look around the boat (release Alt to restore the chase seat) |
 | **Alt + Enter** | Toggle fullscreen |
 | **Left click** | Fire all guns (can hold with RMB) |
+| **Middle click** | Release the mouse for menus without leaving the helm |
 | **Right click** | Fire all launchers (can hold with LMB) |
 | **W / S** | Ahead / astern (coasts down when released; astern capped at 25% of ahead) |
 | **S** | While alongside: open/close **Services** |
-| **A / D** | Crab sideways to port / starboard — works stopped, for coming alongside |
+| **A / D** | Helm to port / starboard — bites harder under way, but works stopped |
+| **Q / E** | Thrusters — crab sideways, for coming alongside |
 | **Tab** | Target under crosshair, or cycle nearby contacts |
 | **Shift+Tab** | Clear target lock |
 | **Backspace** | Clear target lock |

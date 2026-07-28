@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { turretMountLocal } from '../game/turret.js'
 import { buildHullGeometry } from '../procgen/hull.js'
 import { mulberry32 } from '../procgen/prng.js'
 import { stationMaterialMaps, retileUVsTriplanar } from './textures.js'
@@ -1169,6 +1170,83 @@ function addAlienDetails(group, hull, mats, baseColor) {
  * @param {object} shipClass
  * @param {{ lite?: boolean }} [opts] lite=true for NPCs: skip edge overlays (big CPU save).
  */
+/**
+ * The gun mount.
+ *
+ * Every vessel carries one, on the centreline forward of the house. It is a
+ * two-part gimbal so the barrel can be laid independently of the hull:
+ *
+ *   `yawGroup`   trains left and right, relative to the hull
+ *   `pitchGroup` elevates, nested inside the yaw group so it inherits bearing
+ *
+ * Both are exposed through `group.userData.turret` for render/sceneSync.js to
+ * drive each frame. The geometry is built from the same `turretMountLocal`
+ * numbers game/turret.js fires from, so the shells leave the barrel you can
+ * see rather than the middle of the boat.
+ */
+function addTurret(group, shipClass, mats) {
+  const mount = turretMountLocal(shipClass)
+
+  const yawGroup = new THREE.Group()
+  yawGroup.position.set(mount.x, mount.y, mount.z)
+  group.add(yawGroup)
+
+  // Barbette: the fixed ring the mount sits in.
+  const ringR = Math.max(0.32, mount.height * 0.85)
+  const barbette = new THREE.Mesh(
+    new THREE.CylinderGeometry(ringR * 1.12, ringR * 1.22, mount.height * 0.32, 12),
+    mats.structure
+  )
+  barbette.position.y = mount.height * 0.16
+  barbette.castShadow = true
+  yawGroup.add(barbette)
+
+  // Gunhouse: a squat shield, flat-backed so the bearing is readable at a
+  // glance from the chase camera.
+  const house = new THREE.Mesh(
+    new THREE.BoxGeometry(ringR * 1.9, mount.height * 0.78, ringR * 2.1),
+    mats.panel
+  )
+  house.position.y = mount.height * 0.62
+  house.castShadow = true
+  yawGroup.add(house)
+
+  const pitchGroup = new THREE.Group()
+  pitchGroup.position.y = mount.height
+  yawGroup.add(pitchGroup)
+
+  // Barrel along +Z, so elevating is a rotation about local X.
+  const barrelR = Math.max(0.055, mount.barrel * 0.045)
+  const barrel = new THREE.Mesh(
+    new THREE.CylinderGeometry(barrelR * 0.82, barrelR, mount.barrel, 8),
+    mats.hardpoint
+  )
+  barrel.rotation.x = Math.PI / 2
+  barrel.position.z = mount.barrel * 0.5
+  barrel.castShadow = true
+  pitchGroup.add(barrel)
+
+  // Muzzle brake — reads as a gun rather than a pipe.
+  const brake = new THREE.Mesh(
+    new THREE.CylinderGeometry(barrelR * 1.5, barrelR * 1.5, mount.barrel * 0.1, 8),
+    mats.hardpoint
+  )
+  brake.rotation.x = Math.PI / 2
+  brake.position.z = mount.barrel * 0.94
+  pitchGroup.add(brake)
+
+  // Recoil cradle, so the barrel has something to pivot in.
+  const cradle = new THREE.Mesh(
+    new THREE.BoxGeometry(barrelR * 4.2, barrelR * 3.4, mount.barrel * 0.3),
+    mats.structure
+  )
+  cradle.position.z = mount.barrel * 0.12
+  pitchGroup.add(cradle)
+
+  group.userData.turret = { yawGroup, pitchGroup }
+  return group.userData.turret
+}
+
 export function buildShipMesh(shipClass, opts = {}) {
   const group = new THREE.Group()
   group.name = shipClass.id
@@ -1347,6 +1425,10 @@ export function buildShipMesh(shipClass, opts = {}) {
     marker.rotation.x = Math.PI / 2
     group.add(marker)
   }
+
+  // Every vessel carries a gun mount, lite NPCs included — it is four meshes
+  // and it is the thing the player is aiming at and being shot by.
+  addTurret(group, shipClass, mats)
 
   // Police: bold black/white livery + red/blue emergency flashers.
   if (isPolice) {

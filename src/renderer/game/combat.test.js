@@ -61,8 +61,6 @@ test('player takes 25% less damage than an NPC for the same hit', () => {
   assert.equal(player.hull, 100 - 40 * PLAYER_DAMAGE_TAKEN_MULT)
 })
 
-
-
 test('fireProjectile spawns a projectile per hardpoint that travels and can hit a target', () => {
   const shipClass = getShipClass('needle_dart')
   const shooter = { position: [0, 0, 0], quaternion: [0, 0, 0, 1], lastFireAt: -Infinity }
@@ -123,7 +121,9 @@ test('fireProjectile with a weaponTypeFilter the ship has no hardpoint for fires
   assert.equal(gameState.projectiles.length, 0)
 })
 
-test('single player laser spawns on centerline and flies pure ship-forward', () => {
+test('a single gun fires from the turret muzzle, not the hull centreline', () => {
+  // The guns are on a mount now. Where a round starts is the end of the barrel,
+  // wherever the barrel happens to be trained — not a fixed point on the hull.
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const shooter = {
     position: [0, 0, 0],
@@ -133,16 +133,36 @@ test('single player laser spawns on centerline and flies pure ship-forward', () 
   const hp = { ...shipClass.hardpoints[0], position: [3, 2, 5] }
   const cls = { ...shipClass, hardpoints: [hp] }
   const gameState = { simTime: 0, projectiles: [] }
-  const aim = [0, 0, 200]
-  fireProjectile(gameState, shooter, cls, 'player', null, 'laser', null, aim)
+  const muzzle = [0, 4, 9]
+  const aim = [0, 4, 400]
+  fireProjectile(gameState, shooter, cls, 'player', null, 'laser', null, aim, muzzle)
   assert.equal(gameState.projectiles.length, 1)
   const p = gameState.projectiles[0]
-  assert.deepEqual(p.position, [0, 0, 8], 'single player laser uses centerline muzzle spawn')
+  assert.ok(
+    Math.hypot(p.position[0] - muzzle[0], p.position[1] - muzzle[1], p.position[2] - muzzle[2]) < 1,
+    `round started at ${p.position}, not at the barrel ${muzzle}`
+  )
   const speed = Math.hypot(...p.velocity)
   const dir = p.velocity.map((v) => v / speed)
-  assert.ok(Math.abs(dir[0]) < 1e-5)
-  assert.ok(Math.abs(dir[1]) < 1e-5)
-  assert.ok(Math.abs(dir[2] - 1) < 1e-5)
+  assert.ok(Math.abs(dir[2] - 1) < 1e-3, 'and flies at the point the gun is laid on')
+})
+
+test('the guns follow the turret, not the bow', () => {
+  // The behaviour this replaces: player shots used to be forced down the hull's
+  // +Z whatever they were aimed at, because they were welded to it.
+  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
+  const shooter = {
+    position: [0, 0, 0],
+    quaternion: [0, 0, 0, 1],
+    equippedWeapons: { fwd1: 'pulse_laser' }
+  }
+  const gameState = { simTime: 0, projectiles: [] }
+  // Laid hard to starboard and elevated, while the bow still points down +Z.
+  fireProjectile(gameState, shooter, shipClass, 'player', null, 'laser', null, [-300, 90, 40], [0, 4, 6])
+  const p = gameState.projectiles[0]
+  const speed = Math.hypot(...p.velocity)
+  assert.ok(p.velocity[0] / speed < -0.7, 'the round should go where the gun is pointing')
+  assert.ok(p.velocity[1] / speed > 0.1, 'including upward, for anything not on the surface')
 })
 
 test('multi-turret player LMB fires every laser with separated muzzles', () => {
@@ -156,12 +176,14 @@ test('multi-turret player LMB fires every laser with separated muzzles', () => {
   fireProjectile(gameState, shooter, shipClass, 'player', null, 'laser', null, [0, 0, 200])
   assert.equal(gameState.projectiles.length, 2, 'both laser hardpoints fire on LMB')
   const xs = gameState.projectiles.map((p) => p.position[0]).sort((a, b) => a - b)
-  assert.ok(xs[0] < -0.5 && xs[1] > 0.5, 'laser muzzles fan left/right')
+  assert.ok(xs[0] < -0.5 && xs[1] > 0.5, 'muzzles fan left/right so both are visible')
   for (const p of gameState.projectiles) {
     assert.equal(p.weaponType, 'laser')
     const speed = Math.hypot(...p.velocity)
     const dir = p.velocity.map((v) => v / speed)
-    assert.ok(Math.abs(dir[2] - 1) < 1e-5, 'lasers still fly ship-forward')
+    // Every mount converges on the point the gun is laid on, rather than each
+    // firing parallel down the hull axis.
+    assert.ok(dir[2] > 0.99, 'rounds converge on the aim point')
   }
 })
 
@@ -184,45 +206,6 @@ test('multi-launcher player RMB fires every missile hardpoint', () => {
   const xs = gameState.projectiles.map((p) => p.position[0]).sort((a, b) => a - b)
   assert.ok(xs[0] < -0.5 && xs[1] > 0.5, 'missile muzzles are laterally separated')
   for (const p of gameState.projectiles) assert.equal(p.weaponType, 'missile')
-})
-
-test('prunePlayerLasersOffBoresight drops turn-spray but keeps on-axis bolts', async () => {
-  const { prunePlayerLasersOffBoresight } = await import('./combat.js')
-  const gameState = {
-    player: { ship: { quaternion: [0, 0, 0, 1] } },
-    projectiles: [
-      { id: 'a', ownerId: 'player', weaponType: 'laser', velocity: [0, 0, 600] },
-      { id: 'b', ownerId: 'player', weaponType: 'laser', velocity: [600, 0, 0] }, // 90° off
-      { id: 'c', ownerId: 'player', weaponType: 'missile', velocity: [100, 0, 0] },
-      { id: 'd', ownerId: 'npc-1', weaponType: 'laser', velocity: [0, 100, 0] }
-    ]
-  }
-  prunePlayerLasersOffBoresight(gameState)
-  assert.deepEqual(
-    gameState.projectiles.map((p) => p.id),
-    ['a', 'c', 'd'],
-    'only the off-boresight player laser is removed'
-  )
-})
-
-test('prunePlayerLasersOffBoresight spares drone bolts fired off the ship axis', async () => {
-  const { prunePlayerLasersOffBoresight } = await import('./combat.js')
-  const gameState = {
-    player: { ship: { quaternion: [0, 0, 0, 1] } },
-    projectiles: [
-      // A drone sits off to one side and engages its own target, so its bolts
-      // are almost never aligned with the player's nose. They must survive, or
-      // drones can never land a hit.
-      { id: 'drone', ownerId: 'player', weaponType: 'laser', velocity: [600, 0, 0], fromDrone: true },
-      { id: 'spray', ownerId: 'player', weaponType: 'laser', velocity: [600, 0, 0] }
-    ]
-  }
-  prunePlayerLasersOffBoresight(gameState)
-  assert.deepEqual(
-    gameState.projectiles.map((p) => p.id),
-    ['drone'],
-    'drone bolt kept, player turn-spray at the same angle still culled'
-  )
 })
 
 test('NPC lasers keep full hardpoint offsets when aiming at aimWorld', () => {

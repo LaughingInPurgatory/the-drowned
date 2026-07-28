@@ -5,6 +5,7 @@ import { getSystem } from '../procgen/world.js'
 import { snapToSea } from '../world/sea.js'
 import { inHomeWaters } from '../procgen/world.js'
 import { headingOf, applySeaAttitude } from './flight.js'
+import { aimTurretAt, turretMuzzleWorld, turretAimPoint } from './turret.js'
 import {
   clearPositionOfBodies,
   positionOverlapsBodies,
@@ -220,7 +221,8 @@ export function fireProjectile(
   onFire,
   weaponTypeFilter = null,
   targetRef = null,
-  aimWorld = null
+  aimWorld = null,
+  muzzleWorld = null
 ) {
   shooter.hardpointCooldowns ??= {}
   shooter.equippedWeapons ??= {}
@@ -336,14 +338,24 @@ export function fireProjectile(
       }
     }
 
-    _fireMuzzle.set(localX, localY, localZ).applyQuaternion(_fireQuat).add(_firePos)
-    if (ownerId === 'player' && mountType === 'laser') {
-      _projDir.copy(_fireFwd)
+    if (Array.isArray(muzzleWorld) && muzzleWorld.length === 3) {
+      // Fired from a turret: the barrel is the origin, wherever it is trained.
+      // Multi-mount fans still spread, but around the muzzle rather than the
+      // hull centreline.
+      _fireMuzzle.set(localX * 0.35, localY * 0.35, 0).applyQuaternion(_fireQuat)
+      _fireMuzzle.x += muzzleWorld[0]
+      _fireMuzzle.y += muzzleWorld[1]
+      _fireMuzzle.z += muzzleWorld[2]
     } else {
-      _projDir.copy(_aimPoint).sub(_fireMuzzle)
-      if (_projDir.lengthSq() < 1e-8) _projDir.copy(_fireFwd)
-      else _projDir.normalize()
+      _fireMuzzle.set(localX, localY, localZ).applyQuaternion(_fireQuat).add(_firePos)
     }
+    // Everything now aims at the point it was given. The old special case that
+    // forced player guns down the hull's +Z existed because they were welded to
+    // it; with a turret that would fire straight ahead no matter where the
+    // player had laid the mount.
+    _projDir.copy(_aimPoint).sub(_fireMuzzle)
+    if (_projDir.lengthSq() < 1e-8) _projDir.copy(_fireFwd)
+    else _projDir.normalize()
     _projQuat.setFromUnitVectors(_localForward, _projDir)
 
     const dmg =
@@ -413,36 +425,11 @@ function closestDistanceToSegment(point, segStart, segEnd) {
 
 // Player lasers that no longer track current ship +Z (fired during a turn) are
 // dropped so a stationary burst isn't painted over by the old spray for ~1s.
-const BORESIGHT_KEEP_DOT = 0.995 // ~5.7°
-const _pruneFwd = new THREE.Vector3()
-const _pruneQuat = new THREE.Quaternion()
 
-/**
- * Remove player laser bolts whose travel dir is off the live boresight.
- * Call after ship orientation updates (and before drawing).
- */
-export function prunePlayerLasersOffBoresight(gameState) {
-  const ship = gameState?.player?.ship
-  if (!ship || !gameState.projectiles?.length) return
-  _pruneQuat.fromArray(ship.quaternion).normalize()
-  _pruneFwd.set(0, 0, 1).applyQuaternion(_pruneQuat)
-  if (_pruneFwd.lengthSq() < 1e-8) return
-  _pruneFwd.normalize()
-  gameState.projectiles = gameState.projectiles.filter((p) => {
-    // Drone bolts are ownerId 'player' but are NOT fired from the player's
-    // hardpoints — a drone sits off to one side and shoots at its own target.
-    // This cull exists to drop the player's own turn-spray, and it was deleting
-    // essentially every drone shot in flight (only ~5.7 degrees off the ship's
-    // nose survives), which is why drones appeared to never hit anything.
-    if (p.fromDrone) return true
-    if (p.ownerId !== 'player' || p.weaponType === 'missile') return true
-    const sp = Math.hypot(p.velocity[0], p.velocity[1], p.velocity[2])
-    if (sp < 1e-6) return false
-    const dot =
-      (p.velocity[0] * _pruneFwd.x + p.velocity[1] * _pruneFwd.y + p.velocity[2] * _pruneFwd.z) / sp
-    return dot >= BORESIGHT_KEEP_DOT
-  })
-}
+
+// Scratch for NPC turret lay — updateNpcAI runs for every contact every frame.
+const _npcMuzzle = new THREE.Vector3()
+const _npcAim = new THREE.Vector3()
 
 // Debris field collision size (world units) — large enough to hit when aimed.
 const WRECK_HIT_RADIUS = 22
@@ -897,9 +884,29 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
       velocity.addScaledVector(forward, stats.accel * dt)
     }
 
+    // Keep the mount trained whenever there is someone to train it on, not
+    // only on the frames a round goes off — otherwise the barrel snaps to the
+    // target at the instant of firing and sits dead between rounds.
+    aimTurretAt(npc, opponent.position)
+
     if (distance < FIRE_RANGE && forward.dot(toOpponent) > FIRE_CONE_DOT) {
       const targetRef = opponent.id === 'player' ? { kind: 'player' } : { kind: 'npc', id: opponent.id }
-      fireProjectile(gameState, npc, npcShipClass, npc.id, onFire, null, targetRef)
+      // Fire from the barrel. The hull still has to have them roughly ahead
+      // (FIRE_CONE_DOT above) — the turret gives fine lay within that arc, not
+      // a 360° broadside.
+      turretMuzzleWorld(npc, npcShipClass, _npcMuzzle)
+      turretAimPoint(npc, npcShipClass, _npcAim)
+      fireProjectile(
+        gameState,
+        npc,
+        npcShipClass,
+        npc.id,
+        onFire,
+        null,
+        targetRef,
+        _npcAim.toArray(),
+        _npcMuzzle.toArray()
+      )
     }
   } else if (npc.aiState === 'ram') {
     // A suicide run is aimed squarely at the player regardless of whatever

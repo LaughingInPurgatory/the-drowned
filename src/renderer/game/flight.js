@@ -11,7 +11,10 @@ const THROTTLE_RATE = 0.6 // fraction of full throttle gained/lost per second wh
 const THROTTLE_DECAY = 0.55 // throttle returns toward 0 per second when W/S released
 const THROTTLE_MIN = -1 // S can ramp throttle negative for astern
 const REVERSE_SPEED_FRACTION = 0.25 // astern speed never exceeds this fraction of the hull's forward max
-const MOUSE_SENSITIVITY = 0.0022 // radians per pixel of mouse movement, scaled by the hull's turnRate
+// Rudder is now on the keyboard. The mouse lays the turret and nothing else
+// (game/turret.js) — weapons and movement are independent, which is the whole
+// point of putting the guns on a mount.
+const RUDDER_RATE = 0.028 // radians per second of held helm, scaled by turnRate
 // A rudder bites harder with water flowing past it, but this is an arcade boat:
 // even dead in the water you can kick the stern round on the screws. This is the
 // authority floor at a standstill, rising to full once under way.
@@ -95,9 +98,15 @@ export function applySeaAttitude(shipState, heading, t, bank = 0, trim = 0) {
 }
 
 /**
+ * Advance the hull one step.
+ *
+ * Takes no mouse input by design: the helm is entirely on the keyboard, and
+ * the mouse belongs to the turret (game/turret.js). Passing the mouse delta in
+ * here as well would mean two consumers racing for the same accumulated pixels.
+ *
  * @param {object} [skillOpts] player-only skill mults: { speedMult, turnMult }
  */
-export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts = null, t = 0) {
+export function updateFlight(shipState, shipClass, keys, dt, skillOpts = null, t = 0) {
   const speedMult = skillOpts?.speedMult ?? 1
   const turnMult = skillOpts?.turnMult ?? 1
   // skillOpts.maxSpeed overrides base hull speed (e.g. Engine Upgrade accessory).
@@ -123,17 +132,18 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
     shipState.throttle = Math.min(0, shipState.throttle + THROTTLE_DECAY * dt)
   }
 
-  // Rudder: the mouse steers. Authority rises with way through the water but
-  // never falls to nothing, so a stopped boat can still be walked round.
+  // Rudder: A/D put the helm over. Authority rises with way through the water
+  // but never falls to nothing, so a stopped boat can still be walked round.
+  //
+  // The mouse is deliberately not read here. It belongs to the turret, and two
+  // consumers of the same accumulated delta would each get half of it.
   const way = Math.min(1, velocity.length() / Math.max(1e-3, speed * STEER_AUTHORITY_SPEED_FRACTION))
   const authority = STEER_AUTHORITY_AT_REST + (1 - STEER_AUTHORITY_AT_REST) * way
-  // Camera sits astern looking forward, so hull local +X is screen-left (the
-  // same reason radar negates x). Mouse-right must therefore yaw negative.
-  const rudder = -mouseAim.dx * MOUSE_SENSITIVITY
-  mouseAim.dx = 0
-  mouseAim.dy = 0 // no pitch input on the water — consume it so it cannot pile up
+  let helm = 0
+  if (keys.has('KeyA')) helm += 1
+  if (keys.has('KeyD')) helm -= 1
 
-  const yawDelta = rudder * turnRate * authority
+  const yawDelta = helm * RUDDER_RATE * turnRate * authority * dt * 60
   heading += yawDelta
   shipState.heading = heading
 
@@ -148,11 +158,12 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
   const thrustResponse = 2.5
   velocity.addScaledVector(forward, accel * thrustResponse * shipState.throttle * dt)
 
-  // A/D crab sideways. Deliberately usable at a standstill — this is how you
-  // come alongside a quay without a twelve-point turn.
+  // Q/E crab sideways on the bow and stern thrusters. Deliberately usable at a
+  // standstill — this is how you come alongside a quay without a twelve-point
+  // turn. A/D turn the boat; these move it bodily.
   let strafe = 0
-  if (keys.has('KeyA')) strafe -= 1
-  if (keys.has('KeyD')) strafe += 1
+  if (keys.has('KeyQ')) strafe -= 1
+  if (keys.has('KeyE')) strafe += 1
   if (strafe !== 0) {
     velocity.addScaledVector(starboard, strafe * accel * STRAFE_ACCEL_MULTIPLIER * dt)
   }

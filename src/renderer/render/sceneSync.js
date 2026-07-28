@@ -50,6 +50,26 @@ const _altUp = new THREE.Vector3()
 export function syncMeshToEntity(mesh, entityState) {
   mesh.position.fromArray(entityState.position)
   mesh.quaternion.fromArray(entityState.quaternion)
+  syncTurretMesh(mesh, entityState)
+}
+
+/**
+ * Train the visible gun mount to match the aim stored on the entity.
+ *
+ * Yaw is relative to the hull and the mount hangs off the hull group, so it
+ * comes through as a plain local rotation. Pitch is negated because the barrel
+ * is modelled along local +Z and elevating it is a negative rotation about X.
+ *
+ * The hull's own wave tilt is *not* compensated for here. Doing so would be
+ * more physically honest, but the aim maths in game/turret.js treats the mount
+ * as stabilised, and a visible barrel that disagreed with where the shells go
+ * is worse than one that rides the swell with the deck.
+ */
+export function syncTurretMesh(mesh, entityState) {
+  const turret = mesh?.userData?.turret
+  if (!turret) return
+  turret.yawGroup.rotation.y = entityState.turretYaw ?? 0
+  turret.pitchGroup.rotation.x = -(entityState.turretPitch ?? 0)
 }
 
 /** Wheel deltaY > 0 (scroll down / pinch out) → zoom out. Returns new zoom. */
