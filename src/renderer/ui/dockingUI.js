@@ -583,7 +583,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       </div>
     </div>
     <div class="dock-actions">
-      <button type="button" class="services-btn">Harbour Services</button>
+      <button type="button" class="services-btn">Services</button>
       <button type="button" class="undock-btn">Undock</button>
     </div>
   `

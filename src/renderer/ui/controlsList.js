@@ -16,7 +16,7 @@ export const CONTROLS = [
   ['Backspace', 'Clear target lock'],
   ['Ctrl+Tab', 'Set waypoint on whatever is under the crosshair'],
   ['C', 'Toggle open-sea cruise (requires a waypoint)'],
-  ['S', 'Harbour Services (alongside only)'],
+  ['S', 'Services (alongside only)'],
   ['M', 'Sea chart'],
   ['B', 'Sounding (deploy drones, run down signals)'],
   ['F', 'Use targeted: salvage wreck · come alongside · crack a datacore'],

@@ -110,7 +110,7 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **Left click** | Fire all guns (can hold with RMB) |
 | **Right click** | Fire all launchers (can hold with LMB) |
 | **W / S** | Ahead / astern (coasts down when released; astern capped at 25% of ahead) |
-| **S** | While alongside: open/close **Harbour Services** |
+| **S** | While alongside: open/close **Services** |
 | **A / D** | Crab sideways to port / starboard — works stopped, for coming alongside |
 | **Tab** | Target under crosshair, or cycle nearby contacts |
 | **Shift+Tab** | Clear target lock |
