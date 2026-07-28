@@ -18,7 +18,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 // Matches the in-game title screen (menu copyright) and packaged installers.
 const APP_NAME = 'Drowned World'
 const APP_COPYRIGHT = '© Laughing In Purgatory 2026'
-const APP_ID = 'com.whispersinthevoid.game'
+const APP_ID = 'com.drownedworld.game'
 
 // Must run before ready — macOS menubar / app menu label, Linux process title,
 // and Electron's default getName() all key off this (otherwise dev shows "Electron").
