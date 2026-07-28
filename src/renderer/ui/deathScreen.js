@@ -127,7 +127,7 @@ const FACTION_LABEL = {
   alien: 'The Drowned'
 }
 
-function formatFaction(faction) {
+export function formatFaction(faction) {
   if (!faction) return null
   const f = String(faction)
   return FACTION_LABEL[f] ?? f.charAt(0).toUpperCase() + f.slice(1)
@@ -198,7 +198,7 @@ export function createDeathScreen(container, onReturnToMenu) {
       root.querySelector('.summary').innerHTML = `
         Final credits: ${Math.floor(credits || 0)}cr<br/>
         Reputation earned: ${reputation ?? 0}<br/>
-        ${name} is gone. Load your last save — or jump to a clone if you left one at a Clone Bay.
+        ${name} is gone. There is no second body waiting — load your last save.
       `
 
       root.querySelector('.pun').textContent = pickPun()

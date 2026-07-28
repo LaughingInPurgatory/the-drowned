@@ -15,7 +15,7 @@ export const PROBE_FIND_CHANCE = 0.08
 export const EXPLORER_PROBE_LOOT_BONUS = 0.05
 export const MAX_PROBE_ATTEMPTS = 3
 
-/** Effective survey-data find chance for this ship class (+ Probe Expert skill). */
+/** Effective survey-data find chance for this ship class (+ Sonar Specialist skill). */
 export function probeFindChance(shipClass, gameState = null) {
   let p = PROBE_FIND_CHANCE
   if (shipClass?.role === 'explorer') p += EXPLORER_PROBE_LOOT_BONUS
@@ -29,7 +29,7 @@ export function probeFindChance(shipClass, gameState = null) {
   return Math.min(1, Math.max(0, p))
 }
 
-/** Effective blueprint drop chance (explorers + Probe Expert). */
+/** Effective blueprint drop chance (explorers + Sonar Specialist). */
 export function probeBlueprintChance(shipClass, gameState = null) {
   let p = PROBE_BLUEPRINT_DROP_CHANCE
   if (shipClass?.role === 'explorer') p *= 1 + EXPLORER_PROBE_LOOT_BONUS
@@ -238,7 +238,7 @@ export function launchProbe(gameState, shipClass, rng, { forceFind = false, noLo
   }
 
   // Independent ultra-rare blueprint find (does not require survey-data roll).
-  // Explorer role + Probe Expert skill raise odds.
+  // Explorer role + Sonar Specialist skill raise odds.
   const blueprintId = tryRollBlueprintDrop(rng, probeBlueprintChance(shipClass, gameState))
   let blueprint = null
   if (blueprintId) {

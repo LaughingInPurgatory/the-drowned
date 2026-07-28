@@ -21,9 +21,9 @@ export const PROBE_SKILLBOOK_CHANCE = 0.0005
 export const SKILLS = [
   {
     id: 'probe_expert',
-    name: 'Probe Expert',
-    bookName: 'Skillbook: Probe Expert',
-    description: 'Each level: +2% chance of good probe loot (survey data / blueprints).'
+    name: 'Sonar Specialist',
+    bookName: 'Skillbook: Sonar Specialist',
+    description: 'Each level: +2% chance a sounding turns up something worth having (survey data / blueprints).'
   },
   {
     id: 'trading',
@@ -35,37 +35,37 @@ export const SKILLS = [
     id: 'industry',
     name: 'Industry',
     bookName: 'Skillbook: Industry',
-    description: 'Each level: 2% lower bay credit fees and 2% lower ore materials.'
+    description: 'Each level: 2% lower workshop fees and 2% less salvage consumed.'
   },
   {
     id: 'gunnery',
     name: 'Gunnery',
     bookName: 'Skillbook: Gunnery',
-    description: 'Each level: +2% damage on laser / turret hardpoints (player only).'
+    description: 'Each level: +2% damage from gun mounts (player only).'
   },
   {
     id: 'launchers',
     name: 'Launchers',
     bookName: 'Skillbook: Launchers',
-    description: 'Each level: +2% damage on missile / rocket hardpoints (player only).'
+    description: 'Each level: +2% damage from launcher mounts (player only).'
   },
   {
     id: 'manoeuvring',
-    name: 'Starship Manoeuvring',
-    bookName: 'Skillbook: Starship Manoeuvring',
-    description: 'Each level: +2% ship agility (turn rate, player only).'
+    name: 'Ship Agility',
+    bookName: 'Skillbook: Ship Agility',
+    description: 'Each level: +2% rudder authority (turn rate, player only).'
   },
   {
     id: 'thrust',
-    name: 'Starship Thrust Control',
-    bookName: 'Skillbook: Starship Thrust Control',
-    description: 'Each level: +5% max velocity and +4% supercruise speed (player only).'
+    name: 'Engine Rigging',
+    bookName: 'Skillbook: Engine Rigging',
+    description: 'Each level: +5% top speed and +4% autopilot speed (player only).'
   },
   {
     id: 'drones',
-    name: 'Drones',
-    bookName: 'Skillbook: Drones',
-    description: 'Each level: +1% drone damage and +1% drone speed (player only).'
+    name: 'Support Vessels',
+    bookName: 'Skillbook: Support Vessels',
+    description: 'Each level: +1% support drone damage and +1% support drone speed (player only).'
   },
 ]
 
@@ -118,7 +118,7 @@ export function trainableSkillIds(skills) {
 
 // —— Bonus helpers (level → multiplier / additive) ——
 
-/** Probe Expert: +0.02 absolute chance per level. */
+/** Sonar Specialist: +0.02 absolute chance per level. */
 export function probeLootBonus(level) {
   return skillLevel({ probe_expert: level }, 'probe_expert') * 0.02
 }

@@ -1,7 +1,7 @@
 {
   "name": "drowned-world",
   "productName": "Drowned World",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Procedurally generated open-world ocean trading/combat game set on a flooded Earth",
   "main": "./out/main/index.js",
   "author": "Laughing In Purgatory",
