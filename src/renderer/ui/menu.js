@@ -148,7 +148,17 @@ const STYLE = `
    the time it leaves frame. #main-menu is overflow:hidden, so the top of the
    viewport is where it goes.
 
-   Two copies half a cycle apart, so as one wisp thins the next is forming. */
+   Two things run together, because one alone leaves gaps:
+
+     - a **smoulder** layer that never rises. It sits on the words and only
+       breathes, so there is always smoke touching the letters. The rising
+       copies each spend only the first fifth of their cycle down at the type,
+       so on their own the words are bare most of the time.
+     - four **risers**, evenly staggered through the cycle, so a new wisp is
+       always peeling off before the last has thinned out.
+
+   The turbulence inside the filter animates independently of all of this, so
+   even the static layer is never a fixed shape. */
 #main-menu .title-smoke {
   position: absolute; left: 0; right: 0; top: 0;
   text-align: center;
@@ -157,7 +167,20 @@ const STYLE = `
   will-change: transform, opacity, filter;
   animation: titleSmokeRise 13s ease-out infinite;
 }
-#main-menu .title-smoke.b { animation-delay: 6.5s; }
+#main-menu .title-smoke.r1 { animation-delay: 0s; }
+#main-menu .title-smoke.r2 { animation-delay: -3.25s; }
+#main-menu .title-smoke.r3 { animation-delay: -6.5s; }
+#main-menu .title-smoke.r4 { animation-delay: -9.75s; }
+/* The layer that stays. Negative delays above start the risers mid-cycle so
+   the plume is already established on the first frame rather than building up
+   over the first thirteen seconds. */
+#main-menu .title-smoke.core {
+  animation: titleSmoulder 7s ease-in-out infinite;
+}
+@keyframes titleSmoulder {
+  0%, 100% { opacity: 0.34; transform: translate(0, 0) scale(1); filter: blur(1px); }
+  50%      { opacity: 0.6; transform: translate(4px, -5px) scale(1.05); filter: blur(2.5px); }
+}
 #main-menu .title-smoke .smoke-line {
   /* Mirrors #main-menu h1 .line — same face, size and tracking, so the smoke
      starts exactly on top of the word it is coming off. */
@@ -178,7 +201,10 @@ const STYLE = `
   100% { opacity: 0; transform: translate(38px, -62vh) scale(1.9); filter: blur(16px); }
 }
 @media (prefers-reduced-motion: reduce) {
-  #main-menu .title-smoke { animation: none; opacity: 0.3; transform: none; }
+  #main-menu .title-smoke { animation: none; opacity: 0.28; transform: none; }
+  #main-menu .title-smoke.r2,
+  #main-menu .title-smoke.r3,
+  #main-menu .title-smoke.r4 { display: none; }
 }
 
 #main-menu h1 { margin: 0 0 8px 0; }
@@ -509,7 +535,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
     <div class="copyright">© Laughing In Purgatory 2026</div>
     <div class="panel main-view">
       <div class="title-block">
-        ${['a', 'b']
+        ${['core', 'r1', 'r2', 'r3', 'r4']
           .map(
             (k) => `<div class="title-smoke ${k}" aria-hidden="true">
           <span class="smoke-line sub">THE</span><span class="smoke-line">DROWNED</span>
