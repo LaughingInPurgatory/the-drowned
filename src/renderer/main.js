@@ -597,30 +597,28 @@ function syncProjectileMeshesNow() {
 }
 
 /**
- * MMB hands the mouse back to the UI without leaving the helm.
- *
- * With the guns on the mouse there is no spare cursor for the contacts list,
- * the chart or a menu, and leaving flight entirely just to click something is
- * heavy-handed. Middle-click releases pointer lock but keeps W/A/S/D driving
- * the boat; the turret simply stops tracking, because mouseAim only
- * accumulates while locked. Middle-click again takes the guns back.
+ * Take / leave the helm — same path for Space and middle mouse.
+ * Locked in flight → exit. Off or lost lock → (re)enter.
  */
-let mouseFreedForUI = false
-
-function toggleTurretMouseLock() {
-  if (isFlightPointerLocked()) {
-    mouseFreedForUI = true
-    // Without this the unlock is read as an Esc and opens the pause menu.
-    suppressPointerUnlockPause = true
-    document.exitPointerLock()
-    setTimeout(() => {
-      suppressPointerUnlockPause = false
-    }, 400)
+function toggleHelmMode() {
+  if (
+    !gameState ||
+    docked ||
+    dockEffect ||
+    chartOpen ||
+    paused ||
+    inventoryOpen ||
+    missionsOpen ||
+    characterOpen ||
+    deathOrbit
+  ) {
     return
   }
-  mouseFreedForUI = false
-  systemOverview?.setInteractive(false)
-  requestFlightPointerLock()
+  if (flightMode && document.pointerLockElement === renderer.domElement) {
+    exitFlightMode()
+  } else {
+    reenterFlightMode()
+  }
 }
 
 // Capture fire buttons independently. Do NOT sync both from e.buttons —
@@ -641,9 +639,9 @@ function onFireButtonDown(e) {
     }
   }
   if (e.button === 1) {
-    // Middle-click is never a fire button — and the default is autoscroll.
+    // Same as Space: take / leave the helm (never a fire button; block autoscroll).
     e.preventDefault()
-    if (gameState && !paused && !docked) toggleTurretMouseLock()
+    toggleHelmMode()
     return
   }
   setFireButton(e.button, true)
@@ -802,7 +800,6 @@ function forceFlightControlsOn() {
   }
   flightModeWanted = true
   flightMode = true
-  mouseFreedForUI = false
   laserFireHeld = false
   missileFireHeld = false
   systemOverview?.setInteractive(false)
@@ -1107,18 +1104,6 @@ document.addEventListener('pointerlockchange', () => {
   if (paused || characterOpen || chartOpen || inventoryOpen || missionsOpen || docked) {
     flightMode = false
     hidePointerLockBridge()
-    return
-  }
-
-  // Deliberate MMB release: stay at the helm, hand the cursor to the UI. No
-  // bridge overlay — the whole point is that things underneath are clickable.
-  if (mouseFreedForUI && flightModeWanted && !paused && !docked && !dockEffect) {
-    flightMode = true
-    laserFireHeld = false
-    missileFireHeld = false
-    hidePointerLockBridge()
-    document.body.style.cursor = ''
-    systemOverview?.setInteractive(true)
     return
   }
 
@@ -3147,7 +3132,6 @@ function releaseMouseFully() {
   flightMode = false
   laserFireHeld = false
   missileFireHeld = false
-  mouseFreedForUI = false
   hidePointerLockBridge()
   stopPointerLockRetries()
   suppressPointerUnlockPause = true
@@ -4550,14 +4534,8 @@ window.addEventListener('keydown', (e) => {
       else flashToast('Support drones returning to bay')
       // Meshes stay until return animation finishes (updatePlayerDrones).
     }
-  } else if (e.code === 'Space' && !docked && !dockEffect && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
-    // If locked in flight, Space exits. If wanted-but-lost (tab-out) or off,
-    // Space (re)enters — so tabbing out then Space re-acquires cleanly.
-    if (flightMode && document.pointerLockElement === renderer.domElement) {
-      exitFlightMode()
-    } else {
-      reenterFlightMode()
-    }
+  } else if (e.code === 'Space') {
+    toggleHelmMode()
   } else if (e.code === 'Tab' && !docked && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {

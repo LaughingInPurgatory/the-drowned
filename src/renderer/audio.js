@@ -1478,9 +1478,10 @@ let ambientMusic = null
 let ambientTrackIndex = 0
 
 const AMBIENT_TRACKS = [
-  'soundscape1.mp3', 'soundscape2.mp3', 'soundscape3.mp3', 'soundscape4.mp3',
-  'soundscape5.mp3', 'soundscape6.mp3', 'soundscape7.mp3', 'soundscape8.mp3',
-  'soundscape9.mp3', 'soundscape10.mp3'
+  'soundscape.mp3',
+  'soundscape_1.mp3', 'soundscape_2.mp3', 'soundscape_3.mp3', 'soundscape_4.mp3',
+  'soundscape_5.mp3', 'soundscape_6.mp3', 'soundscape_7.mp3', 'soundscape_8.mp3',
+  'soundscape_9.mp3'
 ]
 const TITLE_VOLUME = 0.5
 const DEATH_VOLUME = 0.55
@@ -1575,7 +1576,7 @@ function fadeOutCurrentMusic(seconds = MUSIC_FADE_S) {
 
 export function playTitleMusic() {
   fadeOutCurrentMusic()
-  titleMusic = playFile('drowned_intro.mp3', { loop: true, volume: 0 })
+  titleMusic = playFile('intro.mp3', { loop: true, volume: 0 })
   fadeMusicVolume(titleMusic, TITLE_VOLUME, MUSIC_FADE_S)
 }
 
@@ -1588,7 +1589,7 @@ export function stopTitleMusic() {
 
 export function playDeathMusic() {
   fadeOutCurrentMusic()
-  deathMusic = playFile('drowned_death.mp3', { loop: true, volume: 0 })
+  deathMusic = playFile('ded.mp3', { loop: true, volume: 0 })
   fadeMusicVolume(deathMusic, DEATH_VOLUME, MUSIC_FADE_S)
 }
 

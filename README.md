@@ -104,15 +104,14 @@ node --test src/renderer/game/combat.test.js
 
 ## Controls
 
-You take the helm with **Space**. While you have the helm the pointer is locked for steering; open a panel or press Space again for a normal cursor. After alt-tab, click the canvas or press Space to take it back. **Settings → Controls** (intro menu or pause) matches these bindings.
+You take the helm with **Space** or **middle mouse**. While you have the helm the pointer is locked for aiming; open a panel or press Space / MMB again for a normal cursor. After alt-tab, click the canvas or press Space / MMB to take it back. **Settings → Controls** (intro menu or pause) matches these bindings.
 
 | Input | Action |
 | --- | --- |
-| **Space** | Take / leave the helm |
+| **Space** / **Middle click** | Take / leave the helm |
 | **Mouse movement** | Lay the gun — traverses and elevates the turret |
 | **Alt + Enter** | Toggle fullscreen |
 | **Left click** | Fire all guns (can hold with RMB) |
-| **Middle click** | Release the mouse for menus without leaving the helm |
 | **Right click** | Fire all launchers (can hold with LMB) |
 | **W / S** | Ahead / astern (coasts down when released; astern capped at 25% of ahead) |
 | **S** | While alongside: open/close **Services** |

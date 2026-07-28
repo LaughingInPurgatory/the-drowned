@@ -3,9 +3,8 @@
  * Keep in sync with README Controls table when changing bindings.
  */
 export const CONTROLS = [
-  ['Space', 'Take / leave the helm'],
+  ['Space / MMB', 'Take / leave the helm'],
   ['Mouse', 'Lay the gun — traverse and elevate the turret'],
-  ['MMB', 'Free the mouse for menus (helm stays yours) — click again to take the gun back'],
   ['Alt + Enter', 'Toggle fullscreen'],
   ['W / S', 'Ahead / astern'],
   ['A / D', 'Helm to port / starboard'],
