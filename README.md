@@ -32,8 +32,6 @@ A desktop ocean sim on **one seamless sea 160 km across** (80 km radius from Hav
 
 New Game starts you alongside at **Port Haven** on **Haven Reach** — the middle of the sea, the last harbour with a working harbourmaster, always **Security 6**.
 
-> **Saves:** save files from the space-era builds will **not** load. Start a **New Game**.
-
 ## Features
 
 - **One seamless sea** — a fixed canonical seed builds the same **160 km** disk for every player (radius **80 km** from the centre, open water past the rim). Roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields** (~330 places in all). No regions, no jumps, no loading seam. Home is always **Haven Reach** at the middle; remoteness (and difficulty) climb toward the edge.
