@@ -37,21 +37,22 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 ## Features
 
 - **One seamless sea** — a fixed canonical seed builds the same 80 km world for every player: archipelagos, coastal harbours, floating rigs, sea forts, and sunken wreck fields. No regions, no jumps, no loading seam. Home is always **Haven Reach**.
-- **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on the steep faces; the sun lays a track across it.
-- **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them.
-- **Autopilot (C)** — hand the helm over and it comes round onto your waypoint, holds the course, **steers around islands**, and eases off as it closes. About 1.5× a hand-steered passage: enough that you are not holding W across an ocean, not so much that the sea stops mattering.
+- **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on steep crests; the sun lays a track across it. No painted foam collars on shores or quays — just open water and the wake.
+- **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them. Deck guns free-traverse a full 360°.
+- **Autopilot (C)** — hand the helm over and it comes round onto your waypoint, holds the course, **steers around islands**, and eases off as it closes. About 1.5× a hand-steered passage: enough that you are not holding W across an ocean, not so much that the sea stops mattering. Same diesel note as under the helm — no separate “cruise” bed.
 - **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars come out. Harbour lamps and mast lights carry the night.
 - **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does.
 - **How far out you are is the difficulty curve** — Haven Reach is policed and picked over. The further you sail, the worse the law, the harder the raiders, and the better the salvage still lying on the bottom.
 - **Local security** — every harbour has its own rating **0–6** and patrols the water around it. Between them is open sea, which answers to nobody. **Law standing 0–10** (start 10): attacking honest traffic only costs you where someone is watching. Low standing draws patrols, refused berths, and eventually shoot-on-sight.
 - **100+ vessel classes** — hulls lofted from station lines with transom, sheer and freeboard, round bilge or hard chine, then fitted out: deck, wheelhouse, bridge windows, funnel, mast and rigging, railings, fenders, anchor and bollards. What sits on the deck is the trade — deck cargo and a crane on a freighter, a gun tub and ammo lockers on a gunboat, davits and a survey winch on an explorer, an A-frame and a dive platform on a salvage boat.
 - **Islands with shapes** — six landforms (dome, ridge, mesa, sea stack, atoll with a lagoon, scattered cluster) crossed with five materials (bare rock, scrub, drowned town, pre-war works, fresh basalt). Coloured by height, slope and tide line, with talus at the foot and ruins on the high ground where someone used to live.
-- **The Drowned** — pre-war military hulls and ordnance, never sold anywhere. The only way to get them is to salvage an extremely rare blueprint off a sunken warship and build it yourself.
-- **Salvage diving** — work sunken hulls with your deck guns for material; finite yield per hulk, better grades further out, and stripped fields settle again on the campaign clock. In **Security 0–3** there is a **10%** chance per hit of attracting raiders.
-- **Gunnery** — **LMB** fires every gun mount, **RMB** every launcher — deck guns, autocannon and catapults on one, harpoons, torpedoes and depth charges on the other; armour and hull, and nothing grows back; boats that circle, break off when hit, run when beaten, and occasionally ram. Raiders may call a truce with you against the Drowned.
+- **The Drowned** — pre-war military hulls and ordnance that never stood down. Never sold in any boatyard: rare blueprints only, off their wrecks or sealed sites, then built in harbour workshops. On the radio they still sound like a navy; on the water they take what they need. Corsairs may call a truce with you against them.
+- **Salvage diving** — work sunken hulks with your deck guns for **salvage** (not ore); finite yield per hulk, better grades further out, and stripped fields settle again on the campaign clock. In **Security 0–3** there is a **10%** chance per hit of attracting raiders.
+- **Anomalous Signals** — region sonar (**B** / the region chip) deploys four scan probes to lock hidden sites: **Drowned Incursion** (wave defence then destroy the base), **Datacore** relics and takeovers (hack sealed nodules), **Pre-war Datacore** sites, and **Rare Salvage Caches**. Empty water reads **No signatures in this region.** Sites reshuffle on a long campaign clock.
+- **Gunnery** — **LMB** fires every gun mount, **RMB** every launcher — deck guns, autocannon and catapults on one, harpoons, torpedoes and depth charges on the other; armour and hull, and nothing grows back; boats that circle, break off when hit, run when beaten, and occasionally ram.
 - **Bounties** — sinking a hostile pays a random credit bounty, higher in lawless water, plus whatever floats up out of the wreck.
 - **Escorts** — hulls with davits can carry launched RIBs; buy at **Boatyard → Armoury**, launch (**G**), recall (**H**). They engage only once shots are exchanged.
-- **Sonar drone** — sound islands and wreck fields for survey data, classification reports, and rare blueprints. Auto-returns after the scan.
+- **Sonar drone (P)** — sound islands and wreck fields for survey data, classification reports, and rare blueprints. Auto-returns after the scan. Separate from region-wide **Anomalous Signal** locking on **B**.
 - **Contracts** — bounty, charting, signal, survey and haulage work, priced by distance over the water. Half of every board is short work close to home. Objectives auto-complete in the field.
 - **Trading economy** — tag-driven prices and per-harbour stock. Home waters are awash with scrap and short of anything rare; the deep is the other way round. Buy and sell through **harbour storage** (you move it to the boat yourself).
 - **Harbours** — every one is generated: quay on piles, finger jetties, warehouses, fuel tanks, gantry cranes, a harbourmaster's tower, a rubble mole and lamps down the quay. Come alongside into a walkable interior; per-harbour cargo, salvage, parts, laid-up boats, weapons, accessories, blueprints. Every harbour has a boatyard; outposts do repairs only.
@@ -60,7 +61,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **Wall-clock campaign time** — offline catch-up on load, so wreck fields settle and workshop jobs finish while the game is closed.
 - **Chase camera** — astern and low, riding a smoothed waterline so it does not bob with every crest, and level however hard the boat heels. The seat follows the independent turret so the reticle stays with the guns.
 - **HUD** — velocity and shield/armour/hull up top, heading-up radar below, contacts list to the right, **sea chart (M)** and **sounding (B)** as movable floating panels.
-- **Music & SFX** — title, ambient and death music; sampled engines, guns and dock, plus synthesised combat layers. Separate **Sound Effects** and **Music** toggles in **Settings**.
+- **Music & SFX** — title, ambient and death music; synthesised diesel, dock/mooring and most guns; sampled thruster engage and heavy launchers. Separate **Sound Effects** and **Music** toggles in **Settings**.
 - **UI Colour** — retint accent and panel background in **Settings → UI Colour**; applies live and saves.
 - **Windowed app + fullscreen** — default windowed with OS frame (**1600×900**, size/position remembered). **Alt + Enter** toggles fullscreen.
 - **Saves & berths** — manual/quick save; death screen names what sank you. **Berths** at many harbours let you keep a body backup.
@@ -122,19 +123,19 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **Tab** | Target under crosshair, or cycle nearby contacts |
 | **Shift+Tab** | Clear target lock |
 | **Backspace** | Clear target lock |
-| **Ctrl/Cmd + Tab** | Set waypoint on whatever is under the crosshair |
-| **C** | Toggle open-sea cruise (requires a waypoint) |
+| **Ctrl/Cmd + Tab** | Set waypoint on whatever is under the crosshair (any on-screen contact) |
+| **C** | Toggle autopilot (requires a waypoint) |
 | **M** | Sea chart |
-| **B** | Sounding (or click the region chip) |
+| **B** | Region sonar scan — lock Anomalous Signals (or click the region chip) |
 | **F** | Use targeted contact: salvage wreck · come alongside · crack a datacore nodule |
-| **P** | Launch / recover the sonar drone |
+| **P** | Launch / recover the sonar drone (body sounding) |
 | **G** | Launch support drones (requires drones in the bays) |
 | **H** | Recall support drones |
 | **I** | Hold |
 | **J** | Contracts |
 | **F1** | Character sheet |
 | **Esc** | Pause (Resume to continue; dismisses open panels) |
-| **F5** | Hail locked target (flavour dialogue) |
+| **F5** | Hail locked target (flavour dialogue — corsairs, coast guard, The Drowned, …) |
 | **Free mouse** | Click the contacts list (right) to set waypoints |
 
 There is no roll, no pitch and no vertical thrust — a boat has a rudder, a throttle, and thrusters to shove it sideways onto a berth.
@@ -147,7 +148,7 @@ Main menu and pause menu both open **Settings**: **Sound Effects**, **Music**, *
 - [Three.js](https://threejs.org/) for 3D
 - Plain DOM for HUD, menus, and harbour UI (in-game dialogs via `gameDialog.js` — no `window.alert`/`prompt`)
 - Node’s built-in test runner (`node:test`)
-- SFX samples: [Kenney Sci-Fi Sounds](https://kenney.nl/assets/sci-fi-sounds) (CC0)
+- Remaining SFX samples: [Kenney Sci-Fi Sounds](https://kenney.nl/assets/sci-fi-sounds) (CC0); most ship audio is synthesised
 - Hull, rock and vegetation PBR textures: [ambientCG](https://ambientcg.com/) (CC0)
 - Harbour and interior kit pieces: [Kenney](https://kenney.nl/) (CC0); selected props from [Quaternius](https://quaternius.com/) (CC0)
 
