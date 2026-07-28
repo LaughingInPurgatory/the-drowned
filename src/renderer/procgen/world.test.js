@@ -52,6 +52,38 @@ test('body ids are unique and names do not repeat', () => {
   assert.equal(new Set(names).size, names.length)
 })
 
+test('every island name is unique and facilities never reuse a bare island name', () => {
+  for (const seed of [1, 42, 99, 8675309]) {
+    const bodies = getWorld(generateWorld(seed, TEST_WORLD_OPTS)).bodies
+    const islands = bodies.filter((b) => b.kind === 'island')
+    const islandNames = islands.map((b) => b.name.toLowerCase())
+    assert.equal(new Set(islandNames).size, islandNames.length, `seed ${seed}: island names collide`)
+    const all = bodies.map((b) => b.name.toLowerCase())
+    assert.equal(new Set(all).size, all.length, `seed ${seed}: body names collide`)
+    // No facility is literally named the same as an island (ports may contain the name).
+    for (const fac of bodies.filter((b) => b.kind !== 'island')) {
+      assert.ok(
+        !islandNames.includes(fac.name.toLowerCase()),
+        `seed ${seed}: ${fac.kind} "${fac.name}" equals an island name`
+      )
+    }
+  }
+})
+
+test('coastal ports can inherit their host island into the name', () => {
+  // Across a few seeds, some hosted ports should include the host name.
+  let inherited = 0
+  for (let seed = 1; seed < 40; seed++) {
+    const bodies = getWorld(generateWorld(seed, TEST_WORLD_OPTS)).bodies
+    for (const port of bodies.filter((b) => b.kind === 'port' && b.parentId)) {
+      const host = bodies.find((b) => b.id === port.parentId)
+      if (!host) continue
+      if (port.name.toLowerCase().includes(host.name.toLowerCase())) inherited++
+    }
+  }
+  assert.ok(inherited > 0, 'expected at least one port to inherit its island name')
+})
+
 test('nothing solid overlaps anything else solid', () => {
   const bodies = getWorld(world()).bodies
   for (let i = 0; i < bodies.length; i++) {

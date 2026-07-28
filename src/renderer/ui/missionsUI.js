@@ -1,5 +1,5 @@
+import { dropMission, missionNavTarget, setWaypointForMission, acceptMission } from '../game/missions.js'
 import { findBody, getSystem } from '../procgen/world.js'
-import { dropMission, missionNavTarget, setWaypointForMission } from '../game/missions.js'
 import { escapeHtml } from './escapeHtml.js'
 import { gameConfirm, gameNotice } from './gameDialog.js'
 
@@ -78,6 +78,21 @@ const STYLE = `
 #missions-ui button.drop:hover { background: rgba(224,90,90,0.22); box-shadow: 0 2px 6px rgba(0,0,0,0.65); }
 #missions-ui .mission-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0; }
 #missions-ui .footer-note { margin-top: 14px; font-size: 11px; opacity: 0.55; line-height: 1.4; }
+#missions-ui .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+#missions-ui .tabs button {
+  background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.08);
+  border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.35);
+  color: var(--ui-text); padding: 6px 14px; cursor: pointer; font-family: monospace;
+  letter-spacing: 1px; font-size: 12px;
+}
+#missions-ui .tabs button.active {
+  border-color: rgba(255,138,61,0.65); background: rgba(255,138,61,0.14); color: #ffd0a8;
+}
+#missions-ui button.accept {
+  background: rgba(127,224,160,0.12); border: 1px solid rgba(127,224,160,0.5); color: #b8f0c8;
+  padding: 5px 12px; cursor: pointer; font-family: monospace; margin-top: 4px;
+}
+#missions-ui button.accept:hover { background: rgba(127,224,160,0.22); }
 `
 
 function describeTarget(mission, gameState) {
@@ -118,6 +133,25 @@ function renderLog(mission) {
   `
 }
 
+
+/** Missions still on a board within this surface distance of the player. */
+const NEARBY_MISSION_RANGE = 24000
+
+function nearbyAvailableMissions(gameState) {
+  const list = gameState.missions?.available ?? []
+  const ship = gameState.player?.ship?.position
+  if (!ship) return []
+  const out = []
+  for (const m of list) {
+    const giver = findBody(gameState.galaxy, m.giverStationId)
+    if (!giver?.position) continue
+    const d = Math.hypot(giver.position[0] - ship[0], giver.position[2] - ship[2])
+    if (d <= NEARBY_MISSION_RANGE) out.push({ mission: m, giver, dist: d })
+  }
+  out.sort((a, b) => a.dist - b.dist)
+  return out
+}
+
 export function createMissionsUI(container, gameState, hooks = {}) {
   const style = document.createElement('style')
   style.textContent = STYLE
@@ -138,50 +172,101 @@ export function createMissionsUI(container, gameState, hooks = {}) {
 
   const contentEl = root.querySelector('.content')
 
+  let tab = 'progress' // 'available' | 'progress'
+
   function render() {
     const active = gameState.missions.active
+    const nearby = nearbyAvailableMissions(gameState)
+    contentEl.innerHTML = `
+      <div class="tabs">
+        <button type="button" data-mtab="available" class="${tab === 'available' ? 'active' : ''}">Available (${nearby.length})</button>
+        <button type="button" data-mtab="progress" class="${tab === 'progress' ? 'active' : ''}">In Progress (${active.length})</button>
+      </div>
+      <div class="tab-body"></div>
+    `
+    contentEl.querySelectorAll('[data-mtab]').forEach((btn) =>
+      btn.addEventListener('click', () => {
+        tab = btn.dataset.mtab
+        render()
+      })
+    )
+    const body = contentEl.querySelector('.tab-body')
+
+    if (tab === 'available') {
+      if (!nearby.length) {
+        body.innerHTML = `
+          <div class="empty">No contracts from nearby harbours or outposts.<br/>Steam closer to a port posting work, or check again later.</div>
+          <div class="footer-note">Shows open mission boards within ~14 km. Accept here or while docked.</div>
+        `
+        return
+      }
+      body.innerHTML = nearby.map(({ mission: m, giver, dist }) => `
+        <div class="mission">
+          <div class="title">${escapeHtml(m.title)}</div>
+          <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward}cr</div>
+          <div class="meta">Posted at ${escapeHtml(giver?.name ?? m.giverStationId)} · ${Math.round(dist)} m</div>
+          <div class="mission-actions">
+            <button class="accept" data-id="${m.id}">Accept</button>
+          </div>
+        </div>
+      `).join('') + `
+        <div class="footer-note">Nearby boards only. Completing the objective pays immediately (no turn-in).</div>
+      `
+      body.querySelectorAll('.accept').forEach((btn) =>
+        btn.addEventListener('click', async () => {
+          try {
+            acceptMission(gameState, btn.dataset.id, Math.random)
+            tab = 'progress'
+            render()
+          } catch (err) {
+            await gameNotice('Accept failed', err.message)
+          }
+        })
+      )
+      return
+    }
+
+    // In Progress
     if (!active.length) {
-      contentEl.innerHTML = `
-        <div class="empty">No active missions.<br/>Accept contracts from station and settlement mission boards while docked.</div>
-        <div class="footer-note">Orange rings on the galaxy map mark systems with an active objective. Green rings mark remote systems where you have stored assets. Set Waypoint only works while you are in the objective system. Missions complete automatically when the objective is done.</div>
+      body.innerHTML = `
+        <div class="empty">No missions in progress.<br/>Pick up work on the Available tab when near a harbour.</div>
+        <div class="footer-note">Set Waypoint only works while you are in the objective region. Objectives complete automatically.</div>
       `
       return
     }
 
-    contentEl.innerHTML = `
-      <h3>Active (${active.length})</h3>
-      ${active.map((m) => {
-        const leads = m.leads ?? 0
-        const chain = m.type === 'investigation' && leads > 0
-          ? `<span class="chain-badge">Chain ×${leads}</span>`
-          : ''
-        const progress =
-          m.type === 'trade' && m.trade
-            ? (() => {
-                const need = m.trade.quantity ?? 0
-                const bought = m.trade.purchased ?? 0
-                const sold = m.trade.sold ?? 0
-                return `Trade progress · bought ${bought}/${need} · sold ${sold}/${need} (multi-trip OK)`
-              })()
-            : 'In progress'
-        return `
-          <div class="mission">
-            <div class="title">${escapeHtml(m.title)}${chain}</div>
-            <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward}cr</div>
-            <div class="meta">${escapeHtml(describeTarget(m, gameState))}</div>
-            ${renderLog(m)}
-            <div class="status progress">${progress}</div>
-            <div class="mission-actions">
-              <button class="track" data-id="${m.id}">Set Waypoint</button>
-              <button class="drop" data-id="${m.id}">Drop Mission</button>
-            </div>
+    body.innerHTML = active.map((m) => {
+      const leads = m.leads ?? 0
+      const chain = m.type === 'investigation' && leads > 0
+        ? `<span class="chain-badge">Chain ×${leads}</span>`
+        : ''
+      const progress =
+        m.type === 'trade' && m.trade
+          ? (() => {
+              const need = m.trade.quantity ?? 0
+              const bought = m.trade.purchased ?? 0
+              const sold = m.trade.sold ?? 0
+              return `Trade progress · bought ${bought}/${need} · sold ${sold}/${need} (multi-trip OK)`
+            })()
+          : 'In progress'
+      return `
+        <div class="mission">
+          <div class="title">${escapeHtml(m.title)}${chain}</div>
+          <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward}cr</div>
+          <div class="meta">${escapeHtml(describeTarget(m, gameState))}</div>
+          ${renderLog(m)}
+          <div class="status progress">${progress}</div>
+          <div class="mission-actions">
+            <button class="track" data-id="${m.id}">Set Waypoint</button>
+            <button class="drop" data-id="${m.id}">Drop Mission</button>
           </div>
-        `
-      }).join('')}
-      <div class="footer-note">Drop Mission abandons the contract with no reward. Completing the objective pays the reward immediately (no station turn-in). Investigations: probe the target (P). Logs track leads, hostiles, and intel. Each lead raises the payout 5%.</div>
+        </div>
+      `
+    }).join('') + `
+      <div class="footer-note">Drop Mission abandons the contract with no reward. Investigations: sonar pulse the target (P). Each lead raises the payout 5%.</div>
     `
 
-    contentEl.querySelectorAll('.track').forEach((btn) =>
+    body.querySelectorAll('.track').forEach((btn) =>
       btn.addEventListener('click', async () => {
         try {
           if (hooks.canSetWaypoint && !hooks.canSetWaypoint()) return
@@ -192,7 +277,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
         }
       })
     )
-    contentEl.querySelectorAll('.drop').forEach((btn) =>
+    body.querySelectorAll('.drop').forEach((btn) =>
       btn.addEventListener('click', async () => {
         const mission = gameState.missions.active.find((m) => m.id === btn.dataset.id)
         const title = mission?.title ?? 'this mission'

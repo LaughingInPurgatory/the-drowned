@@ -42,7 +42,7 @@ const GEOM_LS_KEY = 'witv.inventoryPanel'
 const STYLE = `
 ${ITEM_ICON_CSS}
 /* Floating inventory — above docking chrome (z 50). Root is click-through so
-   Harbour Services stays usable while Inventory is open for drag transfers. */
+   Services stays usable while Inventory is open for drag transfers. */
 #inventory-ui {
   position: fixed; inset: 0; z-index: 55;
   display: none;
@@ -211,7 +211,7 @@ ${floatingResizeHandleCss('#inventory-ui .float-resize')}
 
 // Cargo / ore / stored assets / industry jobs — tabbed inventory.
 // Ship-part repair is in the header (consumes one part via useShipPart).
-// While docked, cargo/ore/parts/blueprints drag onto Harbour Services.
+// While docked, cargo/ore/parts/blueprints drag onto Services.
 export function createInventoryUI(container, gameState, hooks = {}) {
   const { onStorageChanged } = hooks
   const style = document.createElement('style')
@@ -233,7 +233,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
       </div>
       <div class="tabs">
         <button type="button" class="tab active" data-tab="cargo">Cargo</button>
-        <button type="button" class="tab" data-tab="ore">Ore</button>
+        <button type="button" class="tab" data-tab="ore">Salvage</button>
         <button type="button" class="tab" data-tab="parts">Ship parts</button>
         <button type="button" class="tab" data-tab="blueprints">Blueprints</button>
         <button type="button" class="tab" data-tab="skills">Skillbooks</button>
@@ -356,7 +356,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
   }
 
   function itemLabel(kind, id) {
-    if (kind === 'parts') return 'Ship Parts'
+    if (kind === 'parts') return 'Repair Plates'
     if (kind === 'blueprint') {
       try { return getBlueprint(id).name } catch { return id }
     }
@@ -524,7 +524,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
 
   function dockedXferHint(extra = '') {
     if (!xferEnabled()) return ''
-    return `<p class="xfer-hint">Docked — drag items onto Harbour Services to store (or drop station items here).${extra ? ` ${extra}` : ''}</p>`
+    return `<p class="xfer-hint">Docked — drag items onto Services to store (or drop station items here).${extra ? ` ${extra}` : ''}</p>`
   }
 
   function renderCargoTab(ship, shipClass) {
@@ -584,7 +584,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
       <div class="hull-status" style="margin-bottom:10px;opacity:0.7">${used}/${cap}</div>
       ${oreRows.length
         ? `<table>
-            <thead><tr><th>Ore</th><th>Qty</th><th></th></tr></thead>
+            <thead><tr><th>Salvage</th><th>Qty</th><th></th></tr></thead>
             <tbody>${oreRows.map(([id, qty]) =>
               `<tr class="${xferClass(qty).trim()}"${xferAttrs('ore', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty}</td><td><button type="button" class="discard-item" data-id="${escapeHtml(id)}" data-qty="${qty}">✕</button></td></tr>`
             ).join('')}</tbody>
@@ -722,7 +722,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
               const isHere = dockedBodyId != null && bodyId === dockedBodyId
               const bits = []
               const cargoBit = qtyMapBits(s.cargo, 'Cargo', (id) => getGood(id).name)
-              const oreBit = qtyMapBits(s.miningHold, 'Ore', (id) => getGood(id).name)
+              const oreBit = qtyMapBits(s.miningHold, 'Salvage', (id) => getGood(id).name)
               if (cargoBit) bits.push(cargoBit)
               if (oreBit) bits.push(oreBit)
               if ((s.shipParts ?? 0) > 0) bits.push(`${s.shipParts} Ship Part(s)`)

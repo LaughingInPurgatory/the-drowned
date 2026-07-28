@@ -24,7 +24,7 @@ export const SPEED_UPGRADE_FRAC = 0.15
 export const ACCESSORIES = [
   {
     id: EXTRA_ORE_STORAGE_ID,
-    name: 'Extra Ore Storage',
+    name: 'Extra Salvage Hold',
     description: 'While equipped, expands the ore hold by 200% of the hull’s base capacity (3× total).',
     price: 12000
   },
@@ -44,7 +44,7 @@ export const ACCESSORIES = [
     id: EXTRA_TURRET_HP_ID,
     name: 'Extra Turret Hardpoint',
     description:
-      'Adds one laser hardpoint while equipped — even on hulls that have none. Removing it drops the mount; any fitted weapon returns to station storage.',
+      'Adds one gun hardpoint while equipped — even on hulls that have none. Removing it drops the mount; any fitted weapon returns to station storage.',
     price: 22000
   },
   {
@@ -111,7 +111,7 @@ export function shipHasAccessory(ship, accessoryId) {
 
 /**
  * Ore hold capacity with accessories applied.
- * Extra Ore Storage: +200% of base while equipped (3× total).
+ * Extra Salvage Hold: +200% of base while equipped (3× total).
  */
 export function effectiveMiningCapacity(ship, shipClass) {
   const base = shipClass?.stats?.miningCapacity ?? 0

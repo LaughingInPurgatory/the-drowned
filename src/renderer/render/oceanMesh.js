@@ -3,27 +3,26 @@ import { seaShaderChunk, SEA_MAX_AMPLITUDE } from '../world/sea.js'
 
 // Radius the water reaches. Well past the fog wall — the surface must still be
 // there when a crest lifts the camera, or you get a hole at the horizon.
-const OCEAN_RADIUS = 12000
+const OCEAN_RADIUS = 24000
 // Innermost ring. Geometric ring spacing from here out, so the tessellation is
 // metres-fine around the hull and hundreds of metres wide at the horizon
 // without paying for a uniform grid at either.
-const INNER_RADIUS = 6
-const RINGS = 150
-const SEGMENTS = 200
+const INNER_RADIUS = 5
+const RINGS = 180
+const SEGMENTS = 220
 // Recentring the disc every frame makes each vertex sample a different world
 // point each frame, which shimmers. Snapping the centre to a quantum holds the
 // sample points still between steps.
 const CENTER_SNAP = 4
 // How many obstacles the surf pass can consider at once.
 //
-// Enough for every individual thing near the boat rather than one circle per
-// body: each wreck hulk, each vessel, each harbour. A single circle round a
-// whole structure cannot foam against the parts of it, and the parts are what
-// the water is actually breaking on. Each slot costs one distance test per
-// pixel, with an early-out for anything not close to its own band.
-const SURF_SLOTS = 28
+// Coast samples are many small shoreline patches (not one fat island circle),
+// so the budget needs room for a nearby beach ring plus harbours and hulls.
+// Each slot costs one distance test per pixel, with an early-out for anything
+// not close to its own band.
+const SURF_SLOTS = 48
 // Past this there is nothing to see through the fog anyway.
-const SURF_RANGE = 5000
+const SURF_RANGE = 3500
 
 /**
  * Camera-centred radial disc: a ring of vertices every `RINGS` steps out from
@@ -84,7 +83,8 @@ void main() {
   // sampled at one corner reads as noise, so the swell fades out with distance
   // and the horizon settles flat under the fog.
   float dist = length(wp.xz - cameraPosition.xz);
-  vDetail = 1.0 - smoothstep(600.0, 4200.0, dist);
+  // Keep swell readable further out so the sea doesn't go plastic-flat.
+  vDetail = 1.0 - smoothstep(900.0, 7000.0, dist);
   wp.y = seaHeight(wp.xz, uTime) * vDetail;
   vWorldPos = wp.xyz;
   vec4 mvPosition = viewMatrix * wp;
@@ -169,8 +169,8 @@ vec3 noised(vec2 p) {
  */
 vec2 rippleSlope(vec2 p, float t, float fade) {
   vec2 slope = vec2(0.0);
-  float amp = 0.055;
-  float freq = 0.075;
+  float amp = 0.072;
+  float freq = 0.09;
   // Each octave drifts on its own bearing *and* is sampled through its own
   // rotation. Without the rotation every octave shares one grid orientation and
   // the whole field lines up into rows — the same corduroy the swell used to
@@ -223,7 +223,8 @@ float algaeMask(vec2 p, float t) {
   // Where. Threshold high so most of the sea is clear water.
   float region = noised(p * 0.0016 + drift * 0.1).x;
   // ('patch' is a GLSL reserved word — hence 'slick'.)
-  float slick = smoothstep(0.10, 0.42, region);
+  // Rarer blooms so most of the sea stays clear water.
+  float slick = smoothstep(0.28, 0.52, region);
   if (slick <= 0.001) return 0.0;
   // Shape. Streaks pulled out along the drift, the way a slick actually lies.
   float streak = noised(p * vec2(0.006, 0.018) + drift).x;
@@ -268,14 +269,18 @@ float surfAt(vec2 p) {
     float grad = length(vec2(q.x / max(o.w, 0.05), q.y / max(o.z, 0.05)));
     float d = (k - 1.0) / max(grad, 1e-5);
 
+    // Tight collar only. Was clamp(small*0.55, 3.5, 40) which threw a 40 m
+    // white halo around every harbour and island sample — foam should hug the
+    // edge, not flood the approach.
     float small = min(o.z, o.w);
-    float outward = clamp(small * 0.55, 3.5, 40.0);
+    float outward = clamp(small * 0.28, 1.6, 9.0);
     // Shorter on the inside — the lee of an obstacle is calmer than its face.
-    float inward = outward * 0.5;
+    float inward = outward * 0.4;
     float band = d >= 0.0 ? outward : inward;
     if (abs(d) > band) continue;
     float t = 1.0 - clamp(abs(d) / band, 0.0, 1.0);
-    surf = max(surf, t * t * ax.z);
+    // Cubic falloff keeps the peak thin and bright at the edge.
+    surf = max(surf, t * t * t * ax.z);
   }
   return surf;
 }
@@ -286,7 +291,7 @@ void main() {
   // is analytic and per-pixel, so the water keeps its texture right out to the
   // fog wall instead of going glassy a few hundred metres from the boat.
   float dist = length(vWorldPos.xz - cameraPosition.xz);
-  float shadeDetail = 1.0 - smoothstep(2500.0, 9000.0, dist);
+  float shadeDetail = 1.0 - smoothstep(3500.0, 14000.0, dist);
   vec3 N = seaNormal(vWorldPos.xz, uTime);
 
   // Two normals, not one.
@@ -300,13 +305,12 @@ void main() {
   // So the swell normal drives colour, fresnel and reflection, and the detailed
   // normal drives only the specular lobes. That one split is the difference
   // between a wet beach and open water.
-  float rippleFade = 1.0 - smoothstep(120.0, 2600.0, dist);
+  float rippleFade = 1.0 - smoothstep(80.0, 3200.0, dist);
   vec2 rs = rippleSlope(vWorldPos.xz, uTime, rippleFade);
-  vec3 Ndetail = normalize(vec3(N.x - rs.x, N.y, N.z - rs.y));
+  vec3 Ndetail = normalize(vec3(N.x - rs.x * 1.15, N.y, N.z - rs.y * 1.15));
   Ndetail = normalize(mix(vec3(0.0, 1.0, 0.0), Ndetail, shadeDetail));
-  // A trace of the ripple in the shading normal keeps the surface from looking
-  // plasticky, but only a trace.
-  N = normalize(mix(N, Ndetail, 0.18));
+  // Trace of ripple in body only — too much reads as wet plastic, not water.
+  N = normalize(mix(N, Ndetail, 0.14));
   N = normalize(mix(vec3(0.0, 1.0, 0.0), N, shadeDetail));
 
   vec3 V = normalize(cameraPosition - vWorldPos);
@@ -316,16 +320,18 @@ void main() {
   // every surface either mirror or matte; this gives the proper gradient of
   // dark water underfoot to bright sky at the horizon.
   float fresnel = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
-  // From a low seat almost everything visible is near-grazing, so clamp how
-  // much sky the far water is allowed to take or the sea turns into haze.
-  fresnel = mix(fresnel, min(fresnel, 0.55), smoothstep(400.0, 3000.0, dist));
+  // From a low seat almost everything is near-grazing — clamp far sky or the
+  // whole sea bleaches into a mirror sheet (un-water-like general reflection).
+  fresnel = mix(fresnel, min(fresnel, 0.48), smoothstep(350.0, 2800.0, dist));
 
-  // Body colour: the dark column beneath, opening toward the crest tint on the
-  // faces that are tilted enough to be looking through less water.
-  // Water is dark. Almost everything you see on it is reflection; the body
-  // colour is what little light comes back up out of it, and keeping that deep
-  // and saturated is what stops the surface reading as a dusty plain.
-  vec3 body = mix(uCrestColor, uDeepColor, smoothstep(0.80, 1.0, N.y)) * 0.72;
+  // Body colour: deep teal underfoot, greener/lighter on tilted faces where
+  // the light path through the water is short. Slightly clearer than the old
+  // silt-ash palette so it still reads as water, not mud.
+  float depthFace = smoothstep(0.78, 1.0, N.y);
+  vec3 body = mix(uCrestColor * 0.95, uDeepColor, depthFace) * 0.88;
+  // Near the boat, a hint of green-blue absorption (shallow/near column).
+  float near = 1.0 - smoothstep(40.0, 420.0, dist);
+  body = mix(body, body * vec3(0.90, 1.04, 1.06), near * 0.18);
 
   // Subsurface scattering. A wave lit from behind glows through its own crest —
   // this is most of why real water looks alive and a shaded height field does
@@ -334,7 +340,7 @@ void main() {
   float backlight = pow(clamp(dot(V, -normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0, 1.0), 3.0);
   float steep = smoothstep(0.02, 0.20, 1.0 - N.y);
   float sss = backlight * steep * clamp(1.0 - uSunDir.y, 0.0, 1.0);
-  vec3 scatter = uCrestColor * 1.9 + vec3(0.02, 0.10, 0.06) + uSunColor * 0.22;
+  vec3 scatter = uCrestColor * 1.8 + vec3(0.01, 0.11, 0.09) + uSunColor * 0.18;
 
   // Reflect the *sky*, not a single colour.
   //
@@ -344,17 +350,25 @@ void main() {
   // sky it is actually pointed at, so the surface varies across the frame the
   // way a reflective one does. Same curve the sky dome uses, so the two agree.
   vec3 R = reflect(-V, N);
-  vec3 skyRefl = mix(uSkyColor, uZenithColor, pow(max(R.y, 0.0), 0.42));
+  vec3 skyRefl = mix(uSkyColor, uZenithColor, pow(max(R.y, 0.0), 0.45));
+  // Cool + darken the reflection so the body colour still reads as water.
+  skyRefl = mix(skyRefl, skyRefl * vec3(0.78, 0.90, 1.02), 0.38);
+  skyRefl *= 0.82;
   vec3 col = mix(body, skyRefl, fresnel);
-  col += scatter * sss * 0.5 * shadeDetail;
+  col += scatter * sss * 0.45 * shadeDetail;
 
-  // Specular. Two lobes: a tight sun track, and a broad sheen off the ripple
-  // field that reads as glitter when the surface is busy.
+  // Specular. Tight sun *trail* stays visible; broad sheen / glitter stay quiet
+  // so the sea doesn't look like foil under the general sky.
   vec3 H = normalize(uSunDir + V);
   float ndh = max(dot(Ndetail, H), 0.0);
   float sunUp = smoothstep(-0.08, 0.12, uSunDir.y);
-  col += uSunColor * pow(ndh, 300.0) * 3.0 * sunUp;
-  col += uSunColor * pow(ndh, 18.0) * 0.30 * sunUp;
+  // Trail (the path on the water) — keep this.
+  col += uSunColor * pow(ndh, 380.0) * 3.0 * sunUp;
+  // Broad general sheen — dialled way down (was washing the whole surface).
+  col += uSunColor * pow(ndh, 28.0) * 0.12 * sunUp;
+  // Sparse sparkle only near the boat, not a field of hot pixels.
+  float sparkle = pow(max(dot(Ndetail, H), 0.0), 140.0) * rippleFade;
+  col += uSunColor * sparkle * 0.18 * sunUp;
 
   // Moonlight. The same two-lobe treatment as the sun — a tight track and a
   // broad sheen — because a moon path on water is the same phenomenon, just
@@ -373,9 +387,9 @@ void main() {
   if (surf > 0.001) {
     float churn = noised(vWorldPos.xz * 0.09 + vec2(uTime * 0.5, uTime * -0.34)).x;
     churn += noised(vWorldPos.xz * 0.32 - vec2(uTime * 0.9, uTime * 0.6)).x * 0.55;
-    // Breathe the whole band in and out, so the surf surges rather than sits.
-    float surge = 0.72 + 0.28 * sin(uTime * 0.55 + noised(vWorldPos.xz * 0.004).x * 6.0);
-    surf = clamp(surf * surge * smoothstep(-0.45, 0.35, churn) * 1.6, 0.0, 1.0);
+    // Breathe the band; keep the multiplier modest so churn doesn't re-widen it.
+    float surge = 0.78 + 0.22 * sin(uTime * 0.55 + noised(vWorldPos.xz * 0.004).x * 6.0);
+    surf = clamp(surf * surge * smoothstep(-0.35, 0.4, churn) * 1.15, 0.0, 1.0);
   }
 
   // Algae. Ash and run-off feed it, so the drowned world is thick with the
@@ -397,20 +411,18 @@ void main() {
     col += uSunColor * pow(ndh, 60.0) * 0.06 * sunUp * (1.0 - algae);
   }
 
-  // Whitecaps. Steepness picks where they can form; a noise field decides
-  // whether one actually has, so the foam breaks up instead of painting a
-  // smooth band along every wave back.
+  // Whitecaps — only the steeper crests, and quieter so object-tied surf reads
+  // as the main white water rather than the whole sea looking foamy.
   float steepness = 1.0 - seaNormal(vWorldPos.xz, uTime).y;
-  float foamMask = smoothstep(0.085, 0.21, steepness);
+  float foamMask = smoothstep(0.11, 0.26, steepness);
   float breakup = noised(vWorldPos.xz * 0.55 + vec2(uTime * 0.22, uTime * -0.16)).x;
   breakup += noised(vWorldPos.xz * 1.9 - vec2(uTime * 0.4)).x * 0.5;
   // Algae holds the surface together, so a slick foams far less than clear
   // water at the same steepness.
-  float foam = foamMask * smoothstep(-0.12, 0.30, breakup) * shadeDetail * (1.0 - algae * 0.75);
-  col = mix(col, uFoamColor, clamp(foam, 0.0, 0.55));
-  // Surf goes on last and goes on hardest — it is opaque white water, not a
-  // tint, and it must win over both the algae and the open-sea whitecaps.
-  col = mix(col, uFoamColor * 1.06, surf * 0.92);
+  float foam = foamMask * smoothstep(-0.05, 0.35, breakup) * shadeDetail * (1.0 - algae * 0.75);
+  col = mix(col, uFoamColor, clamp(foam, 0.0, 0.38));
+  // Surf goes on last and goes on hardest — thin white collar at solid edges.
+  col = mix(col, uFoamColor * 1.06, surf * 0.88);
 
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
@@ -436,14 +448,14 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uSunColor: { value: new THREE.Color(0xfff0d8) },
         uMoonDir: { value: new THREE.Vector3(0, 1, 0) },
         uMoonBright: { value: 1 },
-        // Drowned-world water: silt and ash, not holiday blue.
-        uDeepColor: { value: new THREE.Color(0x0a2136) },
-        uCrestColor: { value: new THREE.Color(0x216580) },
+        // Open-ocean teal: deep, clear enough to read as water, still not pool-blue.
+        uDeepColor: { value: new THREE.Color(0x061a2c) },
+        uCrestColor: { value: new THREE.Color(0x1a6a7a) },
         uSkyColor: { value: new THREE.Color(skyColor ?? 0x8a9499) },
-        uZenithColor: { value: new THREE.Color(0x3f6d92) },
-        uFoamColor: { value: new THREE.Color(0xccd8de) },
-        // Sickly, not tropical — this is a bloom fed by fallout and run-off.
-        uAlgaeColor: { value: new THREE.Color(0x35502c) },
+        uZenithColor: { value: new THREE.Color(0x3a6e96) },
+        uFoamColor: { value: new THREE.Color(0xd8e6ec) },
+        // Thin coastal slicks — kept muted so they don't muddy the whole sea.
+        uAlgaeColor: { value: new THREE.Color(0x2c4a32) },
         uSurf: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector4()) },
         uSurfAxis: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector3()) },
         uSurfCount: { value: 0 }

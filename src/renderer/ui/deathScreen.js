@@ -1,26 +1,140 @@
 import { escapeHtml } from './escapeHtml.js'
 import { wreckedTypeCSS } from './wreckedType.js'
 
+const TEXT_SHADOW =
+  '0 1px 2px rgba(0,0,0,0.95), 0 2px 8px rgba(0,0,0,0.85), 0 0 16px rgba(0,0,0,0.55)'
+
 const STYLE = `
+/* Transparent centre — wreck orbit shows through; red only at the rim.
+   !important beats the global metallic plate theme in index.html. */
 #death-screen {
-  position: fixed; inset: 0; background: #060102; font-family: monospace; color: #f0d0d0;
-  display: none; align-items: center; justify-content: center; overflow: hidden;
+  position: fixed; inset: 0; background: transparent !important; font-family: monospace; color: #f0d0d0;
+  display: none; flex-direction: column; align-items: center; justify-content: space-between;
+  overflow: hidden;
+  pointer-events: none;
+  /* Room under the pinned headline for killer/summary. */
+  padding: 0 20px 6vh;
+  box-sizing: border-box;
 }
 #death-screen::before {
   content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: radial-gradient(ellipse at center, transparent 35%, rgba(120,10,10,0.55) 100%);
+  /* Deep arterial / dried-blood red at the rim — not bright fire-engine red. */
+  background: radial-gradient(
+    ellipse at center,
+    transparent 38%,
+    rgba(48, 0, 4, 0.28) 62%,
+    rgba(62, 0, 8, 0.55) 78%,
+    rgba(28, 0, 2, 0.88) 100%
+  );
   animation: vignettePulse 2.2s ease-in-out infinite;
 }
-@keyframes vignettePulse { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+@keyframes vignettePulse { 0%, 100% { opacity: 0.82; } 50% { opacity: 1; } }
 
-#death-screen .panel { position: relative; z-index: 1; text-align: center; max-width: 520px; padding: 0 20px; }
-
-#death-screen h1 {
-  position: relative; color: #ff5050; font-size: 40px; letter-spacing: 6px; margin: 0 0 24px 0;
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
+/* Top stack: wordmark at the very top, details just under — open water below. */
+html #death-screen .panel-top,
+#death-screen .panel-top {
+  position: relative; z-index: 1; text-align: center; width: 100%;
+  max-width: min(92vw, 720px);
+  margin: 2.5vh auto 0;
+  pointer-events: none;
+  background: transparent !important;
+  background-image: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  filter: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
-${wreckedTypeCSS('#death-screen h1')}
-#death-screen.shake .panel { animation: shake 0.5s ease-in-out; }
+
+#death-screen .death-title {
+  position: relative; z-index: 2;
+  width: 100%;
+  margin: 0 0 1.1rem;
+  padding: 0 8px;
+  text-align: center;
+  pointer-events: none;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+/* Bottom block: pun + return button */
+html #death-screen .panel-bottom,
+#death-screen .panel-bottom {
+  position: relative; z-index: 1; text-align: center; max-width: 520px; width: 100%;
+  pointer-events: none;
+  display: flex; flex-direction: column; align-items: center;
+  background: transparent !important;
+  background-image: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  margin-top: auto;
+}
+
+/*
+ * "YOU HAVE DIED" — as close to the painted title wordmark as CSS can get:
+ * scorched metal + ember gradient, heavy erosion, dark rim lift, fire halo.
+ */
+#death-screen h1 {
+  position: relative;
+  margin: 0;
+  padding: 0.08em 0.06em;
+  font-size: clamp(36px, 7.5vw, 64px);
+  letter-spacing: 0.14em;
+  line-height: 1.05;
+  text-transform: uppercase;
+  /* Solid fallback if clip fails */
+  color: #c45a3a;
+  /* Charred iron through rust into dying fire — echoes title-drowned.png */
+  background-image:
+    linear-gradient(
+      168deg,
+      #2a2420 0%,
+      #5a4034 18%,
+      #8a4a32 38%,
+      #c45a28 55%,
+      #e87830 68%,
+      #a04028 82%,
+      #3a2820 100%
+    );
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* Rim + ember halo (same family as #main-menu .title-art drop-shadows) */
+  filter:
+    drop-shadow(0 2px 3px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 10px rgba(0, 0, 0, 0.75))
+    drop-shadow(0 0 22px rgba(255, 70, 40, 0.35))
+    drop-shadow(0 0 48px rgba(255, 70, 40, 0.14));
+}
+${wreckedTypeCSS('#death-screen h1', { heavy: true })}
+/* wreckedType overwrites font; keep metal fill on the clipped text */
+#death-screen h1 {
+  font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", "Helvetica Neue", sans-serif;
+  font-weight: 900;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* re-apply after wreckedType so glow isn't lost */
+  filter:
+    drop-shadow(0 2px 3px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 10px rgba(0, 0, 0, 0.75))
+    drop-shadow(0 0 22px rgba(255, 70, 40, 0.35))
+    drop-shadow(0 0 48px rgba(255, 70, 40, 0.14));
+}
+/* Pulse the wrapper so it doesn't fight the erosion crawl on the h1 */
+#death-screen .death-title {
+  animation: deathTitleGlow 5s ease-in-out infinite;
+}
+@keyframes deathTitleGlow {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.12); }
+}
+#death-screen.shake .death-title { animation: shake 0.5s ease-in-out; }
 @keyframes shake {
   0%, 100% { transform: translate(0, 0); }
   20% { transform: translate(-6px, 2px); }
@@ -29,52 +143,82 @@ ${wreckedTypeCSS('#death-screen h1')}
   80% { transform: translate(3px, -2px); }
 }
 
+#death-screen .killer,
+#death-screen .summary,
+#death-screen .pun {
+  background: transparent !important;
+  background-image: none !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
 #death-screen .killer {
-  display: inline-block;
-  margin: 0 auto 20px;
-  padding: 10px 18px 11px;
-  width: fit-content;
+  display: block;
+  margin: 0 auto 18px;
+  padding: 0;
   max-width: min(420px, 100%);
-  box-sizing: border-box;
-  background: rgba(40, 8, 8, 0.65);
-  border: 1px solid rgba(217, 79, 79, 0.45);
-  border-left: 3px solid #e05a5a;
   text-align: center;
-  line-height: 1.4;
+  line-height: 1.45;
   opacity: 0;
   font-size: 13px;
 }
 #death-screen.reveal .killer { animation: fadeUp 0.6s ease-out 0.25s forwards; }
 
-#death-screen .summary { margin-bottom: 18px; line-height: 1.7; opacity: 0; }
-#death-screen.reveal .summary { animation: fadeUp 0.6s ease-out 0.4s forwards; }
-#death-screen .killer .k-tag {
-  display: block; font-size: 10px; letter-spacing: 2px; text-transform: uppercase;
-  color: #ff8a7a; opacity: 0.85; margin-bottom: 4px;
+#death-screen .summary {
+  margin-bottom: 0; line-height: 1.7; opacity: 0;
+  text-shadow: ${TEXT_SHADOW};
 }
-#death-screen .killer .k-line { color: #f0d0d0; }
+#death-screen.reveal .summary { animation: fadeUp 0.6s ease-out 0.4s forwards; }
+#death-screen .killer .k-line {
+  color: #f0d0d0;
+  text-shadow: ${TEXT_SHADOW};
+}
 #death-screen .killer .k-name { color: #ffe0e0; font-size: 15px; letter-spacing: 0.5px; }
 #death-screen .killer .k-ship { color: var(--ui-accent); }
-#death-screen .killer .k-method { margin-top: 4px; opacity: 0.85; font-size: 12px; }
+#death-screen .killer .k-method { margin-top: 6px; opacity: 0.9; font-size: 12px; }
 #death-screen .killer .k-faction {
-  display: block; margin-top: 3px; font-size: 11px; letter-spacing: 1px;
-  text-transform: uppercase; color: #c09090; opacity: 0.8;
+  display: block; margin-top: 4px; font-size: 11px; letter-spacing: 1px;
+  text-transform: uppercase; color: #c09090; opacity: 0.85;
+  text-shadow: ${TEXT_SHADOW};
 }
-#death-screen .killer.unknown { opacity: 0.85; border-left-color: #8a5050; }
 
 #death-screen .pun {
-  margin: 0 0 16px; font-size: 13px; letter-spacing: 0.4px; line-height: 1.45;
-  color: #c8a0a0; font-style: italic; opacity: 0; max-width: 420px; margin-left: auto; margin-right: auto;
+  margin: 0 auto 18px; font-size: 13px; letter-spacing: 0.4px; line-height: 1.45;
+  color: #d0b0b0; font-style: italic; opacity: 0; max-width: 420px;
+  text-shadow: ${TEXT_SHADOW};
 }
 #death-screen.reveal .pun { animation: fadeUp 0.6s ease-out 0.5s forwards; }
 
-#death-screen button {
-  background: #2a1414; border: 1px solid #6a2a2a; color: #f0d0d0; padding: 10px 20px; cursor: pointer;
-  font-family: monospace; letter-spacing: 1px; opacity: 0;
+/* Only the return control keeps a plate so it stays obvious and clickable. */
+html #death-screen button.return,
+#death-screen button.return {
+  position: relative;
+  z-index: 2;
+  background: rgba(42, 20, 20, 0.88) !important;
+  background-image:
+    linear-gradient(180deg, rgba(255,255,255,0.08), transparent 50%),
+    linear-gradient(180deg, rgba(42, 20, 20, 0.95), rgba(28, 12, 12, 0.95)) !important;
+  border: 1px solid #8a3a3a !important;
+  color: #f0d0d0;
+  padding: 10px 20px;
+  cursor: pointer;
+  font-family: monospace;
+  letter-spacing: 1px;
+  opacity: 0;
+  border-radius: 6px;
   transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  pointer-events: auto !important;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.55);
 }
-#death-screen.reveal button { animation: fadeUp 0.6s ease-out 0.65s forwards; }
-#death-screen button:hover { background: #3a1a1a; border-color: #d94f4f; box-shadow: 0 2px 6px rgba(0,0,0,0.65); }
+#death-screen.reveal button.return { animation: fadeUp 0.6s ease-out 0.65s forwards; }
+html #death-screen button.return:hover,
+#death-screen button.return:hover {
+  background: rgba(58, 26, 26, 0.95) !important;
+  border-color: #d94f4f !important;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.65);
+  filter: none;
+}
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 `
 
@@ -136,36 +280,50 @@ export function createDeathScreen(container, onReturnToMenu) {
   const root = document.createElement('div')
   root.id = 'death-screen'
   root.innerHTML = `
-    <div class="panel">
-      <h1>YOU HAVE DIED</h1>
+    <div class="panel-top">
+      <div class="death-title">
+        <h1>YOU HAVE DIED</h1>
+      </div>
       <div class="killer"></div>
       <div class="summary"></div>
+    </div>
+    <div class="panel-bottom">
       <div class="pun"></div>
       <button class="return">Return to Main Menu</button>
     </div>
   `
   container.appendChild(root)
 
-  root.querySelector('.return').addEventListener('click', () => {
+  function hide() {
     root.style.display = 'none'
+    root.style.pointerEvents = 'none'
     root.classList.remove('reveal', 'shake')
+  }
+
+  root.querySelector('.return').addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    hide()
     onReturnToMenu()
   })
 
   return {
+    hide,
     show({
       characterName,
       credits,
       reputation,
       killerPilot = null,
+      killerName = null,
       killerShip = null,
       killerFaction = null,
       killerMethod = null
     }) {
       const name = escapeHtml(characterName || 'Captain')
+      const pilot = killerPilot || killerName
 
       const killerEl = root.querySelector('.killer')
-      if (killerPilot || killerShip) {
+      if (pilot || killerShip) {
         const method =
           killerMethod === 'ram'
             ? 'Finished you with a ramming run'
@@ -173,21 +331,19 @@ export function createDeathScreen(container, onReturnToMenu) {
         const faction = formatFaction(killerFaction)
         killerEl.classList.remove('unknown')
         killerEl.innerHTML = `
-          <span class="k-tag">Killed by</span>
-          <div class="k-line"><span class="k-name">${escapeHtml(killerPilot || 'Unknown captain')}</span></div>
+          <div class="k-line"><span class="k-name">${escapeHtml(pilot || 'Unknown captain')}</span></div>
           <div class="k-line">Vessel: <span class="k-ship">${escapeHtml(killerShip || 'Unknown vessel')}</span></div>
           <div class="k-line k-method">${escapeHtml(method)}</div>
           ${faction ? `<span class="k-faction">${escapeHtml(faction)}</span>` : ''}
         `
-        killerEl.style.display = 'inline-block'
+        killerEl.style.display = 'block'
       } else {
         killerEl.classList.add('unknown')
         killerEl.innerHTML = `
-          <span class="k-tag">Killed by</span>
           <div class="k-line"><span class="k-name">Unknown contact</span></div>
           <div class="k-line">Vessel: <span class="k-ship">No positive ID</span></div>
         `
-        killerEl.style.display = 'inline-block'
+        killerEl.style.display = 'block'
       }
 
       root.querySelector('.summary').innerHTML = `
@@ -199,6 +355,10 @@ export function createDeathScreen(container, onReturnToMenu) {
       root.querySelector('.pun').textContent = pickPun()
 
       root.style.display = 'flex'
+      root.style.pointerEvents = 'none' /* only .return re-enables */
+      // Above pointer-lock bridge (250000) so Return stays clickable if bridge races in.
+      root.style.zIndex = '300000'
+      document.body.style.cursor = ''
       root.classList.remove('reveal', 'shake')
       void root.offsetWidth
       root.classList.add('reveal', 'shake')

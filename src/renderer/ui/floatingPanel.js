@@ -1,5 +1,5 @@
 /**
- * Shared move / resize / persist for floating game panels (Inventory, Galaxy Map, System Scan).
+ * Shared move / resize / persist for floating game panels (Inventory, Galaxy Map, Region Sonar Scan).
  */
 
 export function clamp(n, lo, hi) {

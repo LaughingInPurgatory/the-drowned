@@ -281,7 +281,7 @@ function createWindow() {
     win.setTitle(APP_NAME)
   })
 
-  // Tell the renderer so Alt free-look can snap back if fullscreen changes.
+  // Tell the renderer when fullscreen changes (UI / focus recovery).
   const notifyFullscreen = () => notifyDisplayModeForMain()
   win.on('enter-full-screen', notifyFullscreen)
   win.on('leave-full-screen', notifyFullscreen)

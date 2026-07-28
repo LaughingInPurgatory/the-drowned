@@ -16,14 +16,14 @@ export const SEA_LEVEL = 0
  * last — the mix is what stops the surface reading as one repeating sine.
  */
 export const SEA_WAVES = [
-  { amp: 0.88, len: 260, speed: 14, dir: [1.0, 0.22] },
-  { amp: 0.59, len: 187, speed: 12, dir: [-0.62, 0.78] },
-  { amp: 0.46, len: 155, speed: 11, dir: [0.72, -0.7] },
-  { amp: 0.30, len: 108, speed: 9, dir: [0.18, 0.98] },
-  { amp: 0.25, len: 78, speed: 8, dir: [-0.35, 0.94] },
-  { amp: 0.18, len: 52, speed: 7, dir: [-0.88, -0.47] },
-  { amp: 0.13, len: 34, speed: 6, dir: [0.55, 0.84] },
-  { amp: 0.09, len: 21, speed: 5, dir: [0.93, -0.37] }
+  { amp: 1.05, len: 310, speed: 15, dir: [1.0, 0.22] },
+  { amp: 0.72, len: 210, speed: 13, dir: [-0.62, 0.78] },
+  { amp: 0.55, len: 165, speed: 11.5, dir: [0.72, -0.7] },
+  { amp: 0.38, len: 118, speed: 9.5, dir: [0.18, 0.98] },
+  { amp: 0.30, len: 82, speed: 8.5, dir: [-0.35, 0.94] },
+  { amp: 0.22, len: 54, speed: 7.2, dir: [-0.88, -0.47] },
+  { amp: 0.16, len: 36, speed: 6.2, dir: [0.55, 0.84] },
+  { amp: 0.11, len: 22, speed: 5.2, dir: [0.93, -0.37] }
 ]
 
 /** Tallest possible crest — used for camera/cull margins, not per-frame maths. */

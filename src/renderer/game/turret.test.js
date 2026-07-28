@@ -42,16 +42,22 @@ test('mouse right trains to starboard', () => {
   assert.ok(dir.x < 0, 'and the barrel should point that way in world space')
 })
 
-test('traverse and elevation are clamped to the mount', () => {
+test('elevation is clamped; traverse free-spins a full 360°', () => {
   const s = ship()
   for (let i = 0; i < 200; i++) updateTurretAim(s, { dx: -400, dy: -400 })
-  assert.ok(s.turretYaw <= TURRET_MAX_TRAVERSE + 1e-9)
+  // Yaw stays normalised to (-π, π] — never stuck at a hard stop.
+  assert.ok(Math.abs(s.turretYaw) <= Math.PI + 1e-9)
   assert.ok(s.turretPitch <= TURRET_MAX_PITCH + 1e-9)
 
   const t = ship()
   for (let i = 0; i < 200; i++) updateTurretAim(t, { dx: 400, dy: 400 })
-  assert.ok(t.turretYaw >= -TURRET_MAX_TRAVERSE - 1e-9)
+  assert.ok(Math.abs(t.turretYaw) <= Math.PI + 1e-9)
   assert.ok(t.turretPitch >= TURRET_MIN_PITCH - 1e-9)
+
+  // Continuous spin: further mouse still changes bearing (no ±π clamp).
+  const a = s.turretYaw
+  updateTurretAim(s, { dx: -80, dy: 0 })
+  assert.notEqual(s.turretYaw, a, 'traverse must keep spinning past dead aft')
 })
 
 test('the mount can elevate high enough to engage something in the air', () => {
@@ -85,10 +91,11 @@ test('aimTurretAt lays the mount onto a world point', () => {
   assert.ok(dir.y > 0.05, 'and elevated onto the target')
 })
 
-test('aimTurretAt respects the traverse limit rather than wrapping round', () => {
+test('aimTurretAt can train dead aft (full 360° traverse)', () => {
   const s = ship()
   aimTurretAt(s, [0, 0, -500]) // dead astern
-  assert.ok(Math.abs(s.turretYaw) <= TURRET_MAX_TRAVERSE + 1e-9, 'no 360° broadside')
+  assert.ok(Math.abs(s.turretYaw) >= Math.PI * 0.9, 'should nearly reverse onto the stern')
+  assert.ok(Math.abs(s.turretYaw) <= Math.PI + 1e-9)
 })
 
 test('the muzzle sits at the end of the barrel, above the waterline', () => {

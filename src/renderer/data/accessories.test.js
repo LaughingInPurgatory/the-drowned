@@ -39,7 +39,7 @@ test('catalog includes cargo / bay / hardpoint / defense / speed upgrades', () =
   }
 })
 
-test('Extra Ore Storage is +200% (3× total)', () => {
+test('Extra Salvage Hold is +200% (3× total)', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const base = shipClass.stats.miningCapacity
   assert.equal(

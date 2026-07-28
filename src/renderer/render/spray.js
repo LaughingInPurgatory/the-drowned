@@ -249,8 +249,22 @@ export function createSprayOverlay() {
     for (let i = 0; i < n; i++) spawn(strength)
   }
 
+  /** Wipe every bead and streak immediately (docked, stopped, death, menus). */
   function clear() {
-    for (const d of drops) d.life = 0
+    for (let i = 0; i < MAX_DROPS; i++) {
+      drops[i].life = 0
+      alphas[i] = 0
+      sizes[i] = 0
+      stretch[i] = 1
+      kinds[i] = 0
+    }
+    carry = 0
+    streakCarry = 0
+    geometry.attributes.aAlpha.needsUpdate = true
+    geometry.attributes.aSize.needsUpdate = true
+    geometry.attributes.aStretch.needsUpdate = true
+    geometry.attributes.aKind.needsUpdate = true
+    points.visible = false
   }
 
   /**
@@ -261,21 +275,29 @@ export function createSprayOverlay() {
    *   not be capped by it.
    * @param {number[]} [emitFrom] the bow's position in NDC, so spray radiates
    *   from where it is actually being thrown up rather than from screen centre.
+   * @param {number|null} [aspect]
+   * @param {{ forceClear?: boolean }} [opts] forceClear wipes glass now (docked /
+   *   dead / menus). Slowing also dries the glass quickly without a hard cut.
    */
-  function update(dt, speedFraction = 0, boost = 0, emitFrom = null, aspect = null) {
+  function update(dt, speedFraction = 0, boost = 0, emitFrom = null, aspect = null, opts = null) {
+    if (opts?.forceClear) {
+      clear()
+      return
+    }
     // Needed to turn an NDC travel direction into a screen angle — see the
     // fragment shader. Falls back to the canvas if the caller does not say.
     if (aspect) material.uniforms.uAspect.value = aspect
     if (emitFrom) {
-      // Clamp: once the bow swings off-screen (hard turn, free-look) an
-      // unbounded origin sends every droplet across the frame in one direction.
+      // Clamp: once the bow swings off-screen (hard turn) an unbounded origin
+      // sends every droplet across the frame in one direction.
       origin[0] = Math.max(-0.8, Math.min(0.8, emitFrom[0]))
       origin[1] = Math.max(-0.9, Math.min(0.6, emitFrom[1]))
     }
     // Accumulate spray with speed. Below the threshold the bow is not throwing
     // anything up, so nothing lands and what is there dries off.
     const over = Math.max(0, speedFraction - SPRAY_THRESHOLD) / (1 - SPRAY_THRESHOLD)
-    if (over > 0 || boost > 0) {
+    const moving = over > 0 || boost > 0
+    if (moving) {
       const rate = Math.max(over, boost * 0.8)
       carry += rate * rate * 9 * dt
       while (carry >= 1) {
@@ -303,6 +325,9 @@ export function createSprayOverlay() {
 
     // How hard the airflow is tearing at what is already on the glass.
     const drag = Math.min(1, speedFraction + boost)
+    // At a crawl or stopped: streaks vanish; beads dry off fast (not linger for seconds).
+    const nearlyStopped = !moving && speedFraction < SPRAY_THRESHOLD * 0.85
+    const dryMul = nearlyStopped ? 5.5 : 1
 
     let live = false
     for (let i = 0; i < MAX_DROPS; i++) {
@@ -312,8 +337,20 @@ export function createSprayOverlay() {
         sizes[i] = 0
         continue
       }
+      // Speed lines have no business sitting on the glass when you are still.
+      if (nearlyStopped && d.streak) {
+        d.life = 0
+        alphas[i] = 0
+        sizes[i] = 0
+        continue
+      }
       live = true
-      d.life -= dt
+      d.life -= dt * dryMul
+      if (d.life <= 0) {
+        alphas[i] = 0
+        sizes[i] = 0
+        continue
+      }
       const k = Math.max(0, d.life / d.maxLife)
 
       if (d.streak) {
@@ -336,12 +373,13 @@ export function createSprayOverlay() {
         continue
       }
 
-      // Fade in fast on landing, then a long slow dry-off.
+      // Fade in fast on landing, then a long slow dry-off (or quick when stopped).
       alphas[i] = Math.min(1, (1 - k) * 6) * Math.pow(k, 0.6)
       sizes[i] = d.size
       // Gravity: run-off accelerates as the bead gains mass from what it
-      // passes through.
-      positions[i * 3 + 1] -= d.sag * dt * (1 + (1 - k) * 1.6)
+      // passes through. When stopped, sag harder so beads leave the frame.
+      const sagMul = nearlyStopped ? 3.2 : 1
+      positions[i * 3 + 1] -= d.sag * sagMul * dt * (1 + (1 - k) * 1.6)
       // Airflow: at speed it wins over gravity and drags the bead at the
       // nearest edge, stretching it as it goes.
       if (drag > 0.05) {

@@ -213,7 +213,7 @@ export function mineRock(gameState, shipClass, field, fieldId, index, amount = 1
 
   const hold = gameState.player.ship.miningHold
   const used = Object.values(hold).reduce((a, b) => a + b, 0)
-  // Capacity includes Extra Ore Storage accessory while equipped.
+  // Capacity includes Extra Salvage Hold accessory while equipped.
   const cap = effectiveMiningCapacity(gameState.player.ship, shipClass)
   const free = Math.max(0, cap - used)
   const scoopedAmount = Math.min(stripped, free)

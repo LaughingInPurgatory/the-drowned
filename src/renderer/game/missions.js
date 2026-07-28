@@ -11,7 +11,7 @@ const LEAD_REWARD_MULT = 1.05
 // uses for the initial giver→target placement. Each lead hops off the PREVIOUS
 // target, so without re-checking against the harbour that posted the contract a
 // chain of hops could walk the player clean across the sea.
-const MAX_LEAD_DISTANCE = 14000
+const MAX_LEAD_DISTANCE = 24000
 
 /** @type {null|((info: object) => void)} */
 let missionCompletedHandler = null

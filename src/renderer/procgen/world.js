@@ -1,5 +1,5 @@
 import { mulberry32, pick, range, intRange } from './prng.js'
-import { generateBodyName, generateHumanName, generateSpeciesName } from './names.js'
+import { generateBodyName, generateHumanName, generateSpeciesName, claimFixedName } from './names.js'
 import { ECONOMY_TAGS } from '../data/economyTags.js'
 import { rollSecurityRating } from '../game/security.js'
 
@@ -15,7 +15,7 @@ import { rollSecurityRating } from '../game/security.js'
  */
 
 /** Half-width of the sea. Sailing past this is open water and nothing else. */
-export const WORLD_RADIUS = 40000
+export const WORLD_RADIUS = 80000
 /** The one and only region id. */
 export const WORLD_ID = 'sea-0'
 export const WORLD_NAME = 'The Drowned World'
@@ -23,12 +23,12 @@ export const WORLD_NAME = 'The Drowned World'
 export const HOME_ARCHIPELAGO_NAME = 'Haven Reach'
 export const CANONICAL_WORLD_SEED = 8675309
 
-const ISLAND_CLUSTERS = 14
-const ISLANDS_PER_CLUSTER = [3, 7]
-const CLUSTER_SPREAD = [1800, 5200]
-export const DEFAULT_PORT_COUNT = 24
-export const DEFAULT_OUTPOST_COUNT = 30
-export const DEFAULT_WRECK_FIELD_COUNT = 44
+const ISLAND_CLUSTERS = 26
+const ISLANDS_PER_CLUSTER = [3, 8]
+const CLUSTER_SPREAD = [3200, 9000]
+export const DEFAULT_PORT_COUNT = 48
+export const DEFAULT_OUTPOST_COUNT = 60
+export const DEFAULT_WRECK_FIELD_COUNT = 80
 export const DEFAULT_SPECIES_COUNT = 12
 
 const ISLAND_RADIUS = [420, 2900]
@@ -39,7 +39,7 @@ const WRECK_FIELD_RADIUS = [180, 320]
 const PORT_CLEARANCE = 520
 const OUTPOST_CLEARANCE = 150
 /** Keep a navigable channel between anything the player can run aground on. */
-const PLACEMENT_MARGIN = 260
+const PLACEMENT_MARGIN = 380
 const PLACE_ATTEMPTS = 60
 
 /** Fraction of ports that float free (rigs, moored hulks) rather than hug a coast. */
@@ -193,7 +193,8 @@ export function portHasBerth(portId) {
 function makePort(rng, id, position, host, usedNames) {
   const body = {
     id,
-    name: generateBodyName(rng, 'port', usedNames),
+    // Host island name may be woven in ("Vale Sound Harbour") or fully unique.
+    name: generateBodyName(rng, 'port', usedNames, host?.name ?? null),
     kind: 'port',
     parentId: host?.id,
     position,
@@ -218,7 +219,7 @@ function makePort(rng, id, position, host, usedNames) {
 function makeOutpost(rng, id, position, host, usedNames) {
   const body = {
     id,
-    name: generateBodyName(rng, 'outpost', usedNames),
+    name: generateBodyName(rng, 'outpost', usedNames, host?.name ?? null),
     kind: 'outpost',
     parentId: host?.id,
     position,
@@ -283,17 +284,36 @@ function placeIslands(rng, bodies, nextId, usedNames) {
  * a wreck field close enough to reach before the fuel runs out.
  */
 function buildHomeArchipelago(rng, bodies, nextId, usedNames) {
+  // Fixed home names — claim first so nothing else can reuse them.
+  claimFixedName(HOME_ARCHIPELAGO_NAME, usedNames)
+  claimFixedName('Port Haven', usedNames)
+
   const island = makeIsland(rng, `body-${nextId()}`, HOME_ARCHIPELAGO_NAME, [0, 0, 0], 1400)
   island.economyTags = ['wealthy', 'tech']
   bodies.push(island)
 
-  const homePort = makePort(rng, `body-${nextId()}`, coastPosition(rng, island, PORT_CLEARANCE), island, usedNames)
-  homePort.name = 'Port Haven'
-  homePort.securityRating = 6 // the last place with a working harbourmaster
-  homePort.economyTags = ['wealthy', 'industrial']
-  homePort.hasShipParts = true
-  homePort.hasBerth = true
-  homePort.isHome = true
+  // Hand-built home harbour: inherits the Reach into "Port Haven" (special form).
+  const homePort = {
+    id: `body-${nextId()}`,
+    name: 'Port Haven',
+    kind: 'port',
+    parentId: island.id,
+    position: coastPosition(rng, island, PORT_CLEARANCE),
+    radius: null,
+    economyTags: ['wealthy', 'industrial'],
+    hasMissions: true,
+    hasShipyard: true,
+    hasShipParts: true,
+    securityRating: 6,
+    hasBerth: true,
+    isHome: true,
+    surfaceOffset: null
+  }
+  homePort.surfaceOffset = [
+    homePort.position[0] - island.position[0],
+    0,
+    homePort.position[2] - island.position[2]
+  ]
   bodies.push(homePort)
 
   // A second island close by so the first voyage has somewhere to aim.
@@ -301,7 +321,7 @@ function buildHomeArchipelago(rng, bodies, nextId, usedNames) {
     rng,
     `body-${nextId()}`,
     generateBodyName(rng, 'island', usedNames),
-    [range(rng, 2600, 4200), 0, range(rng, -3400, 3400)],
+    [range(rng, 3800, 6200), 0, range(rng, -4800, 4800)],
     range(rng, 600, 1100)
   )
   bodies.push(neighbour)
@@ -310,7 +330,7 @@ function buildHomeArchipelago(rng, bodies, nextId, usedNames) {
   )
 
   for (let i = 0; i < 2; i++) {
-    const p = placeFree(rng, bodies, WRECK_FIELD_RADIUS[1], 2200, 7000)
+    const p = placeFree(rng, bodies, WRECK_FIELD_RADIUS[1], 2800, 10000)
     if (p) bodies.push(makeWreckField(rng, `body-${nextId()}`, p, usedNames))
   }
   return homePort

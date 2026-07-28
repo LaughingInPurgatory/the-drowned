@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { createScene } from './render/scene.js'
 import { buildShipMesh, updatePoliceLights } from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
-import { buildIslandMesh, islandMaxShoreline } from './render/islandMesh.js'
+import { buildIslandMesh, islandMaxShoreline, islandCoastSurfSamples } from './render/islandMesh.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
 import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from './render/projectileMesh.js'
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
@@ -24,9 +24,6 @@ import {
   resetChaseCameraState,
   adjustChaseZoom,
   resetChaseZoom,
-  setChaseFreeLook,
-  addChaseFreeLookDelta,
-  isChaseFreeLook,
   setChaseIdleOrbit
 } from './render/sceneSync.js'
 import { createWake } from './render/wake.js'
@@ -101,7 +98,7 @@ import {
   formatRespawnTime,
   rollMiningPirateAmbush
 } from './game/mining.js'
-import { pruneWrecks, lootWreck, spawnWreck } from './game/wrecks.js'
+import { pruneWrecks, lootWreck, spawnWreck, spawnWreckWithSkills } from './game/wrecks.js'
 import { updateCraftingJobs, ensureBlueprintMaps } from './game/crafting.js'
 import { getBlueprint } from './data/blueprints.js'
 import {
@@ -367,8 +364,9 @@ const MOORING_STANDOFF = 14
 /** How long a sounding takes from first ping to reading the return. */
 const PROBE_SCAN_S = 6.5
 /** Pings per sounding, and the gap between them. Matches render/sonarPulse.js. */
-const SONAR_PING_COUNT = 3
-const SONAR_PING_INTERVAL_S = 0.85
+// Spaced for a long movie-style ping tail (see audio.playSonarPing).
+const SONAR_PING_COUNT = 4
+const SONAR_PING_INTERVAL_S = 1.55
 
 const appEl = document.getElementById('app')
 const { scene, camera, renderer, render, updateEnvironment, setPostOverlay, ocean } = createScene(appEl)
@@ -432,8 +430,6 @@ hudReticleDot.visible = false
 // Escape while pointer-locked often only unlocks the cursor (keydown may not
 // fire). Suppress auto-pause when we exit lock ourselves (menus / Space).
 let suppressPointerUnlockPause = false
-/** Alt held for free-look; free-look only activates once the mouse moves. */
-let altHeldForFreeLook = false
 /** Keep suppress true for N animation frames (WebGL dispose / re-lock churn). */
 function suppressUnlockPauseForFrames(frames = 3) {
   suppressPointerUnlockPause = true
@@ -452,6 +448,9 @@ let resumeFlightGraceUntilMs = 0
 // Full-screen capture layer until Chromium grants pointer lock (cursor confined).
 let pointerLockBridgeEl = null
 let pointerLockRetryTimer = null
+// Slow camera orbit after death — must be set BEFORE unlock so pointerlockchange
+// / stale lock promises cannot re-arm flight or the full-screen bridge.
+let deathOrbit = null
 
 const keys = createInputState()
 const mouseAim = createMouseAimState()
@@ -623,7 +622,9 @@ document.addEventListener('pointercancel', (e) => {
 window.addEventListener('contextmenu', (e) => e.preventDefault())
 
 function canUseFlightMode() {
-  if (!gameState || paused || chartOpen || inventoryOpen || missionsOpen || characterOpen) return false
+  if (!gameState || deathOrbit || paused || chartOpen || inventoryOpen || missionsOpen || characterOpen) {
+    return false
+  }
   // Parked at the docking UI: no flight. Mid undock animation is fine —
   // pointer lock is requested on the Undock click (needs a live gesture).
   if (docked && !dockEffect) return false
@@ -635,8 +636,6 @@ function exitFlightMode() {
   flightMode = false
   laserFireHeld = false
   missileFireHeld = false
-  altHeldForFreeLook = false
-  setChaseFreeLook(false)
   hidePointerLockBridge()
   stopPointerLockRetries()
   if (crosshairEl) crosshairEl.style.display = 'none'
@@ -676,7 +675,7 @@ function stopPointerLockRetries() {
  * Keyboard flight works while the bridge is up; mouse look needs the lock.
  */
 function showPointerLockBridge() {
-  if (isFlightPointerLocked() || paused || docked || !flightModeWanted) {
+  if (isFlightPointerLocked() || paused || docked || deathOrbit || !flightModeWanted) {
     hidePointerLockBridge()
     return
   }
@@ -722,14 +721,26 @@ function hidePointerLockBridge() {
   if (!isFlightPointerLocked()) document.body.style.cursor = ''
 }
 
+/** Death owns the cursor — never re-arm helm or the lock bridge over the Return button. */
+function deathBlocksPointerLock() {
+  return !!deathOrbit
+}
+
 /** Force flight flags on (keyboard). Pointer lock is required for confined mouse. */
 function forceFlightControlsOn() {
+  // Never re-arm helm after death — stale lock promises used to do this.
+  if (deathBlocksPointerLock()) {
+    flightModeWanted = false
+    flightMode = false
+    hidePointerLockBridge()
+    stopPointerLockRetries()
+    return
+  }
   flightModeWanted = true
   flightMode = true
   mouseFreedForUI = false
   laserFireHeld = false
   missileFireHeld = false
-  setChaseFreeLook(false)
   systemOverview?.setInteractive(false)
   if (!isFlightPointerLocked()) showPointerLockBridge()
   else hidePointerLockBridge()
@@ -737,6 +748,11 @@ function forceFlightControlsOn() {
 
 /** @returns {Promise<boolean>} whether lock is held after the attempt */
 function requestFlightPointerLock() {
+  if (deathBlocksPointerLock() || !flightModeWanted || paused) {
+    hidePointerLockBridge()
+    stopPointerLockRetries()
+    return Promise.resolve(false)
+  }
   if (isFlightPointerLocked()) {
     forceFlightControlsOn()
     hidePointerLockBridge()
@@ -760,7 +776,7 @@ function requestFlightPointerLock() {
       req = renderer.domElement.requestPointerLock?.()
     } catch (err) {
       console.error('Pointer lock request threw:', err)
-      if (flightModeWanted && !paused && !docked) {
+      if (flightModeWanted && !deathBlocksPointerLock() && !paused && !docked) {
         forceFlightControlsOn()
         showPointerLockBridge()
       }
@@ -770,13 +786,24 @@ function requestFlightPointerLock() {
   if (req && typeof req.then === 'function') {
     return req
       .then(() => {
+        // Grant can arrive after death — drop it immediately.
+        if (deathBlocksPointerLock() || !flightModeWanted || paused) {
+          try {
+            if (document.pointerLockElement) document.exitPointerLock()
+          } catch {
+            /* */
+          }
+          hidePointerLockBridge()
+          stopPointerLockRetries()
+          return false
+        }
         forceFlightControlsOn()
         hidePointerLockBridge()
         stopPointerLockRetries()
         return true
       })
       .catch(() => {
-        if (flightModeWanted && !paused && !docked) {
+        if (flightModeWanted && !deathBlocksPointerLock() && !paused && !docked) {
           forceFlightControlsOn()
           showPointerLockBridge()
         }
@@ -784,6 +811,11 @@ function requestFlightPointerLock() {
       })
   }
   requestAnimationFrame(() => {
+    if (deathBlocksPointerLock() || !flightModeWanted || paused) {
+      hidePointerLockBridge()
+      stopPointerLockRetries()
+      return
+    }
     if (isFlightPointerLocked()) {
       forceFlightControlsOn()
       hidePointerLockBridge()
@@ -802,6 +834,7 @@ function requestFlightPointerLock() {
  * lock confines the cursor (required after Esc unlock).
  */
 function resumeFlightAfterPause() {
+  if (deathOrbit) return
   resumeFlightGraceUntilMs = performance.now() + 3000
   suppressPointerUnlockPause = true
   setTimeout(() => {
@@ -818,7 +851,7 @@ function resumeFlightAfterPause() {
   let ticks = 0
   pointerLockRetryTimer = setInterval(() => {
     ticks += 1
-    if (!flightModeWanted || paused || docked || ticks > 40) {
+    if (!flightModeWanted || deathBlocksPointerLock() || paused || docked || ticks > 40) {
       stopPointerLockRetries()
       return
     }
@@ -864,7 +897,7 @@ function dismissOpenPanelsForPause() {
   if (datacoreMinigame?.isOpen?.()) {
     datacoreMinigame.hide()
   }
-  // Harbour Services (docked) — keep docked chrome, just close the services panel
+  // Services (docked) — keep docked chrome, just close the services panel
   if (dockingUI?.isServicesOpen?.()) {
     dockingUI.toggleServices()
   }
@@ -888,7 +921,6 @@ function setGamePaused(next) {
     flightMode = false
     laserFireHeld = false
     missileFireHeld = false
-    setChaseFreeLook(false)
     hidePointerLockBridge()
     stopPointerLockRetries()
     mouseAim.dx = 0
@@ -919,6 +951,13 @@ function setGamePaused(next) {
 }
 
 function reenterFlightMode() {
+  if (deathOrbit) {
+    flightModeWanted = false
+    flightMode = false
+    hidePointerLockBridge()
+    stopPointerLockRetries()
+    return
+  }
   flightModeWanted = true
   if (!canUseFlightMode()) {
     if (inResumeFlightGrace() && !paused && !docked) {
@@ -943,7 +982,7 @@ function reenterFlightMode() {
 // After alt-tab / OS focus steal, Chromium drops pointer lock. Keep the
 // player's intent (flightModeWanted) and re-request on focus or any click.
 function tryRestoreFlightMode() {
-  if (!flightModeWanted || paused || docked) return
+  if (!flightModeWanted || paused || docked || deathOrbit) return
   if (!canUseFlightMode() && !inResumeFlightGrace()) return
   forceFlightControlsOn()
   if (isFlightPointerLocked()) {
@@ -956,6 +995,17 @@ function tryRestoreFlightMode() {
 
 document.addEventListener('pointerlockchange', () => {
   if (isFlightPointerLocked()) {
+    // Stale grant after death: drop immediately so the Return button stays usable.
+    if (deathOrbit || !flightModeWanted) {
+      try {
+        document.exitPointerLock()
+      } catch {
+        /* */
+      }
+      hidePointerLockBridge()
+      stopPointerLockRetries()
+      return
+    }
     if (flightModeWanted && !paused && !characterOpen) {
       forceFlightControlsOn()
       hidePointerLockBridge()
@@ -971,6 +1021,16 @@ document.addEventListener('pointerlockchange', () => {
   if (crosshairEl) crosshairEl.style.display = 'none'
   if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
   if (targetDirEl) targetDirEl.style.display = 'none'
+
+  // Death: free cursor, never re-arm bridge or pause.
+  if (deathOrbit) {
+    flightMode = false
+    flightModeWanted = false
+    hidePointerLockBridge()
+    stopPointerLockRetries()
+    document.body.style.cursor = ''
+    return
+  }
 
   // During post-unpause grace: never clear flightMode and never auto-pause.
   if (inResumeFlightGrace() && flightModeWanted && !paused && !docked) {
@@ -1007,6 +1067,7 @@ document.addEventListener('pointerlockchange', () => {
     !suppressPointerUnlockPause &&
     appStillFocused &&
     gameState &&
+    !deathOrbit &&
     !paused &&
     flightModeWanted &&
     !docked &&
@@ -1044,18 +1105,6 @@ document.addEventListener('pointerlockchange', () => {
   }
 })
 
-// Alt + mouse: orbit chase cam around the ship; release Alt snaps back to seat.
-// Important: do NOT arm free-look on bare Alt keydown — that regresses Alt+Enter
-// fullscreen (free-look sticks when the OS swallows Alt keyup mid-toggle).
-function isAltKey(code) {
-  return code === 'AltLeft' || code === 'AltRight'
-}
-
-function clearChaseFreeLook() {
-  altHeldForFreeLook = false
-  setChaseFreeLook(false)
-}
-
 function isAltEnterChord(e) {
   return (
     e.altKey &&
@@ -1070,38 +1119,19 @@ window.addEventListener('blur', () => {
   keys.clear()
   laserFireHeld = false
   missileFireHeld = false
-  clearChaseFreeLook()
 })
 
 window.addEventListener('focus', () => {
   tryRestoreFlightMode()
 })
 
+// Alt+Enter → fullscreen (dual-path: main before-input + IPC backup).
 window.addEventListener('keydown', (e) => {
-  // Alt+Enter → fullscreen. Never free-look. Dual-path: main before-input + IPC.
-  if (isAltEnterChord(e)) {
-    e.preventDefault()
-    e.stopPropagation()
-    clearChaseFreeLook()
-    window.electronAPI?.toggleFullscreen?.()
-    return
-  }
-  if (!isAltKey(e.code)) return
-  if (!gameState || paused || docked || chartOpen || inventoryOpen || missionsOpen || characterOpen) {
-    clearChaseFreeLook()
-    return
-  }
-  // Hold only — free-look engages on mouse movement in the game loop.
-  altHeldForFreeLook = true
+  if (!isAltEnterChord(e)) return
+  e.preventDefault()
+  e.stopPropagation()
+  window.electronAPI?.toggleFullscreen?.()
 })
-window.addEventListener('keyup', (e) => {
-  if (!isAltKey(e.code)) return
-  clearChaseFreeLook()
-})
-// Fullscreen transition often drops Alt keyup while free-look would stick.
-if (typeof window.electronAPI?.onFullscreenChanged === 'function') {
-  window.electronAPI.onFullscreenChanged(() => clearChaseFreeLook())
-}
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') tryRestoreFlightMode()
@@ -1112,7 +1142,7 @@ document.addEventListener('visibilitychange', () => {
 // overlays (system overview, menus) sit above the canvas and keep the mouse free.
 renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return
-  if (!gameState) return
+  if (!gameState || deathOrbit) return
   // Docked hangar: drag to orbit the parked ship.
   if (docked && !dockEffect && !paused && !chartOpen && !inventoryOpen && !missionsOpen && !characterOpen) {
     dockOrbit.dragging = true
@@ -1398,7 +1428,7 @@ function loadBodiesForCurrentSystem() {
  * once. Hiding what the fog has already swallowed keeps the draw-call count to
  * the handful of places actually in sight.
  */
-const BODY_CULL_DISTANCE = 9000
+const BODY_CULL_DISTANCE = 16000
 const _cullPos = new THREE.Vector3()
 function updateBodyVisibility() {
   for (const [id, mesh] of bodyMeshes) {
@@ -1431,10 +1461,11 @@ function rebuildSurfObstacles() {
   staticSurfObstacles = []
   for (const body of world?.bodies ?? []) {
     if (body.kind === 'island') {
-      // The traced coastline, not `body.radius` — that is the whole disc
-      // including the shelf, and would put the surf line well out to sea.
-      const r = islandMaxShoreline(body)
-      if (r > 0) staticSurfObstacles.push({ x: body.position[0], z: body.position[2], radius: r })
+      // Samples on the real shoreline — a single maxShore circle foamed the
+      // whole approach and every empty bay inside the disc.
+      for (const s of islandCoastSurfSamples(body, 18)) {
+        staticSurfObstacles.push(s)
+      }
       continue
     }
     if (body.kind === 'wreckField') {
@@ -1444,7 +1475,8 @@ function rebuildSurfObstacles() {
         staticSurfObstacles.push({
           x: body.position[0] + rock.position[0],
           z: body.position[2] + rock.position[2],
-          radius: rock.collisionRadius * 0.8
+          // Tight collar on the wreck mass, not a white puddle between hulks.
+          radius: Math.max(3, rock.collisionRadius * 0.45)
         })
       }
       continue
@@ -1454,8 +1486,22 @@ function rebuildSurfObstacles() {
       if (!mesh) continue
       _surfBounds.setFromObject(mesh)
       _surfBounds.getSize(_surfSize)
-      const r = Math.max(_surfSize.x, _surfSize.z) * 0.5
-      if (r > 0) staticSurfObstacles.push({ x: body.position[0], z: body.position[2], radius: r })
+      // AABB half-extent is the full footprint (mole + jetties). Foam only
+      // wants a thin working-edge band, not a white disc over the anchorage.
+      const half = Math.max(_surfSize.x, _surfSize.z) * 0.5
+      if (!(half > 0)) continue
+      const r =
+        body.kind === 'outpost'
+          ? Math.min(half * 0.42, 28)
+          : Math.min(half * 0.38, 55)
+      if (r > 0) {
+        staticSurfObstacles.push({
+          x: body.position[0],
+          z: body.position[2],
+          radius: r,
+          strength: 0.9
+        })
+      }
     }
   }
 }
@@ -1492,8 +1538,9 @@ function hullSurfEllipse(entity, shipClass, strength) {
   return {
     x: entity.position[0],
     z: entity.position[2],
-    halfLength: length * 0.52,
-    halfBeam: beam * 0.62,
+    // Slightly inside the plan so the collar sits at the waterline, not a halo.
+    halfLength: length * 0.48,
+    halfBeam: beam * 0.52,
     heading: headingOf(entity),
     strength
   }
@@ -1517,6 +1564,20 @@ function currentSurfObstacles() {
     }
     const st = hullSurfStrength(npc, cls)
     if (st > 0.01) _surfFrame.push(hullSurfEllipse(npc, cls, st))
+  }
+  for (const wreck of gameState?.wrecks ?? []) {
+    if (!wreck?.position) continue
+    const mesh = wreckMeshes.get(wreck.id)
+    const r = (mesh?.userData?.surfRadius ?? 10) * 0.55
+    _surfFrame.push({
+      x: wreck.position[0],
+      z: wreck.position[2],
+      radius: r,
+      halfLength: r * 1.05,
+      halfBeam: r * 0.5,
+      heading: mesh?.rotation?.y ?? 0,
+      strength: 0.75
+    })
   }
   return _surfFrame
 }
@@ -1959,7 +2020,7 @@ function onProjectileHit({
       scene.add(fx.group)
       rockExplosions.push(fx)
       audio.playRockExplosion()
-      setHudToastText(miningToastEl, `${getGood(mined.goodId).name} deposit destroyed!`)
+      setHudToastText(miningToastEl, `${getGood(mined.goodId).name} wreck cleared!`)
       showHudToast(miningToastEl)
       miningToastUntil = gameState.simTime + MINING_TOAST_DURATION_S * 1.4
       // If the whole belt is empty, show when it comes back.
@@ -1973,14 +2034,14 @@ function onProjectileHit({
       oreScoopEffects?.burst(new THREE.Vector3(...from), 5 + Math.floor(Math.random() * 4))
       if (!mined.destroyed) {
         const n = mined.scoopedAmount ?? mined.amount ?? 1
-        setHudToastText(miningToastEl, `Mined ${n} ${getGood(mined.goodId).name}`)
+        setHudToastText(miningToastEl, `Salvaged ${n} ${getGood(mined.goodId).name}`)
         showHudToast(miningToastEl)
         miningToastUntil = gameState.simTime + MINING_TOAST_DURATION_S
       }
     } else if (!mined.destroyed) {
       // Stripped ore but hold is full — warn the pilot (throttled).
       if (gameState.simTime - lastOreFullToastAt > 1.25) {
-        flashToast('Ore Hold Full')
+        flashToast('Salvage Hold Full')
         lastOreFullToastAt = gameState.simTime
       }
     }
@@ -2379,7 +2440,7 @@ function maybeSpawnMiningPirateAmbush() {
   )
   gameState.npcs.push(npc)
   if (factionToastEl) {
-    setHudToastText(factionToastEl, 'Pirates attracted by your mining!')
+    setHudToastText(factionToastEl, 'Pirates attracted by your salvaging!')
     showHudToast(factionToastEl)
     factionToastUntil = gameState.simTime + FACTION_TOAST_DURATION_S
   }
@@ -2524,6 +2585,7 @@ function clearSession() {
   audio.setThrustState(null)
   audio.setSupercruiseActive(false)
   audio.stopAmbientMusic()
+  audio.stopSeaAmbient()
   camera.fov = BASE_FOV
   camera.updateProjectionMatrix()
   resetChaseZoom()
@@ -2685,11 +2747,11 @@ function rebuildPlayerShipMesh() {
   playerWake?.reset()
 }
 
-/** Open/toggle System Scan (HUD button + B). */
+/** Open/toggle Region Sonar Scan (HUD button + B). */
 function openSystemScanPanel() {
   if (!gameState || !systemScanMap) return
   if (docked || dockEffect || cruising) {
-    flashToast('System Scan unavailable right now')
+    flashToast('Region Sonar Scan unavailable right now')
     return
   }
   if (
@@ -3138,6 +3200,8 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
 
   nextAmbientSpawnAt = gameState.simTime + AMBIENT_SPAWN_INTERVAL_S
   audio.startAmbientMusic()
+  // Quiet water bed under diesel / combat for the whole session.
+  audio.startSeaAmbient()
 
   if (offlineCraftDone.length) toastCraftCompleted(offlineCraftDone)
   if (anomaliesRefreshedOffline) {
@@ -3152,11 +3216,71 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   if (enterFlightMode && !docked) reenterFlightMode()
 }
 
+/** Fully free the cursor — death / menu must never leave pointer-lock half-armed. */
+function releaseMouseFully() {
+  flightModeWanted = false
+  flightMode = false
+  laserFireHeld = false
+  missileFireHeld = false
+  mouseFreedForUI = false
+  hidePointerLockBridge()
+  stopPointerLockRetries()
+  suppressPointerUnlockPause = true
+  try {
+    if (document.pointerLockElement) document.exitPointerLock()
+  } catch {
+    /* ignore */
+  }
+  // Chromium sometimes needs a second tick after exit during combat input.
+  requestAnimationFrame(() => {
+    try {
+      if (document.pointerLockElement) document.exitPointerLock()
+    } catch {
+      /* ignore */
+    }
+    document.body.style.cursor = ''
+  })
+  document.body.style.cursor = ''
+  // Keep suppress long enough that a delayed unlock cannot open pause.
+  setTimeout(() => {
+    suppressPointerUnlockPause = false
+    // If death is still up and something re-locked, force free again.
+    if (deathOrbit && document.pointerLockElement) {
+      try {
+        document.exitPointerLock()
+      } catch {
+        /* */
+      }
+      document.body.style.cursor = ''
+    }
+  }, 800)
+}
+
 function returnToMenu() {
+  deathOrbit = null
+  releaseMouseFully()
+  try {
+    deathScreen?.hide?.()
+  } catch {
+    /* */
+  }
   clearSession()
   gameState = null
+  // Ensure death overlay is gone and menu is on top for clicks.
+  const ds = document.getElementById('death-screen')
+  if (ds) {
+    ds.style.display = 'none'
+    ds.style.pointerEvents = 'none'
+  }
   startMenuBackground()
-  hasSave().then((exists) => menu.show(exists))
+  hasSave().then((exists) => {
+    menu.show(exists)
+    // Menu chrome must receive clicks; canvas sits underneath.
+    if (menu?.element) {
+      menu.element.style.pointerEvents = 'auto'
+      menu.element.style.zIndex = '50'
+    }
+  })
 }
 
 // Dock when within DOCK_RANGE of the body centre, but never inside the
@@ -3515,7 +3639,7 @@ function probeBody(body) {
   audio.playSonarPing(0)
   audio.setProbeScanActive(true)
   if (missionOnlyReprobe) {
-    flashToast(`Re-sounding ${body.name} for the contract… (no additional finds)`, 2.4)
+    flashToast(`Sonar pulse re-scan of ${body.name} for the contract… (no additional finds)`, 2.4)
   } else {
     flashToast(`Sounding ${body.name}… (${n}/${MAX_PROBE_ATTEMPTS})`, 2.2)
   }
@@ -4179,8 +4303,6 @@ function beginDocking(body) {
     gameState.player.ship.velocity = [0, 0, 0]
     gameState.player.ship.throttle = 0
     audio.setSupercruiseActive(false)
-    // HUD already shows AUTOPILOT DISENGAGED.
-    audio.announce('Autopilot disengaged')
   }
   exitFlightMode()
   dockPromptEl.style.display = 'none'
@@ -4220,7 +4342,7 @@ function beginUndocking() {
     backAwayPoint
   }
   audio.playUndock()
-  // Wipe chase-cam / mouse state left over from the bay or a prior free-look
+  // Wipe chase-cam / mouse state left over from the bay
   // (load-from-docked is especially prone to a skewed seat vs boresight).
   resetChaseCameraState()
   mouseAim.dx = 0
@@ -4309,6 +4431,7 @@ function updateDockEffect(dt) {
 }
 
 function handlePlayerDeath() {
+  if (deathOrbit) return
   const killer = gameState.player.lastKiller ?? null
   let cause = 'Ship destroyed in combat'
   if (killer?.method === 'ram') {
@@ -4321,24 +4444,73 @@ function handlePlayerDeath() {
     credits: gameState.player.credits,
     reputation: gameState.player.reputation,
     cause,
+    // deathScreen accepts both names; pass both so neither path goes blank.
+    killerName: killer?.pilotName ?? null,
     killerPilot: killer?.pilotName ?? null,
     killerShip: killer?.shipName ?? null,
     killerFaction: killer?.faction ?? null,
     killerMethod: killer?.method ?? null
   }
-  // Combat boom only — no rock/ice crack. Scene is cleared next; FX is for
-  // consistency if we ever delay the wipe.
-  const pos = gameState.player.ship.position
+  const pos = [...gameState.player.ship.position]
   const r = getShipCollisionRadius(playerShipClass)
+  // Arm death flag first — every pointer-lock path checks this before re-locking.
+  deathOrbit = {
+    center: pos,
+    yaw: headingOf(gameState.player.ship) + Math.PI * 0.35,
+    pitch: 0.32,
+    dist: Math.max(42, r * 4.5),
+    t: 0
+  }
   playShipDeathFx(pos, r, { sound: true })
-  clearSession()
+  const wreck = spawnWreckWithSkills(
+    pos,
+    gameState.simTime,
+    Math.random,
+    gameState.player.ship.classId,
+    gameState
+  )
+  gameState.wrecks ??= []
+  gameState.wrecks.push(wreck)
+  if (playerMesh) playerMesh.visible = false
+  gameState.player.ship.velocity = [0, 0, 0]
+  gameState.player.ship.throttle = 0
+  cruising = false
+  // Free the mouse completely so death UI + later title menu stay clickable.
+  releaseMouseFully()
+  exitFlightMode()
+  // Clear combat HUD so only the red vignette + death text + Return button remain.
+  hideCombatHudForDeath()
+  // Fade diesel / cruise / thrusters under the death screen (don't hard-cut).
+  audio.fadeShipAudio(1.1)
   audio.playDeathMusic()
-  gameState = null
   deathScreen.show(summary)
 }
 
+/** Strip all in-world HUD chrome for the death orbit view. */
+function hideCombatHudForDeath() {
+  if (hud?.element) hud.element.style.display = 'none'
+  systemOverview?.hide?.()
+  if (crosshairEl) crosshairEl.style.display = 'none'
+  if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
+  if (targetDirEl) targetDirEl.style.display = 'none'
+  if (typeof hudReticleRing !== 'undefined' && hudReticleRing) hudReticleRing.visible = false
+  if (typeof hudReticleDot !== 'undefined' && hudReticleDot) hudReticleDot.visible = false
+  for (const el of [
+    miningToastEl,
+    factionToastEl,
+    probePromptEl,
+    probeResultsEl,
+    hailResultsEl,
+    dockPromptEl,
+    wreckPromptEl,
+    cruiseIndicatorEl
+  ]) {
+    if (el) el.style.display = 'none'
+  }
+}
+
 window.addEventListener('keydown', (e) => {
-  if (!gameState) return
+  if (!gameState || deathOrbit) return
   if (e.code === 'KeyF' && !docked && !dockEffect && !cruising && !paused) {
     // Every F action now requires the object to be Tab-locked first — being
     // merely in range no longer triggers dock / gate / salvage / hack, so the
@@ -4409,7 +4581,7 @@ window.addEventListener('keydown', (e) => {
     !missionsOpen &&
     !characterOpen
   ) {
-    // Docked only: S toggles Harbour Services (flight uses S for reverse thrust).
+    // Docked only: S toggles Services (flight uses S for reverse thrust).
     e.preventDefault()
     dockingUI?.toggleServices?.()
   } else if (e.code === 'KeyM' && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !dockEffect) {
@@ -4564,7 +4736,6 @@ function openCharacterScreen() {
   flightMode = false
   laserFireHeld = false
   missileFireHeld = false
-  setChaseFreeLook(false)
   if (crosshairEl) crosshairEl.style.display = 'none'
   if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
   if (targetDirEl) targetDirEl.style.display = 'none'
@@ -4623,7 +4794,7 @@ function closeCharacterScreen() {
 
 // Tab-lock range for ships/wrecks/rocks/bodies (surface dist for celestials).
 // Radar draws farther so contacts appear before they are lockable.
-const TARGET_RANGE = 60000
+const TARGET_RANGE = 2000
 const TARGETABLE_BODY_KINDS = new Set(['island', 'port', 'outpost'])
 
 function asteroidWorldPosition(field, rock) {
@@ -4787,9 +4958,17 @@ function toTargetRef(entity) {
   return entity.kind === 'asteroid' ? { kind: 'asteroid', fieldId: entity.fieldId, index: entity.index } : { kind: entity.kind, id: entity.id }
 }
 
-// How well the ship's forward boresight lines up with an entity. Small targets
-// use a pure cone; large bodies also score high if the aim ray clips their shell
-// (looking at a planet's limb still locks the planet).
+// World direction the crosshair / turret is laid on (not hull boresight).
+// Tab-lock and Ctrl+Tab waypoints both use this so aiming left of the bow
+// still selects what is under the reticle.
+const _aimFwd = new THREE.Vector3()
+function crosshairAimDirection(out = _aimFwd) {
+  return turretDirection(gameState.player.ship, out)
+}
+
+// How well the aim ray lines up with an entity. Small targets use a pure cone;
+// large bodies also score high if the ray clips their shell (looking at an
+// island's limb still locks the island).
 function aimScore(entity, shipPos, forward) {
   const pos = new THREE.Vector3().fromArray(entity.position)
   const to = pos.clone().sub(shipPos)
@@ -4808,10 +4987,21 @@ function aimScore(entity, shipPos, forward) {
   return score
 }
 
+/** Aim shell used for Ctrl+Tab waypoint pick (not collision / grounding). */
+function waypointAimRadius(body) {
+  if (body.kind === 'island') {
+    // Full generation disc — maxShore is only for grounding and is far too
+    // tight to aim at a headland or distant mass under the reticle.
+    const shore = collisionRadiusFor(body) ?? 0
+    return Math.max(body.radius ?? 0, shore, 60)
+  }
+  if (body.kind === 'wreckField') return body.radius ?? 80
+  return collisionRadiusFor(body) ?? exteriorRadiusFor(body) ?? 40
+}
+
 // Bodies that can be locked as a navigation waypoint via Ctrl+Tab (fields as
 // a whole, not individual rocks — rocks are combat/mining targets only).
 const WAYPOINTABLE_BODY_KINDS = new Set([
-  'island',
   'island',
   'port',
   'outpost',
@@ -4819,43 +5009,78 @@ const WAYPOINTABLE_BODY_KINDS = new Set([
   'warpGate'
 ])
 
-// Ctrl+Tab: set (or clear) a waypoint on whatever body is under the crosshair.
-// No range limit — any body in the system whose aim cone / limb is under the
-// reticle counts (distant planets included). Combat Tab targeting still uses TARGET_RANGE.
+// Scratch for unlimited-range screen pick (Ctrl+Tab).
+const _wpPickWorld = new THREE.Vector3()
+const _wpPickNdc = new THREE.Vector3()
+const _wpPickCam = new THREE.Vector3()
+/** NDC distance from reticle — ~0.35 covers a generous “under the cursor” patch. */
+const WAYPOINT_PICK_NDC = 0.38
+
+/**
+ * Ctrl+Tab: set (or clear) a waypoint on whatever is under the reticle.
+ *
+ * **No range limit.** If the body projects onto the screen near the reticle,
+ * it is fair game — horizon islands included. Combat Tab still uses TARGET_RANGE.
+ */
 function setWaypointFromCrosshair() {
   if (!gameState) return
-  const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(
-    new THREE.Quaternion().fromArray(gameState.player.ship.quaternion)
-  )
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  const candidates = []
+  if (!currentSystem) return
+
+  camera.updateMatrixWorld(true)
+  camera.getWorldPosition(_wpPickCam)
+
+  // Reticle NDC: project the turret aim point so waypoint pick matches the
+  // guns, not bare screen centre.
+  const aimDir = crosshairAimDirection()
+  _wpPickWorld.copy(_wpPickCam).addScaledVector(aimDir, 800)
+  _wpPickNdc.copy(_wpPickWorld).project(camera)
+  const retX = _wpPickNdc.x
+  const retY = _wpPickNdc.y
+
+  let best = null
+  let bestDist = Infinity
 
   for (const body of currentSystem.bodies) {
     if (!WAYPOINTABLE_BODY_KINDS.has(body.kind)) continue
-    const radius = collisionRadiusFor(body) ?? (body.kind === 'wreckField' ? (body.radius ?? 80) : 0)
-    candidates.push({
-      id: body.id,
-      position: body.position,
-      radius,
-      name: body.name
-    })
-  }
+    const radius = waypointAimRadius(body)
+    _wpPickWorld.fromArray(body.position)
+    // Behind the camera → not on screen.
+    _wpPickNdc.subVectors(_wpPickWorld, _wpPickCam)
+    if (_wpPickNdc.dot(aimDir) <= 0) continue
 
-  // Prefer strongest aim; limb-hit on large shells scores ~0.995 (see aimScore).
-  // Threshold only filters "not actually under the crosshair" — never distance.
-  let best = null
-  let bestScore = 0.9
-  for (const c of candidates) {
-    const score = aimScore(c, shipPos, forward)
-    if (score > bestScore) {
-      bestScore = score
-      best = c
+    const distWorld = _wpPickCam.distanceTo(_wpPickWorld)
+    _wpPickNdc.copy(_wpPickWorld).project(camera)
+    // Outside clip (behind or far plane glitch).
+    if (!Number.isFinite(_wpPickNdc.x) || !Number.isFinite(_wpPickNdc.y)) continue
+    if (_wpPickNdc.z < -1.05 || _wpPickNdc.z > 1.05) continue
+
+    // Angular size in NDC so aiming at any part of a large island counts,
+    // and a distant speck still has a small but usable pick radius.
+    const halfFovY = ((camera.fov ?? 55) * Math.PI) / 360
+    const ang = distWorld > 1e-3 ? Math.atan2(radius, distWorld) : Math.PI / 2
+    const ndcRadius = Math.max(0.012, Math.min(0.9, ang / halfFovY))
+
+    let dx = _wpPickNdc.x - retX
+    let dy = _wpPickNdc.y - retY
+    let d = Math.hypot(dx, dy) - ndcRadius
+    if (d < 0) d = 0
+
+    // Must be somewhere on / near the visible frame (reticle-relative).
+    if (d > WAYPOINT_PICK_NDC) continue
+
+    // Prefer tighter reticle hit; near-tie prefers larger mass (island > quay).
+    if (
+      d < bestDist - 1e-4 ||
+      (Math.abs(d - bestDist) <= 1e-4 && best && radius > (best.radius ?? 0) * 1.15)
+    ) {
+      bestDist = d
+      best = { id: body.id, name: body.name, radius, kind: body.kind }
     }
   }
 
   if (!best) {
-    flashToast('No body under crosshair — aim at a planet, moon, star, station, settlement, or belt')
+    flashToast('No place under crosshair — aim at an island, harbour, outpost, or wreck field')
     return
   }
 
@@ -4888,8 +5113,8 @@ function clearTargetLock() {
   if (targetDirEl) targetDirEl.style.display = 'none'
 }
 
-// Tab targeting: anything under the crosshair always wins first. If that
-// object is already locked (or nothing is under the reticle), cycle by
+// Tab targeting: anything under the crosshair (turret aim) always wins first.
+// If that object is already locked (or nothing is under the reticle), cycle by
 // distance to the next entity, wrapping around.
 function cycleTarget() {
   const entities = getTargetableEntities()
@@ -4899,10 +5124,9 @@ function cycleTarget() {
   }
 
   const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-  const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(
-    new THREE.Quaternion().fromArray(gameState.player.ship.quaternion)
-  )
-  // Strongest aim under a ~20° cone around boresight / crosshair.
+  // Turret / crosshair direction — not hull forward (camera and guns track the gun).
+  const forward = crosshairAimDirection()
+  // Strongest aim under a ~20° cone around the reticle.
   let underCrosshair = null
   let bestScore = 0.94
   for (const e of entities) {
@@ -5237,8 +5461,7 @@ function getCrosshairAimWorld(out = _boresightAim) {
 function updateCrosshair() {
   if (crosshairEl) crosshairEl.style.display = 'none'
   if (combatReticle3d) combatReticle3d.visible = false
-  // Hide while Alt free-look frames the hull (reticle would sit on the ship).
-  const on = !!(flightMode && gameState && !docked && !paused && !isChaseFreeLook())
+  const on = !!(flightMode && gameState && !docked && !paused)
   hudReticleRing.visible = on
   hudReticleDot.visible = on
   if (!on) return
@@ -5476,8 +5699,48 @@ function animate() {
   const dt = Math.min((now - lastTime) / 1000, 0.1)
   lastTime = now
   if (!gameState) {
+    spray.clear()
     updateMenuBackground(dt)
     refreshEnvironment(gameState?.simTime ?? menuAnimT)
+    render()
+    return
+  }
+
+  // Death: freeze the fight, keep the sea running, orbit the wreck slowly.
+  if (deathOrbit) {
+    spray.clear()
+    deathOrbit.t += dt
+    deathOrbit.yaw += dt * 0.18
+    const [cx, cy, cz] = deathOrbit.center
+    const cosP = Math.cos(deathOrbit.pitch)
+    camera.position.set(
+      cx + Math.sin(deathOrbit.yaw) * cosP * deathOrbit.dist,
+      cy + 10 + Math.sin(deathOrbit.pitch) * deathOrbit.dist * 0.85,
+      cz + Math.cos(deathOrbit.yaw) * cosP * deathOrbit.dist
+    )
+    camera.lookAt(cx, cy + 2, cz)
+    const liveWreckIds = new Set()
+    for (const wreck of gameState.wrecks ?? []) {
+      liveWreckIds.add(wreck.id)
+      let mesh = wreckMeshes.get(wreck.id)
+      if (!mesh) {
+        let cls = null
+        try { cls = wreck.shipClassId ? getShipClass(wreck.shipClassId) : null } catch { /* */ }
+        mesh = buildWreckMesh(cls)
+        mesh.position.fromArray(wreck.position)
+        wreckMeshes.set(wreck.id, mesh)
+        scene.add(mesh)
+      }
+      updateWreckMesh(mesh, gameState.simTime + deathOrbit.t, dt, wreck.position)
+    }
+    for (const [id, mesh] of wreckMeshes) {
+      if (!liveWreckIds.has(id)) {
+        scene.remove(mesh)
+        wreckMeshes.delete(id)
+      }
+    }
+    for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime + deathOrbit.t)
+    refreshEnvironment(gameState.simTime + deathOrbit.t)
     render()
     return
   }
@@ -5522,6 +5785,7 @@ function animate() {
   // the whole undocking animation (it only flips false once the animation
   // completes), so this branch must run regardless of `docked`.
   if (dockEffect) {
+    spray.clear()
     updateDockEffect(dt)
     refreshEnvironment(gameState?.simTime ?? menuAnimT)
     render()
@@ -5531,6 +5795,7 @@ function animate() {
   // Only the pause menu freezes the sim. Map / Inventory / Missions leave the
   // world running (flight input stays off while those UIs hold the cursor).
   if (paused) {
+    spray.clear()
     audio.setStrafeActive(false)
     if (targetDirEl) targetDirEl.style.display = 'none'
     if (docked) applyDockOrbitCamera()
@@ -5540,6 +5805,7 @@ function animate() {
   }
 
   if (docked) {
+    spray.clear()
     cancelRouteAutopilot()
     audio.setStrafeActive(false)
     if (targetDirEl) targetDirEl.style.display = 'none'
@@ -5551,7 +5817,7 @@ function animate() {
     syncMeshToEntity(playerMesh, gameState.player.ship)
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
     updateBodyVisibility()
-  ocean.setSurfObstacles(currentSurfObstacles(), camera)
+    ocean.setSurfObstacles(currentSurfObstacles(), camera)
     applyDockOrbitCamera()
     refreshEnvironment(gameState.simTime)
     render()
@@ -5569,22 +5835,6 @@ function animate() {
   updatePlayerDrones(dt)
 
   let thrustState = null
-  // Alt free-look works at the helm and on autopilot — consume mouse so
-  // it never steers the ship while panning the camera.
-  // Engage only once Alt is held AND the mouse actually moves (not bare Alt).
-  if (altHeldForFreeLook && (flightMode || cruising)) {
-    if (!isChaseFreeLook() && (mouseAim.dx !== 0 || mouseAim.dy !== 0)) {
-      setChaseFreeLook(true)
-    }
-    if (isChaseFreeLook()) {
-      addChaseFreeLookDelta(mouseAim.dx, mouseAim.dy)
-      mouseAim.dx = 0
-      mouseAim.dy = 0
-    }
-  } else if (isChaseFreeLook()) {
-    // Failsafe if alt flag was cleared without setChaseFreeLook(false).
-    setChaseFreeLook(false)
-  }
   if (cruising) {
     const wp = getActiveWaypoint()
     if (!wp || gameState.inCombat) {
@@ -5689,8 +5939,7 @@ function animate() {
       gameState.player.ship.supercruiseElapsed = 0
       // Kill the wake immediately rather than waiting a frame.
     }
-    // TTS says "supercrews" so speech synthesis hits the right phonetics;
-    audio.announce(cruising ? 'Autopilot engaged' : 'Autopilot disengaged')
+    // HUD toast only — no TTS callout for engage/disengage.
     if (cruising) {
       setHudToastText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
       showHudToast(cruiseIndicatorEl)
@@ -5715,23 +5964,28 @@ function animate() {
   const shipSpeed = Math.hypot(...gameState.player.ship.velocity)
   // Water over the bow and speed streaks, scaled by how hard you are driving
   // her. Autopilot boosts both: it runs above the hull's own top speed, so
-  // speedFraction alone would understate it.
+  // speedFraction alone would understate it. Stopped / docked / dead clear the glass.
   //
   // The stem is projected to screen each frame so the spray radiates from where
   // it is actually being thrown up — off the bow, past the chase camera —
   // rather than from the middle of the frame.
-  _sprayOrigin
-    .set(0, 0, playerShipClass.hull.length * 0.5)
-    .applyQuaternion(_sprayQuat.fromArray(gameState.player.ship.quaternion))
-    .add(_sprayShipPos.fromArray(gameState.player.ship.position))
-    .project(camera)
-  spray.update(
-    dt,
-    shipSpeed / Math.max(1e-3, playerShipClass.stats.speed),
-    cruising ? 1 : 0,
-    [_sprayOrigin.x, _sprayOrigin.y],
-    renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
-  )
+  const speedFrac = shipSpeed / Math.max(1e-3, playerShipClass.stats.speed)
+  if (shipSpeed < 0.35 && !cruising) {
+    spray.clear()
+  } else {
+    _sprayOrigin
+      .set(0, 0, playerShipClass.hull.length * 0.5)
+      .applyQuaternion(_sprayQuat.fromArray(gameState.player.ship.quaternion))
+      .add(_sprayShipPos.fromArray(gameState.player.ship.position))
+      .project(camera)
+    spray.update(
+      dt,
+      speedFrac,
+      cruising ? 1 : 0,
+      [_sprayOrigin.x, _sprayOrigin.y],
+      renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
+    )
+  }
   // Speed FOV: widens a little as the boat comes up onto the plane, fixed under
   // cruise. Snap when close or nearly stopped so the settle can't smear aim.
   const speedFovBoost =
@@ -5983,12 +6237,14 @@ function animate() {
     liveWreckIds.add(wreck.id)
     let mesh = wreckMeshes.get(wreck.id)
     if (!mesh) {
-      mesh = buildWreckMesh()
+      let cls = null
+      try { cls = wreck.shipClassId ? getShipClass(wreck.shipClassId) : null } catch { /* */ }
+      mesh = buildWreckMesh(cls)
       mesh.position.fromArray(wreck.position)
       wreckMeshes.set(wreck.id, mesh)
       scene.add(mesh)
     }
-    updateWreckMesh(mesh, gameState.simTime, dt)
+    updateWreckMesh(mesh, gameState.simTime, dt, wreck.position)
   }
   for (const [id, mesh] of wreckMeshes) {
     if (!liveWreckIds.has(id)) {
@@ -6039,11 +6295,8 @@ function animate() {
     mesh.children.forEach((child, i) => { child.visible = isRockAlive(gameState, body.id, i) })
   }
   syncMeshToEntity(playerMesh, gameState.player.ship)
-  // 60s with no input: let the chase seat drift around the ship. Free-look
-  // (isChaseFreeLook) always wins inside syncChaseCamera itself, so this only
-  // needs to gate the idle SIDE — no need to check it's not already active.
-  // Never on autopilot: idle drift fighting the passage camera
-  // camera work would look broken, and cruise already has its own motion.
+  // 60s with no input: let the chase seat drift around the ship.
+  // Never on autopilot — idle drift fighting the passage camera looks broken.
   setChaseIdleOrbit(!cruising && performance.now() - lastInputAtMs > 60_000)
   syncChaseCamera(camera, gameState.player.ship, { cruising, dt })
 
@@ -6180,8 +6433,8 @@ function animate() {
       }
     } else {
       const base = probeLaunch.viaOrbit
-        ? `Press P to sound the water around ${probeLaunch.body.name}`
-        : `Press P to sound ${probeLaunch.body.name}`
+        ? `Press P for sonar pulse around ${probeLaunch.body.name}`
+        : `Press P for sonar pulse on ${probeLaunch.body.name}`
       probePromptEl.textContent = `${base} · ${left} left`
     }
   }

@@ -22,7 +22,7 @@ import {
 } from './uiTheme.js'
 
 /**
- * Full Harbour Services / Undock chrome (copied from dockingUI).
+ * Full Services / Undock chrome (copied from dockingUI).
  * !important so #main-menu / #pause-menu button rules cannot strip the fill/glow.
  */
 export const UI_ACTION_BTN_CSS = `
@@ -231,17 +231,18 @@ export function settingsViewHTML() {
   `
 }
 
-/** Preset hues for quick picks (default cyan first). */
+/** Preset hues for quick picks (default yellow-orange first). */
 const UI_COLOUR_PRESETS = [
-  { hue: DEFAULT_UI_HUE, title: 'Cyan (default)' },
-  { hue: 145, title: 'Teal' },
-  { hue: 95, title: 'Green' },
+  { hue: DEFAULT_UI_HUE, title: 'Amber (default)' },
   { hue: 45, title: 'Gold' },
   { hue: 12, title: 'Orange' },
   { hue: 0, title: 'Red' },
-  { hue: 300, title: 'Magenta' },
+  { hue: 191, title: 'Cyan' },
+  { hue: 145, title: 'Teal' },
+  { hue: 95, title: 'Green' },
+  { hue: 220, title: 'Blue' },
   { hue: 265, title: 'Violet' },
-  { hue: 220, title: 'Blue' }
+  { hue: 300, title: 'Magenta' }
 ]
 
 /** Panel background presets — darker chips show fill tint. */
@@ -277,10 +278,10 @@ export function uiColourViewHTML() {
           <div class="ui-colour-swatch ui-colour-swatch-mid" style="width:28px;height:28px;opacity:0.85"></div>
           <div class="ui-colour-swatch ui-colour-swatch-glow" style="width:22px;height:22px;opacity:0.7"></div>
         </div>
-        <div class="ui-colour-hex">#7FE6FF</div>
+        <div class="ui-colour-hex">#FFD080</div>
       </div>
       <div class="ui-colour-field">
-        <label>Hue <span class="ui-hue-value">191</span>°
+        <label>Hue <span class="ui-hue-value">${DEFAULT_UI_HUE}</span>°
           <input type="range" class="ui-hue" min="0" max="360" step="1" value="${DEFAULT_UI_HUE}" />
         </label>
       </div>

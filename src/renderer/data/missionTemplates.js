@@ -19,7 +19,7 @@ const BOUNTY_TARGET_CLASSES = ['raider_mk1', 'needle_dart', 'gun_barge', 'light_
 
 // One sea, so a contract's reach is measured in water rather than jumps.
 /** A posting should be a voyage, not a crossing of the whole world. */
-const MAX_MISSION_DISTANCE = 14000
+const MAX_MISSION_DISTANCE = 24000
 /** Close work — half of all postings stay inside this, so there is always
  *  something to take that does not commit you to a long run. */
 const NEARBY_MISSION_DISTANCE = 4500

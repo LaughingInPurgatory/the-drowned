@@ -58,7 +58,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **Workshop** — rare blueprints from wrecks and soundings (one-shot, not sellable); build boats, weapons and accessories from stored salvage. Jobs run on wall-clock time and keep working while you are away.
 - **Skills & skillbooks** — **0–20** per skill, loot-only books from wrecks.
 - **Wall-clock campaign time** — offline catch-up on load, so wreck fields settle and workshop jobs finish while the game is closed.
-- **Chase camera** — astern and low, riding a smoothed waterline so it does not bob with every crest, and level however hard the boat heels. **Hold Alt + mouse** to look around.
+- **Chase camera** — astern and low, riding a smoothed waterline so it does not bob with every crest, and level however hard the boat heels. The seat follows the independent turret so the reticle stays with the guns.
 - **HUD** — velocity and shield/armour/hull up top, heading-up radar below, contacts list to the right, **sea chart (M)** and **sounding (B)** as movable floating panels.
 - **Music & SFX** — title, ambient and death music; sampled engines, guns and dock, plus synthesised combat layers. Separate **Sound Effects** and **Music** toggles in **Settings**.
 - **UI Colour** — retint accent and panel background in **Settings → UI Colour**; applies live and saves.
@@ -84,7 +84,13 @@ npm run make      # build + electron-builder (macOS arm64 DMG, unsigned)
 
 Artifacts land in `release/` (e.g. `release/mac-arm64/The Drowned.app`). `.blockmap` files are for remote auto-update deltas and can be deleted for local testing.
 
-Prebuilt builds (macOS arm64, unsigned) are on the [Releases](https://github.com/LaughingInPurgatory/the-drowned/releases) page. Pushing a `v*` tag — or running the **Release** workflow — runs the tests, builds the DMG on GitHub Actions and attaches it (`.github/workflows/release.yml`). Other platforms are a commented matrix at the bottom of that file.
+Prebuilt builds are on the [Releases](https://github.com/LaughingInPurgatory/the-drowned/releases) page:
+
+- **macOS** arm64 DMG (ad-hoc signed)
+- **Linux** AppImage x64 + arm64
+- **Windows** NSIS installer x64 + arm64
+
+Pushing a `v*` tag — or running the **Release** workflow — runs tests and attaches those artifacts (`.github/workflows/release.yml`).
 
 The build is unsigned, so macOS quarantines it on first open: right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/The Drowned.app"`.
 
@@ -105,7 +111,6 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | --- | --- |
 | **Space** | Take / leave the helm |
 | **Mouse movement** | Lay the gun — traverses and elevates the turret |
-| **Alt + mouse** | Free-look around the boat (release Alt to restore the chase seat) |
 | **Alt + Enter** | Toggle fullscreen |
 | **Left click** | Fire all guns (can hold with RMB) |
 | **Middle click** | Release the mouse for menus without leaving the helm |

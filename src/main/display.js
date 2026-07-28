@@ -93,14 +93,13 @@ export function notifyDisplayModeForMain() {
 /**
  * Toggle native fullscreen. Saves windowed bounds before entering so
  * leave-fullscreen restores the remembered outer size/position.
- * Always pings the renderer first so Alt free-look can drop even if the
- * OS swallows Alt keyup during the transition (old stuck-freelook bug).
+ * Always pings the renderer first so UI can react even if the OS swallows
+ * keys during the fullscreen transition.
  */
 export function toggleFullscreen(win = mainWindow) {
   if (!win || win.isDestroyed()) return false
   const wasFs = isWindowFullscreen(win)
   const next = !wasFs
-  // Drop free-look before the FS animation can eat Alt keyup.
   if (!win.webContents.isDestroyed()) {
     win.webContents.send('fullscreen-changed', next)
   }

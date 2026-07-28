@@ -1,7 +1,7 @@
 {
   "name": "the-drowned",
   "productName": "The Drowned",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Procedurally generated open-world ocean trading/combat game set on a flooded Earth",
   "main": "./out/main/index.js",
   "author": "Laughing In Purgatory",
@@ -12,7 +12,9 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-vite build && electron-builder --dir",
-    "make": "electron-vite build && electron-builder --mac --arm64 -c.mac.identity=null"
+    "make": "electron-vite build && electron-builder --mac --arm64 -c.mac.identity=null",
+    "make:linux": "electron-vite build && electron-builder --linux AppImage --x64 --arm64",
+    "make:win": "electron-vite build && electron-builder --win nsis --x64 --arm64"
   },
   "dependencies": {
     "three": "^0.169.0"
@@ -48,6 +50,34 @@
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "Game",
+      "maintainer": "Laughing In Purgatory"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     },
     "afterSign": "scripts/afterSignAdHoc.cjs"
   },

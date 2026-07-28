@@ -337,6 +337,44 @@ export function islandMaxShoreline(body) {
 }
 
 /**
+ * Foam samples along the real coastline for the ocean surf pass.
+ *
+ * A single circle at maxShore foams a huge disc of open water (every bay and
+ * cutout inside that radius). These are small circles on the actual shore so
+ * white water hugs the beach instead of flooding the approaches.
+ *
+ * @param {object} body island body
+ * @param {number} [count=16] how many bearings to sample
+ * @returns {Array<{x:number,z:number,radius:number,strength:number}>}
+ */
+export function islandCoastSurfSamples(body, count = 16) {
+  const profile = getIslandProfile(body)
+  const cx = body.position[0]
+  const cz = body.position[2]
+  const n = Math.max(6, Math.min(count, SHORE_SAMPLES))
+  const out = []
+  for (let i = 0; i < n; i++) {
+    // Evenly spaced bearings; pick the outer of two neighbouring shore samples
+    // so a thin headland still gets foam.
+    const f = (i / n) * SHORE_SAMPLES
+    const i0 = Math.floor(f) % SHORE_SAMPLES
+    const i1 = (i0 + 1) % SHORE_SAMPLES
+    const r = Math.max(profile.shore[i0], profile.shore[i1])
+    if (r < 8) continue
+    const theta = (i / n) * Math.PI * 2
+    // Patch radius scales a little with island size but stays a tight collar.
+    const patch = Math.max(6, Math.min(16, r * 0.045 + 5))
+    out.push({
+      x: cx + Math.cos(theta) * r,
+      z: cz + Math.sin(theta) * r,
+      radius: patch,
+      strength: 0.95
+    })
+  }
+  return out
+}
+
+/**
  * Blend two texture sets across the surface using a per-vertex weight.
  *
  * MeshStandardMaterial only takes one map, so the second is injected with

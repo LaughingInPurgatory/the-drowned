@@ -1,11 +1,11 @@
 /**
  * UI accent colour theme.
- * Default cyan (hue ≈ 191) matches the original HUD chrome.
+ * Default yellow-orange (hue ≈ 38) — warm salvage/rust chrome for The Drowned.
  * Sets CSS custom properties on :root so menus, HUD, and panels recolor live.
  */
 
-/** Default blue/cyan accent (original game UI). */
-export const DEFAULT_UI_HUE = 191
+/** Default yellow-orange accent (warm metal / coastal light). */
+export const DEFAULT_UI_HUE = 38
 /**
  * Default panel fill hue — matches original dark navy
  * rgba(12,20,36) / rgba(7,12,22). Independent of accent hue.
@@ -66,7 +66,7 @@ function toHex({ r, g, b }) {
 
 /**
  * Derive full accent palette from a single hue (degrees).
- * Tuned so hue 191 reproduces the original cyan chrome.
+ * Default 38 ≈ yellow-orange; 191 was the old cyan chrome.
  */
 export function paletteFromHue(hue) {
   const h = clampHue(hue, DEFAULT_UI_HUE)
@@ -221,7 +221,7 @@ export function applyUiBgTheme(hue) {
   return p
 }
 
-/** Apply default cyan + default panel navy without touching storage. */
+/** Apply default yellow-orange accent + default panel navy without touching storage. */
 export function applyDefaultUiTheme() {
   applyUiTheme(DEFAULT_UI_HUE)
   return applyUiBgTheme(DEFAULT_UI_BG_HUE)

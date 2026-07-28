@@ -189,7 +189,7 @@ test('investigation lead retargets to another probeable body', () => {
 test('investigation leads stay in reach of the harbour that posted the contract', () => {
   // A chain of "spill to somewhere nearby" hops must not walk the player clean
   // across the sea one lead at a time — every lead re-anchors on the giver.
-  const MAX_LEAD_DISTANCE = 14000
+  const MAX_LEAD_DISTANCE = 24000
   let chased = 0
   for (let seed = 1; seed < 30; seed++) {
     const gs = freshState(seed)

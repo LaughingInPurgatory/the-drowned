@@ -1,6 +1,6 @@
 /**
- * 3D system scan map — bodies + Spatial Anomalies + 4 repositionable scan probes.
- * Opened from the radar "System Scan" button.
+ * 3D region sonar scan map — bodies + Spatial Anomalies + 4 repositionable scan probes.
+ * Opened from the radar "Region Sonar Scan" button.
  */
 import * as THREE from 'three'
 import { getSystem } from '../procgen/world.js'
@@ -151,7 +151,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     <div class="ssm-panel">
       <div class="ssm-header">
         <div>
-          <h2>System Scan</h2>
+          <h2>Region Sonar Scan</h2>
           <span class="ssm-sub">Deploy probes · form on signals · lock Spatial Anomalies</span>
         </div>
         <button type="button" class="ssm-close">Close</button>
@@ -178,7 +178,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           </div>
         </div>
       </div>
-      <div class="float-resize" title="Resize" aria-label="Resize system scan"></div>
+      <div class="float-resize" title="Resize" aria-label="Resize region sonar scan"></div>
     </div>
   `
   container.appendChild(root)

@@ -2,6 +2,7 @@ import * as THREE from 'three'
 import { collisionRadiusFor } from './collision.js'
 import { headingOf, applySeaAttitude } from './flight.js'
 import { snapToSea } from '../world/sea.js'
+import { islandShorelineToward } from '../render/islandMesh.js'
 
 /**
  * Autopilot. Hands the helm over: it comes round onto the waypoint, holds a
@@ -121,19 +122,21 @@ export function aimAroundObstacles(
   if (distToTarget < 1e-3) return targetPos
   _pathDir.divideScalar(distToTarget)
 
-  // Close in, commit to the approach — the destination's own surroundings would
-  // otherwise read as obstructions and send the boat round in circles.
+  // Close in, commit to the approach — except for islands/land: those still
+  // steer around the shoreline so autopilot never runs you aground.
   const finalApproach = Math.max(FINAL_APPROACH_MIN, arrivalRange * FINAL_APPROACH_MUL)
-  if (distToTarget <= finalApproach) return targetPos
+  const commitApproach = distToTarget <= finalApproach
 
   const scan = Math.min(distToTarget, LOOK_AHEAD)
   let worst = null
   let worstAlong = Infinity
 
   for (const body of bodies) {
-    const bodyRadius = collisionRadiusFor(body)
+    let bodyRadius = collisionRadiusFor(body)
     if (bodyRadius == null) continue
     if (ignoreBodyAsCruiseObstacle(body, destPos ?? targetPos, destinationBodyId, arrivalRange)) continue
+    // Final approach only ignores non-land so harbours remain reachable.
+    if (commitApproach && body.kind !== 'island') continue
 
     _bodyPos.fromArray(body.position)
     _toBody.subVectors(_bodyPos, shipPos)
@@ -142,6 +145,12 @@ export function aimAroundObstacles(
     // Behind us, or beyond where we are looking.
     if (along <= 0 || along > scan) continue
 
+    // Use the shoreline toward the track for islands (not the max disc).
+    if (body.kind === 'island') {
+      const cx = shipPos.x + _pathDir.x * along
+      const cz = shipPos.z + _pathDir.z * along
+      bodyRadius = islandShorelineToward(body, cx, cz)
+    }
     const clearance = bodyRadius + shipRadius + AVOID_MARGIN
     _closest.copy(shipPos).addScaledVector(_pathDir, along)
     const lateralDist = Math.hypot(_closest.x - _bodyPos.x, _closest.z - _bodyPos.z)

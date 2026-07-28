@@ -1,5 +1,5 @@
 /**
- * System Scan / Spatial Anomalies — probe scanning of hidden sites.
+ * Region Sonar Scan / Spatial Anomalies — drone scan of nearby hidden sites.
  * Anomalies roll per system; scan progress lives on the system object (saved with galaxy).
  */
 import { mulberry32, pick, intRange, range } from '../procgen/prng.js'
@@ -32,7 +32,7 @@ const ANOMALY_DISPLAY_NAMES = {
   datacore: 'Datacore Relic',
   datacore_takeover: 'Datacore Takeover',
   alien_datacore: 'Alien Datacore',
-  ore_anomaly: 'Rare Ore Deposit'
+  ore_anomaly: 'Rare Salvage Cache'
 }
 
 /** Datacore-family types all share the nodule-hacking interaction. */
@@ -465,8 +465,9 @@ export function computeProbeSignal(anomaly, probePositions, shipClass = null) {
   const az = anomaly.position[2]
 
   // Ideal scan radius shrinks as signal is better known (close-in).
+  // Short range on purpose — Region Sonar needs you to steam closer to map more.
   const known = anomaly.signal ?? 0
-  const idealR = 12000 * (1 - known * 0.55) + 800
+  const idealR = 2800 * (1 - known * 0.55) + 450
 
   let score = 0
   let inRange = 0
@@ -475,11 +476,11 @@ export function computeProbeSignal(anomaly, probePositions, shipClass = null) {
     if (!p?.active) continue
     const d = Math.hypot(p.position[0] - ax, p.position[1] - ay, p.position[2] - az)
     dists.push(d)
-    // Soft falloff: full contribution inside idealR, zero past 4×
+    // Soft falloff: full contribution inside idealR, zero past 2.4×
     const t = d / idealR
-    if (t < 4) {
+    if (t < 2.4) {
       inRange++
-      score += Math.max(0, 1 - t / 4)
+      score += Math.max(0, 1 - t / 2.4)
     }
   }
   if (!inRange) return 0

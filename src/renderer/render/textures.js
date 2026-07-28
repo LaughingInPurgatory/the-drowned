@@ -566,7 +566,7 @@ export function getStationTextures(role) {
 export function cloneStationMaps(maps, { offsetU = 0, offsetV = 0, rot = 0 } = {}) {
   if (!maps?.map && !maps?.aoMap) return maps ?? {}
   const cloneOne = (tex) => {
-    if (!tex) return tex
+    if (!tex) return null
     const c = tex.clone()
     c.wrapS = tex.wrapS
     c.wrapT = tex.wrapT
@@ -578,17 +578,25 @@ export function cloneStationMaps(maps, { offsetU = 0, offsetV = 0, rot = 0 } = {
     c.needsUpdate = true
     return c
   }
-  return {
-    map: cloneOne(maps.map),
-    normalMap: cloneOne(maps.normalMap),
-    roughnessMap: cloneOne(maps.roughnessMap),
-    metalnessMap: cloneOne(maps.metalnessMap),
-    aoMap: cloneOne(maps.aoMap),
-    aoMapIntensity: maps.aoMapIntensity,
-    normalScale: maps.normalScale
-      ? maps.normalScale.clone()
-      : new THREE.Vector2(STATION_NORMAL_STRENGTH, STATION_NORMAL_STRENGTH)
+  // Only include defined maps — spreading undefined keys into Material warns.
+  const out = {}
+  const map = cloneOne(maps.map)
+  const normalMap = cloneOne(maps.normalMap)
+  const roughnessMap = cloneOne(maps.roughnessMap)
+  const metalnessMap = cloneOne(maps.metalnessMap)
+  const aoMap = cloneOne(maps.aoMap)
+  if (map) out.map = map
+  if (normalMap) out.normalMap = normalMap
+  if (roughnessMap) out.roughnessMap = roughnessMap
+  if (metalnessMap) out.metalnessMap = metalnessMap
+  if (aoMap) {
+    out.aoMap = aoMap
+    if (maps.aoMapIntensity != null) out.aoMapIntensity = maps.aoMapIntensity
   }
+  out.normalScale = maps.normalScale
+    ? maps.normalScale.clone()
+    : new THREE.Vector2(STATION_NORMAL_STRENGTH, STATION_NORMAL_STRENGTH)
+  return out
 }
 
 /**
@@ -609,6 +617,129 @@ export function stationMaterialMaps(role, normalStrength = STATION_NORMAL_STRENG
     aoMapIntensity: wear?.aoMap ? 0.9 : undefined,
     normalScale: new THREE.Vector2(normalStrength * 0.85, normalStrength * 0.85)
   }
+}
+
+/**
+ * Soft-blended world/local triplanar sampling for MeshStandardMaterial.
+ *
+ * Hard per-face UV projection leaves visible seams at box edges (the “janky
+ * plating” look). Sampling the albedo/roughness/metalness three ways and
+ * blending by |normal|^sharpness hides those edges while keeping mipmaps and
+ * three’s lighting stack.
+ *
+ * @param {THREE.MeshStandardMaterial} material
+ * @param {{ scale?: number, sharpness?: number, key?: string }} [opts]
+ *   scale — world units of texture repeat (smaller = denser)
+ *   sharpness — blend power; 1 = soft, 8 = almost hard-axis
+ */
+export function applySoftTriplanar(material, opts = {}) {
+  if (!material) return material
+  const scale = opts.scale ?? 0.22
+  const sharpness = opts.sharpness ?? 4.5
+  const key = opts.key ?? `softTri|${scale}|${sharpness}`
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uTriScale = { value: scale }
+    shader.uniforms.uTriSharp = { value: sharpness }
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+varying vec3 vTriPos;
+varying vec3 vTriN;`
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+vTriPos = position;
+vTriN = normal;`
+      )
+    // Soft weights + three planar samples. Used for colour / roughness / metal.
+    const triHelper = `
+uniform float uTriScale;
+uniform float uTriSharp;
+varying vec3 vTriPos;
+varying vec3 vTriN;
+vec3 triWeights(vec3 n) {
+  vec3 w = pow(abs(normalize(n)), vec3(uTriSharp));
+  return w / (w.x + w.y + w.z + 1e-5);
+}
+vec4 triSample(sampler2D tex, vec3 p, vec3 n) {
+  vec3 w = triWeights(n);
+  vec3 tp = p * uTriScale;
+  return texture2D(tex, tp.zy) * w.x
+       + texture2D(tex, tp.xz) * w.y
+       + texture2D(tex, tp.xy) * w.z;
+}
+`
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${triHelper}`)
+      .replace(
+        '#include <map_fragment>',
+        `#ifdef USE_MAP
+	vec4 sampledDiffuseColor = triSample(map, vTriPos, vTriN);
+	#ifdef DECODE_VIDEO_TEXTURE
+		sampledDiffuseColor = vec4( mix( pow( sampledDiffuseColor.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), sampledDiffuseColor.rgb * 0.0773993808, vec3( lessThanEqual( sampledDiffuseColor.rgb, vec3( 0.04045 ) ) ) ), sampledDiffuseColor.w );
+	#endif
+	diffuseColor *= sampledDiffuseColor;
+#endif`
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `float roughnessFactor = roughness;
+#ifdef USE_ROUGHNESSMAP
+	vec4 texelRoughness = triSample(roughnessMap, vTriPos, vTriN);
+	// Channel G — ORM-compatible
+	roughnessFactor *= texelRoughness.g;
+#endif`
+      )
+      .replace(
+        '#include <metalnessmap_fragment>',
+        `float metalnessFactor = metalness;
+#ifdef USE_METALNESSMAP
+	vec4 texelMetalness = triSample(metalnessMap, vTriPos, vTriN);
+	// Channel B — ORM-compatible
+	metalnessFactor *= texelMetalness.b;
+#endif`
+      )
+      .replace(
+        '#include <normal_fragment_maps>',
+        `#ifdef USE_NORMALMAP_OBJECTSPACE
+	// View-space object normals are not available here the same way as in
+	// three's stock path — fall back to blended tangent samples.
+	{
+		vec3 w = triWeights(vTriN);
+		vec3 tp = vTriPos * uTriScale;
+		vec3 mapN = normalize(
+			(texture2D(normalMap, tp.zy).xyz * 2.0 - 1.0) * w.x +
+			(texture2D(normalMap, tp.xz).xyz * 2.0 - 1.0) * w.y +
+			(texture2D(normalMap, tp.xy).xyz * 2.0 - 1.0) * w.z
+		);
+		mapN.xy *= normalScale;
+		normal = normalize( tbn * mapN );
+	}
+#elif defined( USE_NORMALMAP_TANGENTSPACE )
+	// Soft-blend planar normal samples so hard UV seams do not show as ridges.
+	// Stay in tangent space then apply tbn (normalMatrix is vertex-only).
+	{
+		vec3 w = triWeights(vTriN);
+		vec3 tp = vTriPos * uTriScale;
+		vec3 mapN = normalize(
+			(texture2D(normalMap, tp.zy).xyz * 2.0 - 1.0) * w.x +
+			(texture2D(normalMap, tp.xz).xyz * 2.0 - 1.0) * w.y +
+			(texture2D(normalMap, tp.xy).xyz * 2.0 - 1.0) * w.z
+		);
+		mapN.xy *= normalScale;
+		normal = normalize( tbn * mapN );
+	}
+#elif defined( USE_BUMPMAP )
+	normal = perturbNormalArb( - vViewPosition, normal, dHdxy_fwd(), faceDirection );
+#endif`
+      )
+  }
+  material.customProgramCacheKey = () => key
+  // Ensure standard map flags stay on even if UVs are junk — we ignore vMapUv.
+  material.needsUpdate = true
+  return material
 }
 
 /**

@@ -22,8 +22,12 @@ import { headingOf } from './flight.js'
  * saving does (see render/islandMesh.js for what happens when it does not).
  */
 
-/** Radians of traverse either side of dead ahead. */
-export const TURRET_MAX_TRAVERSE = Math.PI * 0.62
+/**
+ * Historical name: half a turn either side of ahead. The mount now free-spins
+ * a full 360° (yaw wraps); this constant is kept for tests / docs that talk
+ * about “dead aft is reachable”.
+ */
+export const TURRET_MAX_TRAVERSE = Math.PI
 /** Depression: a gun can be laid a little below the horizon, not much. */
 export const TURRET_MIN_PITCH = -0.14
 /** Elevation: high enough to engage something in the air. */
@@ -83,11 +87,8 @@ export function updateTurretAim(shipState, mouseAim, sensitivity = TURRET_SENSIT
   // Chase camera sits astern looking forward, so hull local +X is screen-left
   // — the same reason the radar negates x. Mouse-right must train to
   // starboard, which is negative yaw.
-  shipState.turretYaw = clamp(
-    yaw - mouseAim.dx * sensitivity,
-    -TURRET_MAX_TRAVERSE,
-    TURRET_MAX_TRAVERSE
-  )
+  // Free 360° traverse: wrap, don't clamp — no hard stop at dead aft.
+  shipState.turretYaw = normaliseAngle(yaw - mouseAim.dx * sensitivity)
   // Screen y grows downward, so a mouse push forward (negative dy) elevates.
   shipState.turretPitch = clamp(
     pitch - mouseAim.dy * sensitivity,
@@ -113,11 +114,8 @@ export function aimTurretAt(shipState, targetWorld) {
   const flat = Math.hypot(dx, dz)
   if (flat < 1e-4) return
   const worldBearing = Math.atan2(dx, dz)
-  shipState.turretYaw = clamp(
-    normaliseAngle(worldBearing - heading),
-    -TURRET_MAX_TRAVERSE,
-    TURRET_MAX_TRAVERSE
-  )
+  // Shortest path onto the target; full circle means any bearing is legal.
+  shipState.turretYaw = normaliseAngle(worldBearing - heading)
   shipState.turretPitch = clamp(Math.atan2(dy, flat), TURRET_MIN_PITCH, TURRET_MAX_PITCH)
 }
 
@@ -201,6 +199,7 @@ export function turretAimPoint(shipState, shipClass, out = new THREE.Vector3(), 
 /** Ease the turret back to dead ahead — used when the helm is unmanned. */
 export function centreTurret(shipState, dt, rate = 2.2) {
   const k = Math.min(1, rate * dt)
-  shipState.turretYaw = turretYawOf(shipState) * (1 - k)
+  // Multiply-toward-zero is the shortest path on a wrapped bearing (±π).
+  shipState.turretYaw = normaliseAngle(turretYawOf(shipState) * (1 - k))
   shipState.turretPitch = turretPitchOf(shipState) * (1 - k)
 }

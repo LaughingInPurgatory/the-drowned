@@ -21,8 +21,8 @@ const DEFAULTS = {
   sfxEnabled: true,
   /** Title / ambient / death music tracks. */
   musicEnabled: true,
-  /** UI accent hue degrees (0–360). Default ~191 = original cyan. */
-  uiHue: 191,
+  /** UI accent hue degrees (0–360). Default ~38 = yellow-orange. */
+  uiHue: 38,
   /** UI panel background hue (0–360). Default ~220 = original navy fills. */
   uiBgHue: 220
 }

@@ -436,45 +436,13 @@ const WRECK_HIT_RADIUS = 22
 // ~few laser hits / one missile to scrap a wreck instead of looting.
 const WRECK_DEFAULT_HULL = 90
 
-// Missed a ship by less than this → treat volley as ship combat, skip rock scans.
-const SHIP_NEAR_MISS = 90
-// When any live ship is this close to the player, skip rock mining tests for
-// player projectiles. Lasers spend many frames in transit; scanning every belt
-// rock each frame until they near-miss the hull was the remaining combat hitch
-// (especially first volley on a neutral in a field). Intentional mining with
-// no ships nearby is unchanged.
-const SHIP_COMBAT_ROCK_SKIP_RANGE = 380
-const SHIP_COMBAT_ROCK_SKIP_RANGE_SQ =
-  SHIP_COMBAT_ROCK_SKIP_RANGE * SHIP_COMBAT_ROCK_SKIP_RANGE
-
 export function updateProjectiles(gameState, dt, onHit) {
   const alive = []
-  // Only the player can mine, and only if galaxy/currentSystemId are present
-  // (test fixtures often omit them — no asteroid check happens in that case).
+  // Only the player can salvage wrecks, and only if galaxy/currentSystemId are present
+  // (test fixtures often omit them — no field check happens in that case).
   const currentSystem = gameState.galaxy ? getSystem(gameState.galaxy, gameState.player.currentSystemId) : null
   const npcs = gameState.npcs
-  // Once any player shot hits a ship (or near-misses one) this frame, skip belt
-  // rock tests for the rest of the volley.
-  let skipRockTestsThisFrame = false
-  // Pre-check: ships near the player (or already engaged) → ship combat, not mining.
-  if (npcs?.length && gameState.player?.ship?.position) {
-    const pp = gameState.player.ship.position
-    const engaged = gameState.player.combatEngagedNpcIds
-    for (const n of npcs) {
-      if (n.destroyed) continue
-      if (engaged?.[n.id]) {
-        skipRockTestsThisFrame = true
-        break
-      }
-      const dx = n.position[0] - pp[0]
-      const dy = n.position[1] - pp[1]
-      const dz = n.position[2] - pp[2]
-      if (dx * dx + dy * dy + dz * dz < SHIP_COMBAT_ROCK_SKIP_RANGE_SQ) {
-        skipRockTestsThisFrame = true
-        break
-      }
-    }
-  }
+  // Wreck fields always take hits when aimed — hostiles nearby must not freeze salvage.
 
   for (const proj of gameState.projectiles) {
     proj.ttl -= dt
@@ -502,8 +470,6 @@ export function updateProjectiles(gameState, dt, onHit) {
         }
         _targetPos.fromArray(target.position)
         const dist = closestDistanceToSegment(_targetPos, _projPrev, _projNext)
-        // Near-miss on a hull: this volley is ship combat, not mining.
-        if (dist < SHIP_NEAR_MISS) skipRockTestsThisFrame = true
         if (dist >= target._hitRadius) continue
         applyDamage(target, proj.damage, gameState.simTime, { player: false })
         markPlayerCombatEngagement(gameState, proj, target, false)
@@ -540,7 +506,6 @@ export function updateProjectiles(gameState, dt, onHit) {
           targetNpcId: target.id ?? null
         })
         hit = true
-        skipRockTestsThisFrame = true
         break
       }
     } else {
@@ -607,18 +572,11 @@ export function updateProjectiles(gameState, dt, onHit) {
       }
     }
 
-    // Hit-tests individual rocks (matching the per-rock Tab-targeting system
-    // in main.js) rather than the field's whole bounding sphere, since ore is
-    // now a finite, depletable, per-rock resource. Skipped while this frame's
-    // volley is clearly ship combat (hit or near-miss on an NPC) — except an
-    // ore_anomaly's own field (anomalySiteId tagged), which guarantees combat
-    // happens on top of the rocks (its ambush spawns guards at the site), so
-    // that same disambiguation would otherwise block mining for as long as
-    // any guard is alive nearby, unlike a normal belt.
+    // Hit-tests individual hulks (matching per-hulk Tab-targeting in main.js).
+    // Salvage still chips mass with a full hold and with hostiles nearby.
     if (!hit && proj.ownerId === 'player' && currentSystem) {
       fieldLoop: for (const body of currentSystem.bodies) {
         if (body.kind !== 'wreckField') continue
-        if (skipRockTestsThisFrame && !body.anomalySiteId) continue
         // Skip whole field if projectile is nowhere near its scatter volume.
         const fr = (body.radius ?? 0) + 120
         const fdx = body.position[0] - _projNext.x

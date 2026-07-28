@@ -133,7 +133,7 @@ const STYLE = `
 #hud .bar.velocity .fill { position: absolute; top: 0; background: linear-gradient(90deg, #3a8f5c, #7fe0a0); box-shadow: none; }
 #hud .bar.velocity .fill.reversing { background: linear-gradient(90deg, #8a6a2a, #d9b56a); box-shadow: none; }
 
-/* Current system — top left; whole chip opens System Scan (B). */
+/* Current system — top left; whole chip opens Region Sonar Scan (B). */
 #hud .system-label {
   position: fixed; top: 16px; left: 16px; transform: none;
   pointer-events: auto; cursor: pointer; z-index: 9;
@@ -770,7 +770,7 @@ export function createHud(container) {
       radarCtx.globalAlpha = 1
     },
     /**
-     * System-name chip opens System Scan (replaces the old dedicated button).
+     * System-name chip opens Region Sonar Scan (replaces the old dedicated button).
      * @param {() => void} fn
      */
     onSystemScan(fn) {

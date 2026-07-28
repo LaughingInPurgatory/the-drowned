@@ -59,22 +59,37 @@ const STREAKING = turbulenceMask({
   seed: 19,
   stretch: 16
 })
+/** Heavier bite — closer to the painted title wordmark’s scorched metal. */
+const PITTING_HEAVY = turbulenceMask({ frequency: 0.55, octaves: 5, slope: 4.2, intercept: 0.28, seed: 11 })
+const STREAKING_HEAVY = turbulenceMask({
+  frequency: 0.028,
+  octaves: 4,
+  slope: 2.8,
+  intercept: 0.48,
+  seed: 23,
+  stretch: 18
+})
 
 /**
  * CSS for the wrecked treatment, scoped under whatever selector you pass.
  *
  * Applied to the element itself rather than a pseudo-element so it composes
  * with a `background-clip: text` gradient already on the element.
+ *
+ * @param {string} selector
+ * @param {{ heavy?: boolean }} [opts] heavy = deeper pitting for death / title-like weight
  */
-export function wreckedTypeCSS(selector) {
+export function wreckedTypeCSS(selector, opts = {}) {
+  const pitting = opts.heavy ? PITTING_HEAVY : PITTING
+  const streaking = opts.heavy ? STREAKING_HEAVY : STREAKING
   return `
 ${selector} {
   /* Condensed and heavy: a display face reads as *display* mostly through
      weight and tight tracking, and that part does not need a font file. */
   font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", "Helvetica Neue", sans-serif;
   font-weight: 900;
-  -webkit-mask-image: ${PITTING}, ${STREAKING};
-  mask-image: ${PITTING}, ${STREAKING};
+  -webkit-mask-image: ${pitting}, ${streaking};
+  mask-image: ${pitting}, ${streaking};
   -webkit-mask-composite: source-in;
   mask-composite: intersect;
   -webkit-mask-size: 240px 240px, 300px 900px;

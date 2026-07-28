@@ -480,31 +480,45 @@ function addHullDetails(group, hull, mats, role = 'trader') {
         panel.rotation.y = Math.atan2(dx, dz)
       }
     }
-    // Capping rail along the top of the strake — a bright line that reads the
-    // sheer from a distance.
+    // Capping rail along the top of the strake — segmented so it follows the
+    // sheer. A single long box at midships beam stuck out past bow and stern
+    // on every tapered hull (read as random girders).
     for (const sx of [-1, 1]) {
-      const cap = add(
-        new THREE.Mesh(
-          new THREE.BoxGeometry(thickness * 1.5, depth * 0.05, length * 0.86),
-          mats.accent
+      for (let i = 0; i < segs; i++) {
+        const f0 = 0.04 + (i / segs) * 0.9
+        const f1 = 0.04 + ((i + 1) / segs) * 0.9
+        const x0 = sx * halfBeamAt(f0) * 0.97
+        const x1 = sx * halfBeamAt(f1) * 0.97
+        const z0 = zAt(f0)
+        const z1 = zAt(f1)
+        const dx = x1 - x0
+        const dz = z1 - z0
+        const run = Math.hypot(dx, dz)
+        if (run < 1e-4) continue
+        const y = (deckAt(f0) + deckAt(f1)) * 0.5 + bulwarkH * 0.9
+        const cap = add(
+          new THREE.Mesh(
+            new THREE.BoxGeometry(thickness * 1.5, depth * 0.05, run * 1.04),
+            mats.accent
+          )
         )
-      )
-      cap.position.set(sx * halfBeamAt(0.5) * 0.97, deckAt(0.5) + bulwarkH * 0.9, zAt(0.5))
+        cap.position.set((x0 + x1) * 0.5, y, (z0 + z1) * 0.5)
+        cap.rotation.y = Math.atan2(dx, dz)
+      }
     }
   }
 
   // —— Railings ————————————————————————————————————————————————————
-  // A stanchion every so often with two rails through them, standing on top of
-  // the bulwark. This is what makes the deck read as a place a person could
-  // stand.
+  // Stanchions + rails on top of the bulwark, also segmented to the sheer so
+  // they never poke past the ends of a pinching hull.
   {
     const posts = 9 + (kit % 5)
-    const railY = deckAt(0.5) * 0.96 + bulwarkH
     const stanchionH = depth * 0.3
     for (let i = 0; i < posts; i++) {
       const f = 0.06 + (i / (posts - 1)) * 0.86
       const hb = halfBeamAt(f) * 0.94
       if (hb < beam * 0.12) continue
+      const railY = deckAt(f) * 0.96 + bulwarkH
       for (const sx of [-1, 1]) {
         const post = add(
           new THREE.Mesh(
@@ -515,16 +529,38 @@ function addHullDetails(group, hull, mats, role = 'trader') {
         post.position.set(sx * hb, railY + stanchionH * 0.5, zAt(f))
       }
     }
-    // Two horizontal rails per side, run as long thin boxes along the sheer.
+    // Two horizontal rails per side — short runs between stanchion stations.
+    const railSegs = posts - 1
     for (const sx of [-1, 1]) {
       for (const h of [0.55, 1.0]) {
-        const rail = add(
-          new THREE.Mesh(
-            new THREE.BoxGeometry(beam * 0.018, beam * 0.018, length * 0.78),
-            mats.antenna
+        for (let i = 0; i < railSegs; i++) {
+          const f0 = 0.06 + (i / (posts - 1)) * 0.86
+          const f1 = 0.06 + ((i + 1) / (posts - 1)) * 0.86
+          const x0 = sx * halfBeamAt(f0) * 0.94
+          const x1 = sx * halfBeamAt(f1) * 0.94
+          const z0 = zAt(f0)
+          const z1 = zAt(f1)
+          const dx = x1 - x0
+          const dz = z1 - z0
+          const run = Math.hypot(dx, dz)
+          if (run < 1e-4) continue
+          if (halfBeamAt(f0) < beam * 0.12 || halfBeamAt(f1) < beam * 0.12) continue
+          const y0 = deckAt(f0) * 0.96 + bulwarkH + stanchionH * h
+          const y1 = deckAt(f1) * 0.96 + bulwarkH + stanchionH * h
+          const rail = add(
+            new THREE.Mesh(
+              new THREE.BoxGeometry(beam * 0.018, beam * 0.018, run * 1.02),
+              mats.antenna
+            )
           )
-        )
-        rail.position.set(sx * halfBeamAt(0.5) * 0.94, railY + stanchionH * h, zAt(0.5))
+          rail.position.set((x0 + x1) * 0.5, (y0 + y1) * 0.5, (z0 + z1) * 0.5)
+          rail.rotation.y = Math.atan2(dx, dz)
+          // Pitch the rail a little with the sheer so it sits on the stanchions.
+          const rise = y1 - y0
+          if (Math.abs(rise) > 1e-4 && run > 1e-4) {
+            rail.rotation.x = -Math.atan2(rise, run)
+          }
+        }
       }
     }
   }

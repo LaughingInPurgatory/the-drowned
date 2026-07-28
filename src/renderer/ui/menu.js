@@ -68,9 +68,11 @@ const STYLE = `
 /* Light dark halo for legibility over the sun — keep it modest so type stays bright. */
 #main-menu {
   position: fixed; inset: 0;
+  z-index: 50;
   background: radial-gradient(ellipse at center, rgba(var(--ui-bg2-r),var(--ui-bg2-g),var(--ui-bg2-b),0.35) 0%, rgba(var(--ui-bg-scrim-r),var(--ui-bg-scrim-g),var(--ui-bg-scrim-b),0.8) 100%);
   font-family: monospace; color: var(--ui-text);
   display: flex; align-items: center; justify-content: center; overflow: hidden;
+  pointer-events: auto;
   text-shadow:
     0 1px 2px rgba(0,0,0,0.75),
     0 2px 6px rgba(0,0,0,0.45);
@@ -607,7 +609,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
           <label>Character Name <input type="text" class="char-name" value="Captain" maxlength="32" spellcheck="false" autocomplete="off" /></label>
           <label>Ship Name <input type="text" class="ship-name" value="${starterShip.name}" maxlength="32" spellcheck="false" autocomplete="off" /></label>
           <div class="new-game-actions">
-            <button type="button" class="confirm-new-game">Cast Off</button>
+            <button type="button" class="confirm-new-game">Launch</button>
             <button type="button" class="back">Back</button>
           </div>
         </div>

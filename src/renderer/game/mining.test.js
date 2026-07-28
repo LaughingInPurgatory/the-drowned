@@ -132,7 +132,7 @@ test('full mining hold can still exhaust a rock to destruction', () => {
 })
 
 test('rockDisplayName names the hulk after what can be stripped from it', () => {
-  assert.equal(rockDisplayName(systemAtRadius(0)), 'Raw Ore Wreck')
+  assert.equal(rockDisplayName(systemAtRadius(0)), 'Rusted Steel Wreck')
 })
 
 test('destroyed rocks revive after offline simTime catch-up', () => {

@@ -72,7 +72,13 @@ export function spawnWreck(position, simTime, rng = Math.random, shipClassId = n
   }
   // Skillbook chance is independent; maxed skills are excluded from the pool.
   // Caller may pass gameState via opts for skill-aware drops — see spawnWreckWithSkills.
-  return { id: `wreck-${wreckCounter++}`, position: [...position], spawnedAt: simTime, loot }
+  return {
+    id: `wreck-${wreckCounter++}`,
+    position: [...position],
+    spawnedAt: simTime,
+    loot,
+    shipClassId: shipClassId || null
+  }
 }
 
 /**

@@ -256,14 +256,12 @@ test('a player laser hitting an asteroid field mines ore instead of dealing dama
   assert.equal(totalOre, 1, 'a successful mining hit should add exactly one unit of ore')
 })
 
-test('a nearby hostile NPC suppresses mining on a normal field (ship-combat disambiguation)', () => {
+test('salvaging still chips wrecks with a hostile NPC nearby', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const fieldId = 'field-test-2'
   const rock = getAsteroidRocks({ id: fieldId, radius: 90 })[0]
   const asteroidField = { id: fieldId, kind: 'wreckField', position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]], radius: 90 }
   const shooter = { position: [0, 0, 0], quaternion: [0, 0, 0, 1], lastFireAt: -Infinity }
-  // Off to the side (not on the flight path) but well within the mining/combat
-  // skip radius of the player.
   const nearbyPirate = { id: 'npc-near', faction: 'pirate', position: [100, 0, 0], destroyed: false }
   const gameState = {
     simTime: 0,
@@ -279,37 +277,7 @@ test('a nearby hostile NPC suppresses mining on a normal field (ship-combat disa
   fireProjectile(gameState, shooter, shipClass, 'player')
   let hitPayload = null
   step(gameState, 20, () => updateProjectiles(gameState, DT, (payload) => { hitPayload = payload }))
-  assert.ok(!hitPayload?.mined, 'a nearby hostile should suppress the rock hit-test on a normal field')
-})
-
-test('an ore_anomaly-tagged field keeps mining even with a hostile NPC nearby (ambush guards)', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const fieldId = 'field-test-3'
-  const rock = getAsteroidRocks({ id: fieldId, radius: 90 })[0]
-  const asteroidField = {
-    id: fieldId,
-    kind: 'wreckField',
-    position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]],
-    radius: 90,
-    anomalySiteId: 'anomaly-1'
-  }
-  const shooter = { position: [0, 0, 0], quaternion: [0, 0, 0, 1], lastFireAt: -Infinity }
-  const nearbyPirate = { id: 'npc-near', faction: 'pirate', position: [100, 0, 0], destroyed: false }
-  const gameState = {
-    simTime: 0,
-    projectiles: [],
-    npcs: [nearbyPirate],
-    galaxy: { systems: [{ id: 'sys-0', galaxyPosition: [0, 0, 0], bodies: [asteroidField] }] },
-    player: {
-      currentSystemId: 'sys-0',
-      combatEngagedNpcIds: {},
-      ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], miningHold: {} }
-    }
-  }
-  fireProjectile(gameState, shooter, shipClass, 'player')
-  let hitPayload = null
-  step(gameState, 20, () => updateProjectiles(gameState, DT, (payload) => { hitPayload = payload }))
-  assert.ok(hitPayload?.mined, 'an ore_anomaly field should mine normally regardless of nearby guards')
+  assert.ok(hitPayload?.mined, 'nearby hostiles must not block salvage hits on wreck fields')
 })
 
 test('destroying an NPC with a player projectile leaves a lootable wreck at the impact point', () => {

@@ -140,10 +140,11 @@ let sfxLoadPromise = null
 // No thrust.ogg and no laser_*.ogg any more: nothing on this sea runs on
 // reaction mass or coherent light. The engine is a synthesised diesel (see
 // setThrustState) and the guns are synthesised reports (WEAPON_SYNTH).
+// Dock/undock are pure synth (mechanical mooring + water) — the old Kenney
+// sci-fi dock samples are gone.
 const SFX_FILES = [
   'supercruise.ogg', 'engine_engage.ogg',
-  'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
-  'dock.ogg', 'undock.ogg', 'dock_clamp.ogg', 'dock_seal.ogg'
+  'rocket.ogg', 'missile.ogg', 'torpedo.ogg'
 ]
 
 function ensureSfx() {
@@ -733,91 +734,329 @@ export function setStrafeActive(active) {
   strafeNodes = { source, gain, volume: 0.04 }
 }
 
-// Dock: approach thruster whoosh → metal clamp → bay door → soft seal → confirm chirp.
-// Kenney CC0 samples (see public/audio/sfx/); synth fallback if not loaded.
-export function playDock() {
-  ensureSfx()
-  // Slow burble of the main engine as she comes alongside.
-  noiseBurst({ duration: 1.1, filterFreq: 190, peak: 0.24, drive: 2.6 })
-  const clamp = playSample('dock_clamp.ogg', { volume: 0.62, rate: 0.88, delay: 0.35 })
-  const door = playSample('dock.ogg', { volume: 0.55, delay: 0.48 })
-  const seal = playSample('dock_seal.ogg', { volume: 0.32, rate: 0.82, delay: 0.72 })
-  // Second clamp + computer confirm for a more mechanical bay sequence.
-  playSample('dock_clamp.ogg', { volume: 0.35, rate: 1.15, delay: 1.05 })
-  playSample('engine_engage.ogg', { volume: 0.18, rate: 1.4, delay: 1.35 })
-  if (clamp || door || seal) {
-    // Extra synth chirp layered under samples for a "lock confirmed" beep.
-    tone({ type: 'sine', freq: 880, freqEnd: 1320, duration: 0.12, peak: 0.08, delay: 1.4 })
-    tone({ type: 'sine', freq: 1320, duration: 0.08, peak: 0.06, delay: 1.52 })
-    return
-  }
-  // Full synth fallback sequence.
-  noiseBurst({ duration: 0.45, filterFreq: 900, peak: 0.12, delay: 0 })
-  tone({ type: 'sine', freq: 180, freqEnd: 90, duration: 0.5, peak: 0.1, delay: 0.05 })
-  tone({ type: 'square', freq: 90, freqEnd: 50, duration: 0.2, peak: 0.34, delay: 0.35 })
-  noiseBurst({ duration: 0.12, filterFreq: 1600, peak: 0.32, drive: 2.8, delay: 0.35 })
-  tone({ type: 'sine', freq: 260, freqEnd: 520, duration: 0.55, attack: 0.08, peak: 0.14, delay: 0.5 })
-  noiseBurst({ duration: 0.4, filterFreq: 2800, peak: 0.12, delay: 0.55 })
-  tone({ type: 'sine', freq: 70, freqEnd: 40, duration: 0.35, peak: 0.18, delay: 0.85 })
-  tone({ type: 'sine', freq: 880, freqEnd: 1320, duration: 0.12, peak: 0.1, delay: 1.2 })
-  tone({ type: 'sine', freq: 1320, duration: 0.09, peak: 0.08, delay: 1.32 })
+/**
+ * Metal strike with a ringing tail (bollard, hook, cleat).
+ * Bright attack + inharmonic partials so it reads as iron, not a bass thump.
+ */
+function metalClank({ freq = 480, peak = 0.26, delay = 0 } = {}) {
+  // Knife-edge scrape/click (high, short).
+  noiseBurst({ duration: 0.045, filterFreq: 3200, peak: peak * 0.85, drive: 4.5, delay })
+  noiseBurst({ duration: 0.07, filterFreq: 1400, peak: peak * 0.45, drive: 2.5, delay: delay + 0.01 })
+  // Ringing body — triangle partials (not a pure low sine).
+  tone({ type: 'triangle', freq, freqEnd: freq * 0.88, duration: 0.28, attack: 0.001, peak: peak * 0.72, delay })
+  tone({
+    type: 'triangle',
+    freq: freq * 1.72,
+    freqEnd: freq * 1.35,
+    duration: 0.2,
+    attack: 0.001,
+    peak: peak * 0.32,
+    delay: delay + 0.004
+  })
+  tone({
+    type: 'square',
+    freq: freq * 0.55,
+    freqEnd: freq * 0.42,
+    duration: 0.1,
+    attack: 0.001,
+    peak: peak * 0.18,
+    delay
+  })
 }
 
-export function playUndock() {
-  ensureSfx()
-  // Seal release → door open → clamps free → thruster push out.
-  const seal = playSample('dock_seal.ogg', { volume: 0.28, rate: 1.2 })
-  const door = playSample('undock.ogg', { volume: 0.58, delay: 0.08 })
-  const clamp = playSample('dock_clamp.ogg', { volume: 0.5, rate: 1.12, delay: 0.32 })
-  playSample('dock_clamp.ogg', { volume: 0.32, rate: 0.95, delay: 0.55 })
-  noiseBurst({ duration: 1.2, filterFreq: 220, peak: 0.3, drive: 2.8, delay: 0.7 })
-  playSample('engine_engage.ogg', { volume: 0.22, rate: 1.15, delay: 0.85 })
-  if (seal || door || clamp) {
-    tone({ type: 'sine', freq: 660, freqEnd: 440, duration: 0.15, peak: 0.07, delay: 0.05 })
-    return
+/** Quick chain / shackle rattle — several tiny metal hits in a row. */
+function chainRattle({ delay = 0, count = 6, peak = 0.14 } = {}) {
+  for (let i = 0; i < count; i++) {
+    const t = delay + i * 0.045
+    const f = 620 + (i % 3) * 180 + (i * 37) % 120
+    noiseBurst({ duration: 0.028, filterFreq: 2100 + i * 120, peak: peak * (0.75 - i * 0.06), drive: 3.8, delay: t })
+    tone({ type: 'triangle', freq: f, duration: 0.035, attack: 0.001, peak: peak * 0.35, delay: t })
   }
-  tone({ type: 'sine', freq: 520, freqEnd: 240, duration: 0.55, attack: 0.08, peak: 0.14 })
-  noiseBurst({ duration: 0.3, filterFreq: 2600, peak: 0.12 })
-  tone({ type: 'square', freq: 70, freqEnd: 110, duration: 0.18, peak: 0.3, delay: 0.35 })
-  noiseBurst({ duration: 0.12, filterFreq: 1700, peak: 0.28, drive: 2.5, delay: 0.35 })
-  tone({ type: 'sine', freq: 140, freqEnd: 70, duration: 0.45, peak: 0.12, delay: 0.55 })
-  noiseBurst({ duration: 0.35, filterFreq: 800, peak: 0.14, delay: 0.65 })
 }
 
-// Mid-sequence thruster nudge during the exterior approach / back-away half.
-export function playDockThrusterPulse() {
-  ensureSfx()
-  const s = playSample('engine_engage.ogg', { volume: 0.16, rate: 0.7, fadeIn: 0.02 })
-  if (s) return
-  tone({ type: 'sawtooth', freq: 95, freqEnd: 55, duration: 0.28, peak: 0.1 })
-  noiseBurst({ duration: 0.22, filterFreq: 700, peak: 0.1 })
+/** Hand-winch / ratchet clicks as a line is hauled or paid out. */
+function winchRatchet({ delay = 0, steps = 5, peak = 0.12 } = {}) {
+  for (let i = 0; i < steps; i++) {
+    const t = delay + i * 0.07
+    noiseBurst({ duration: 0.022, filterFreq: 2600 - i * 180, peak: peak * (0.9 - i * 0.08), drive: 5, delay: t })
+    tone({ type: 'square', freq: 340 - i * 28, duration: 0.028, attack: 0.001, peak: peak * 0.4, delay: t })
+  }
 }
 
 /**
- * The sonar ping: a hard transient, a long descending tail, and a wash of
- * reverb-ish repeats for the water it went out across. Pure synthesis — no
- * sample, because the classic ping is easier to hit with an oscillator than to
- * source, and it has to sit in the mix without stepping on the engines.
+ * Mooring — chunky ironwork and chain, light water underlay.
+ * Not a sci-fi bay, and not just a rubber thump.
+ */
+export function playDock() {
+  ensureSfx()
+  // Quiet water underlay (background only).
+  noiseBurst({ duration: 0.9, filterFreq: 320, peak: 0.06, drive: 0.8, delay: 0 })
+  // Winch hauls the line in.
+  winchRatchet({ delay: 0.08, steps: 6, peak: 0.13 })
+  // Chain runs over the fairlead.
+  chainRattle({ delay: 0.18, count: 7, peak: 0.12 })
+  // Hook takes the bollard — primary mechanical hit.
+  metalClank({ freq: 520, peak: 0.3, delay: 0.48 })
+  metalClank({ freq: 310, peak: 0.18, delay: 0.55 })
+  // Second line / cleat.
+  chainRattle({ delay: 0.78, count: 4, peak: 0.1 })
+  metalClank({ freq: 440, peak: 0.22, delay: 0.95 })
+  // Metal settle + a little water against the piles.
+  tone({ type: 'triangle', freq: 180, freqEnd: 95, duration: 0.35, peak: 0.08, delay: 1.1 })
+  noiseBurst({ duration: 0.55, filterFreq: 400, peak: 0.05, delay: 1.15 })
+}
+
+/**
+ * Casting off — ratchet free, shackle open, lines clear, then a soft push-off.
+ */
+export function playUndock() {
+  ensureSfx()
+  // Shackle / pin free.
+  metalClank({ freq: 680, peak: 0.22, delay: 0 })
+  chainRattle({ delay: 0.06, count: 5, peak: 0.13 })
+  // Winch pays out a little, then free.
+  winchRatchet({ delay: 0.22, steps: 4, peak: 0.11 })
+  metalClank({ freq: 390, peak: 0.2, delay: 0.42 })
+  // Line slips the bollard — scrape + final clank.
+  noiseBurst({ duration: 0.12, filterFreq: 2400, peak: 0.16, drive: 3.5, delay: 0.55 })
+  metalClank({ freq: 540, peak: 0.16, delay: 0.62 })
+  // Soft water push as she eases clear (under the metal, not the star).
+  noiseBurst({ duration: 0.7, filterFreq: 280, peak: 0.08, drive: 1.2, delay: 0.7 })
+  tone({ type: 'sawtooth', freq: 70, freqEnd: 48, duration: 0.3, peak: 0.06, delay: 0.78 })
+}
+
+// Mid-sequence nudge — short mechanical winch tick + diesel bite, not a thump.
+export function playDockThrusterPulse() {
+  ensureSfx()
+  winchRatchet({ delay: 0, steps: 2, peak: 0.08 })
+  tone({ type: 'sawtooth', freq: 72, freqEnd: 50, duration: 0.22, peak: 0.07 })
+  noiseBurst({ duration: 0.25, filterFreq: 500, peak: 0.07, drive: 1.4, delay: 0.03 })
+}
+
+// ── Ambient sea bed (quiet water lapping) ───────────────────────────────────
+// Always-on while a session is live. Sits under diesel / combat; never loud.
+let seaAmbient = null
+let seaLapTimer = null
+/** Peak gain for the continuous wash — keep low so dialogue/engines win. */
+const SEA_AMBIENT_VOLUME = 0.032
+
+function scheduleSeaLap() {
+  if (!seaAmbient) return
+  // Soft irregular lapping — not a metronome.
+  const wait = 2200 + Math.random() * 3200
+  seaLapTimer = setTimeout(() => {
+    seaLapTimer = null
+    if (!seaAmbient || !sfxEnabled) {
+      scheduleSeaLap()
+      return
+    }
+    const peak = 0.018 + Math.random() * 0.02
+    noiseBurst({
+      duration: 0.4 + Math.random() * 0.55,
+      filterFreq: 220 + Math.random() * 280,
+      peak,
+      drive: 0.6 + Math.random() * 0.8
+    })
+    // Occasional deeper wash under the pile.
+    if (Math.random() < 0.35) {
+      noiseBurst({
+        duration: 0.7 + Math.random() * 0.4,
+        filterFreq: 120 + Math.random() * 80,
+        peak: peak * 0.7,
+        drive: 1.2,
+        delay: 0.08
+      })
+    }
+    scheduleSeaLap()
+  }, wait)
+}
+
+/**
+ * Quiet open-water bed: brown-ish wash through a soft bandpass.
+ * Start when a game session is active; stop on the title screen.
+ */
+export function startSeaAmbient() {
+  ensureSfx()
+  if (seaAmbient) return
+  const audio = getContext()
+  // 6 s loop of filtered brown noise — reads as continuous water, not static.
+  const seconds = 6
+  const n = Math.floor(audio.sampleRate * seconds)
+  const buf = audio.createBuffer(1, n, audio.sampleRate)
+  const data = buf.getChannelData(0)
+  let brown = 0
+  for (let i = 0; i < n; i++) {
+    const white = Math.random() * 2 - 1
+    brown = (brown + 0.015 * white) / 1.015
+    // Mild slow amplitude breathing so it does not sound like a stuck loop.
+    const breath = 0.85 + 0.15 * Math.sin((i / n) * Math.PI * 2 * 1.7)
+    data[i] = brown * 4.2 * breath
+  }
+  const source = audio.createBufferSource()
+  source.buffer = buf
+  source.loop = true
+  const band = audio.createBiquadFilter()
+  band.type = 'bandpass'
+  band.frequency.value = 340
+  band.Q.value = 0.55
+  const low = audio.createBiquadFilter()
+  low.type = 'lowpass'
+  low.frequency.value = 780
+  const high = audio.createBiquadFilter()
+  high.type = 'highpass'
+  high.frequency.value = 80
+  const gain = audio.createGain()
+  const now = audio.currentTime
+  gain.gain.setValueAtTime(0.0001, now)
+  gain.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME, now + 2.8)
+  source.connect(high).connect(band).connect(low).connect(gain).connect(getMasterDestination())
+  source.start()
+  seaAmbient = { source, gain }
+  scheduleSeaLap()
+}
+
+export function stopSeaAmbient(fadeOut = 1.4) {
+  if (seaLapTimer != null) {
+    clearTimeout(seaLapTimer)
+    seaLapTimer = null
+  }
+  if (!seaAmbient) return
+  const { source, gain } = seaAmbient
+  seaAmbient = null
+  const audio = getContext()
+  const now = audio.currentTime
+  try {
+    const from = Math.max(gain.gain.value, 0.0001)
+    gain.gain.cancelScheduledValues(now)
+    gain.gain.setValueAtTime(from, now)
+    gain.gain.linearRampToValueAtTime(0.0001, now + fadeOut)
+    source.stop(now + fadeOut + 0.05)
+    setTimeout(() => {
+      try { source.disconnect() } catch { /* */ }
+      try { gain.disconnect() } catch { /* */ }
+    }, (fadeOut + 0.1) * 1000)
+  } catch {
+    try { source.stop() } catch { /* */ }
+  }
+}
+
+/**
+ * Classic movie sonar ping — the submarine “ping” everyone knows.
+ *
+ * Pure mid-range sine, knife-edge attack, long exponential decay, slight
+ * downward drift, muffled by a bandpass (water), then a quieter echo return.
+ * Not a sci-fi zap and not a pitch-dive “pew”.
  */
 export function playSonarPing(index = 0) {
   ensureSfx()
-  // Each ring in a sounding drops a little in pitch, so a burst of three reads
-  // as one instrument rather than three copies of the same sound.
-  const base = 1180 - index * 130
-  // The strike.
-  tone({ type: 'sine', freq: base, freqEnd: base * 0.55, duration: 1.5, peak: 0.16 })
-  // A touch of harmonic on the attack — this is what makes it read as metal.
-  tone({ type: 'triangle', freq: base * 2.02, freqEnd: base * 1.1, duration: 0.35, peak: 0.05 })
-  // The tail coming back off the water.
-  tone({ type: 'sine', freq: base * 0.52, freqEnd: base * 0.34, duration: 2.1, peak: 0.07, delay: 0.18 })
-  tone({ type: 'sine', freq: base * 0.5, freqEnd: base * 0.3, duration: 1.6, peak: 0.04, delay: 0.52 })
+  const audio = getContext()
+  // Slight pitch step per ring in a sounding burst (~semitone family).
+  const freq = 880 - (index % 5) * 45
+  const start = audio.currentTime
+  const duration = 2.4
+
+  // Master for this ping (dry + wet echo).
+  const master = audio.createGain()
+  master.gain.setValueAtTime(1, start)
+  master.connect(getMasterDestination())
+
+  // Water body: bandpass so it reads underwater, not a dry lab oscillator.
+  const band = audio.createBiquadFilter()
+  band.type = 'bandpass'
+  band.frequency.setValueAtTime(freq, start)
+  band.Q.setValueAtTime(2.2, start)
+
+  // Soft low shelf keeps the body without a harsh tick.
+  const low = audio.createBiquadFilter()
+  low.type = 'lowshelf'
+  low.frequency.setValueAtTime(400, start)
+  low.gain.setValueAtTime(2.5, start)
+
+  const dryGain = audio.createGain()
+  // Instant strike, long underwater tail (exponential → 0).
+  dryGain.gain.setValueAtTime(0.0001, start)
+  dryGain.gain.exponentialRampToValueAtTime(0.22, start + 0.008)
+  dryGain.gain.exponentialRampToValueAtTime(0.0001, start + duration)
+
+  const osc = audio.createOscillator()
+  osc.type = 'sine'
+  osc.frequency.setValueAtTime(freq, start)
+  // Barely any gliss — classic pings hold pitch; a tiny drop sells distance.
+  osc.frequency.exponentialRampToValueAtTime(freq * 0.92, start + duration)
+
+  // Quiet second harmonic for a touch of metal plate, not a square.
+  const harm = audio.createOscillator()
+  harm.type = 'sine'
+  harm.frequency.setValueAtTime(freq * 2, start)
+  harm.frequency.exponentialRampToValueAtTime(freq * 2 * 0.92, start + duration)
+  const harmGain = audio.createGain()
+  harmGain.gain.setValueAtTime(0.0001, start)
+  harmGain.gain.exponentialRampToValueAtTime(0.035, start + 0.01)
+  harmGain.gain.exponentialRampToValueAtTime(0.0001, start + duration * 0.55)
+
+  osc.connect(dryGain)
+  harm.connect(harmGain)
+  dryGain.connect(low)
+  harmGain.connect(low)
+  low.connect(band)
+  band.connect(master)
+
+  // Echo return — quieter, darker, delayed like a bounce off something out there.
+  const delay = audio.createDelay(2.5)
+  delay.delayTime.setValueAtTime(0.95 + (index % 3) * 0.08, start)
+  const echoFilter = audio.createBiquadFilter()
+  echoFilter.type = 'lowpass'
+  echoFilter.frequency.setValueAtTime(freq * 0.85, start)
+  const echoGain = audio.createGain()
+  echoGain.gain.setValueAtTime(0.0001, start)
+  echoGain.gain.exponentialRampToValueAtTime(0.09, start + 0.95)
+  echoGain.gain.exponentialRampToValueAtTime(0.0001, start + 0.95 + duration * 0.85)
+  band.connect(delay)
+  delay.connect(echoFilter)
+  echoFilter.connect(echoGain)
+  echoGain.connect(master)
+
+  // Very soft second bounce.
+  const delay2 = audio.createDelay(3)
+  delay2.delayTime.setValueAtTime(1.7, start)
+  const echo2Gain = audio.createGain()
+  echo2Gain.gain.setValueAtTime(0.0001, start)
+  echo2Gain.gain.exponentialRampToValueAtTime(0.04, start + 1.7)
+  echo2Gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.7 + duration * 0.6)
+  band.connect(delay2)
+  delay2.connect(echo2Gain)
+  echo2Gain.connect(master)
+
+  osc.start(start)
+  harm.start(start)
+  osc.stop(start + duration + 0.05)
+  harm.stop(start + duration + 0.05)
 }
 
-/** Whatever came back. Two notes, up — you found something. */
+/** Whatever came back. Soft double ping — contact. */
 export function playSonarReturn() {
   ensureSfx()
-  tone({ type: 'sine', freq: 640, freqEnd: 880, duration: 0.3, peak: 0.1 })
-  tone({ type: 'sine', freq: 1180, duration: 0.22, peak: 0.07, delay: 0.16 })
+  const audio = getContext()
+  const start = audio.currentTime
+  for (const [delay, freq, peak] of [
+    [0, 720, 0.12],
+    [0.14, 960, 0.1]
+  ]) {
+    const osc = audio.createOscillator()
+    const g = audio.createGain()
+    const bp = audio.createBiquadFilter()
+    bp.type = 'bandpass'
+    bp.frequency.value = freq
+    bp.Q.value = 3
+    osc.type = 'sine'
+    osc.frequency.setValueAtTime(freq, start + delay)
+    g.gain.setValueAtTime(0.0001, start + delay)
+    g.gain.exponentialRampToValueAtTime(peak, start + delay + 0.01)
+    g.gain.exponentialRampToValueAtTime(0.0001, start + delay + 0.55)
+    osc.connect(g).connect(bp).connect(getMasterDestination())
+    osc.start(start + delay)
+    osc.stop(start + delay + 0.6)
+  }
 }
 
 let probeScanOsc = null
@@ -825,47 +1064,12 @@ let probeScanGain = null
 let probeScanLFO = null
 let probeScanPing = null
 
-// Low hum under an active sounding, between the pings.
+// Sounding pings are driven by main.js (one per ring). This only clears any
+// leftover schedule if a previous version left a timer running.
 export function setProbeScanActive(active) {
-  const audio = getContext()
-  if (active && !probeScanOsc) {
-    probeScanOsc = audio.createOscillator()
-    probeScanGain = audio.createGain()
-    probeScanOsc.type = 'sine'
-    probeScanOsc.frequency.value = 520
-    probeScanGain.gain.setValueAtTime(0, audio.currentTime)
-    probeScanGain.gain.linearRampToValueAtTime(0.055, audio.currentTime + 0.2)
-
-    probeScanLFO = audio.createOscillator()
-    probeScanLFO.type = 'sine'
-    probeScanLFO.frequency.value = 4.5
-    const lfoGain = audio.createGain()
-    lfoGain.gain.value = 45
-    probeScanLFO.connect(lfoGain).connect(probeScanOsc.frequency)
-    probeScanLFO.start()
-
-    probeScanOsc.connect(probeScanGain).connect(getMasterDestination())
-    probeScanOsc.start()
-
-    // Soft repeating radar-style pings.
-    const schedulePings = () => {
-      if (!probeScanOsc) return
-      tone({ type: 'sine', freq: 1400, freqEnd: 900, duration: 0.12, peak: 0.045 })
-      tone({ type: 'triangle', freq: 2100, freqEnd: 1200, duration: 0.08, peak: 0.03, delay: 0.04 })
-      probeScanPing = setTimeout(schedulePings, 850)
-    }
-    probeScanPing = setTimeout(schedulePings, 200)
-  } else if (!active && probeScanOsc) {
-    if (probeScanPing) {
-      clearTimeout(probeScanPing)
-      probeScanPing = null
-    }
-    probeScanGain.gain.linearRampToValueAtTime(0, audio.currentTime + 0.15)
-    probeScanOsc.stop(audio.currentTime + 0.2)
-    probeScanLFO.stop(audio.currentTime + 0.2)
-    probeScanOsc = null
-    probeScanGain = null
-    probeScanLFO = null
+  if (!active && probeScanPing) {
+    clearTimeout(probeScanPing)
+    probeScanPing = null
   }
 }
 
@@ -1121,15 +1325,16 @@ let engineRevs = 0
 const DIESEL_IDLE_HZ = 22
 const DIESEL_MAX_HZ = 58
 
-function stopThrustAudio() {
+function stopThrustAudio(fadeOut = 0.35) {
   if (!engine) return
   const audio = getContext()
   const now = audio.currentTime
+  const fade = Math.max(0.05, fadeOut)
   engine.gain.gain.cancelScheduledValues(now)
   engine.gain.gain.setValueAtTime(Math.max(engine.gain.gain.value, 0.0001), now)
-  engine.gain.gain.linearRampToValueAtTime(0.0001, now + 0.35)
+  engine.gain.gain.linearRampToValueAtTime(0.0001, now + fade)
   for (const node of engine.sources) {
-    try { node.stop(now + 0.4) } catch { /* already stopped */ }
+    try { node.stop(now + fade + 0.05) } catch { /* already stopped */ }
   }
   engine = null
 }
@@ -1191,7 +1396,7 @@ function startEngine() {
   stackFilter.type = 'lowpass'
   stackFilter.frequency.value = 700
   const stackGain = audio.createGain()
-  stackGain.gain.value = 0.2
+  stackGain.gain.value = 0.17
   stack.connect(stackFilter).connect(stackGain).connect(chugGain)
 
   for (const node of [chug, block, growl, stack]) node.start(now)
@@ -1228,8 +1433,9 @@ function applyEngineRevs() {
   at(engine.blockFilter.frequency, 240 + 460 * rev)
   at(engine.growlFilter.frequency, 420 + 900 * rev)
   at(engine.stackFilter.frequency, 700 + 1500 * rev)
-  at(engine.stackGain.gain, 0.2 + 0.42 * rev)
-  at(engine.gain.gain, 0.13 + 0.16 * rev)
+  at(engine.stackGain.gain, 0.17 + 0.36 * rev)
+  // Master diesel level — kept a touch under the old mix so sea + guns read.
+  at(engine.gain.gain, 0.11 + 0.14 * rev)
 }
 
 /**
@@ -1239,6 +1445,22 @@ function applyEngineRevs() {
  *   entirely (docked, dead, paused). Anything else keeps it turning over —
  *   a diesel does not stop because you eased the throttle.
  */
+/**
+ * Shut down thrusters / cruise / mining beam with a fade.
+ * Used on death so the diesel doesn't keep chugging under the death music.
+ * @param {number} [fadeOut=1.0] seconds for engine gain to drop
+ */
+export function fadeShipAudio(fadeOut = 1.0) {
+  ensureSfx()
+  thrustMode = null
+  engineRevs = 0
+  stopThrustAudio(fadeOut)
+  setSupercruiseActive(false)
+  setStrafeActive(false)
+  setMiningBeamActive(false)
+  // Leave sea lapping under the death orbit — only the boat systems die.
+}
+
 export function setThrustState(mode) {
   ensureSfx()
   if (mode === thrustMode) return
