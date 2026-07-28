@@ -3,7 +3,7 @@
 <table align="center">
   <tr>
     <td align="center" valign="middle">
-      <img src="logo.jpg" alt="The Drowned" width="420" />
+      <img src="logo.jpg" alt="The Drowned" width="560" />
     </td>
     <td align="center" valign="middle" width="220">
       <a href="https://ko-fi.com/laughinginpurgatory">

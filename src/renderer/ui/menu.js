@@ -1,5 +1,4 @@
 import { STARTER_SHIP_CLASS_ID, getShipClass } from '../data/shipClasses.js'
-import { wreckedTypeCSS } from './wreckedType.js'
 import {
   SETTINGS_VIEW_CSS,
   settingsViewHTML,
@@ -213,18 +212,16 @@ const STYLE = `
   50%  { opacity: 0.55; transform: translate(3px, -4px) scale(1.05); filter: blur(4px); }
   100% { opacity: 0.30; transform: translate(6px, -10px) scale(1.10); filter: blur(6px); }
 }
-#main-menu .title-smoke .smoke-line {
-  /* Mirrors #main-menu h1 .line — same face, size and tracking, so the smoke
-     starts exactly on top of the word it is coming off. */
+#main-menu .title-smoke .smoke-art {
+  /* The same artwork at the same size, so the smoke starts exactly on top of
+     the mark it is coming off. Crushed to black first: the filter wants a
+     silhouette to tear up, and the rust and fire in the original would show
+     through as coloured wisps. */
   display: block;
-  font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", "Helvetica Neue", sans-serif;
-  font-weight: 900;
-  font-size: 69px; letter-spacing: 6px; text-transform: uppercase;
-  color: #000;
-  filter: url(#drowned-smoke);
-}
-#main-menu .title-smoke .smoke-line.sub {
-  font-size: 30px; letter-spacing: 14px; margin-bottom: 2px;
+  width: min(78vw, 620px);
+  height: auto;
+  margin: 0 auto;
+  filter: brightness(0) url(#drowned-smoke);
 }
 @keyframes titleSmokeRise {
   /* Position and scale are spaced evenly so the rise rate stays constant all
@@ -255,31 +252,24 @@ const STYLE = `
   from { opacity: 0; transform: translateX(-50%) scale(1.08); filter: blur(14px); }
   to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0); }
 }
-/* Each line of the two-line title is its own box, so the gradient wash and
-   the erosion mask are applied per line rather than once across the whole h1
-   — a mask sized to the block would run across the gap between the lines
-   instead of through each line's own glyphs. */
-/* Bright gradient fill — avoid stacking opaque black drop-shadows on
-   background-clip:text (they eat the fill and leave a dark outline). */
-#main-menu h1 .line {
-  display: block; position: relative; font-size: 69px; letter-spacing: 6px;
-  font-weight: 600; text-transform: uppercase;
-  /* Accent-tinted title wash so UI Colour retints the logo text too. */
-  background: linear-gradient(90deg, var(--ui-accent), var(--ui-bright), var(--ui-soft), var(--ui-accent));
-  background-size: 300% auto;
-  -webkit-background-clip: text; background-clip: text;
-  color: transparent; -webkit-text-fill-color: transparent;
-  animation: titleShift 6s linear infinite, titleGlow 5s ease-in-out infinite;
+/* The title is artwork, not type.
+   A painted wordmark carries erosion, rust and burn that no amount of CSS on
+   a system face can fake, so the h1 holds an image and the drawn-type
+   treatment (gradient wash, erosion mask) is gone with the text it dressed.
+   The death screen still uses that treatment — see ui/wreckedType.js. */
+#main-menu h1 .title-art {
+  display: block;
+  width: min(78vw, 620px);
+  height: auto;
+  margin: 0 auto;
+  /* A dark lift so it holds against a bright horizon, plus the coloured halo
+     the title has always had — as a drop-shadow filter, since there is no text
+     to take a text-shadow. */
+  filter:
+    drop-shadow(0 3px 6px rgba(0, 0, 0, 0.9))
+    drop-shadow(0 0 26px rgba(var(--title-glow), 0.35));
+  animation: titleGlow 5s ease-in-out infinite;
 }
-/* The article sits above and much smaller — DROWNED carries the title, and a
-   full-size "THE" would fight it for the eye. margin-bottom, not top, because
-   this line now leads rather than follows. */
-#main-menu h1 .line.line-sub {
-  font-size: 30px; letter-spacing: 14px; margin-bottom: 2px;
-  opacity: 0.85;
-}
-${wreckedTypeCSS('#main-menu h1 .line')}
-@keyframes titleShift { to { background-position: 300% center; } }
 /* Soft dark lift + wide, low-opacity halo so it dissolves into the starfield
    rather than sitting as a hard neon outline.
    Hue comes from --title-glow (an "r,g,b" triplet) which main.js retargets each
@@ -579,12 +569,12 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
           ${['core', 'r1', 'r2', 'r3', 'r4']
             .map(
               (k) => `<div class="title-smoke ${k}">
-            <span class="smoke-line sub">THE</span><span class="smoke-line">DROWNED</span>
+            <img class="smoke-art" src="title-drowned.png" alt="" />
           </div>`
             )
             .join('')}
         </div>
-        <h1><span class="line line-sub" data-text="THE">THE</span><span class="line" data-text="DROWNED">DROWNED</span></h1>
+        <h1><img class="title-art" src="title-drowned.png" alt="The Drowned" /></h1>
       </div>
       <div class="menu-links">
         <button class="new-game menu-link"><span class="menu-link-text">New Game</span></button>
