@@ -1501,26 +1501,54 @@ function rebuildSurfObstacles() {
  * *behind*; this is what it displaces where it sits.
  */
 const _surfFrame = []
+
+/**
+ * How much foam a hull is standing in, 0–1.
+ *
+ * Full when stopped or barely moving, gone by the time she is properly under
+ * way. A moving hull does not sit in a ring of disturbed water — it leaves one
+ * behind it, and that is the wake's job (render/wake.js). Leaving the collar on
+ * at speed gives a boat two overlapping foam effects that fight each other.
+ */
+function hullSurfStrength(entity, shipClass) {
+  const top = shipClass?.stats?.speed ?? 1
+  const speed = Math.hypot(entity.velocity?.[0] ?? 0, entity.velocity?.[2] ?? 0)
+  const frac = speed / Math.max(1e-3, top)
+  return Math.max(0, 1 - frac / 0.28)
+}
+
+/** An oriented ellipse matching the hull's own plan, not a circle round it. */
+function hullSurfEllipse(entity, shipClass, strength) {
+  const length = shipClass?.hull?.length ?? 16
+  const beam = Math.max(...(shipClass?.hull?.stationWidths ?? [2])) * 2
+  return {
+    x: entity.position[0],
+    z: entity.position[2],
+    halfLength: length * 0.52,
+    halfBeam: beam * 0.62,
+    heading: headingOf(entity),
+    strength
+  }
+}
+
 function currentSurfObstacles() {
   _surfFrame.length = 0
   for (const o of staticSurfObstacles) _surfFrame.push(o)
   const ship = gameState?.player?.ship
   if (ship && !docked) {
-    _surfFrame.push({
-      x: ship.position[0],
-      z: ship.position[2],
-      radius: getShipCollisionRadius(playerShipClass) * 0.55
-    })
+    const st = hullSurfStrength(ship, playerShipClass)
+    if (st > 0.01) _surfFrame.push(hullSurfEllipse(ship, playerShipClass, st))
   }
   for (const npc of gameState?.npcs ?? []) {
     if (npc.destroyed) continue
-    let r = 8
+    let cls = null
     try {
-      r = getShipCollisionRadius(getShipClass(npc.shipClassId)) * 0.55
+      cls = getShipClass(npc.shipClassId)
     } catch {
-      /* unknown class — a nominal collar is better than none */
+      continue
     }
-    _surfFrame.push({ x: npc.position[0], z: npc.position[2], radius: r })
+    const st = hullSurfStrength(npc, cls)
+    if (st > 0.01) _surfFrame.push(hullSurfEllipse(npc, cls, st))
   }
   return _surfFrame
 }

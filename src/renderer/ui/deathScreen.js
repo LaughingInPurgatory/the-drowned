@@ -1,4 +1,5 @@
 import { escapeHtml } from './escapeHtml.js'
+import { wreckedTypeCSS } from './wreckedType.js'
 
 const STYLE = `
 #death-screen {
@@ -18,6 +19,7 @@ const STYLE = `
   position: relative; color: #ff5050; font-size: 40px; letter-spacing: 6px; margin: 0 0 24px 0;
   animation: glitchShadow 2.4s infinite steps(1);
 }
+${wreckedTypeCSS('#death-screen h1')}
 #death-screen.shake .panel { animation: shake 0.5s ease-in-out; }
 @keyframes shake {
   0%, 100% { transform: translate(0, 0); }
@@ -198,7 +200,7 @@ export function createDeathScreen(container, onReturnToMenu) {
       root.querySelector('.summary').innerHTML = `
         Final credits: ${Math.floor(credits || 0)}cr<br/>
         Reputation earned: ${reputation ?? 0}<br/>
-        ${name} is gone. There is no second body waiting — load your last save.
+        ${name} is gone. Load your last save.
       `
 
       root.querySelector('.pun').textContent = pickPun()

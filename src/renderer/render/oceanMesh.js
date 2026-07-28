@@ -110,7 +110,11 @@ uniform vec3 uFoamColor;
 uniform vec3 uAlgaeColor;
 // Nearby things the sea breaks against, packed as (x, z, radius). Count is
 // capped at SURF_SLOTS; unused slots carry radius 0 and are skipped.
-uniform vec3 uSurf[${SURF_SLOTS}];
+// (x, z, half-length along the axis, half-beam across it)
+uniform vec4 uSurf[${SURF_SLOTS}];
+// (axis x, axis z, strength) — the axis a hull lies along, and how hard the
+// water is breaking on it right now.
+uniform vec3 uSurfAxis[${SURF_SLOTS}];
 uniform int uSurfCount;
 varying vec3 vWorldPos;
 varying float vDetail;
@@ -242,27 +246,36 @@ float surfAt(vec2 p) {
   float surf = 0.0;
   for (int i = 0; i < ${SURF_SLOTS}; i++) {
     if (i >= uSurfCount) break;
-    vec3 o = uSurf[i];
+    vec4 o = uSurf[i];
     if (o.z <= 0.0) continue;
-    // Signed distance to the obstacle's edge: negative inside, positive out.
-    float d = length(p - o.xy) - o.z;
+    vec3 ax = uSurfAxis[i];
+    if (ax.z <= 0.001) continue;
 
-    // Surf is a *band along the edge*, not a filled disc.
-    //
-    // The falloff used to be one-sided, so every point inside the circle got
-    // full strength — which turned a harbour, whose footprint circle covers the
-    // whole structure, into a solid white blob of water with a hard rim. Water
-    // breaks *where it meets* the thing; a few boat-lengths inside the
-    // footprint there is nothing to break on.
-    float outward = clamp(o.z * 0.55, 3.5, 40.0);
+    // Into the obstacle's own frame: y along its axis, x across it. For an
+    // island or a harbour the two half-extents are equal and this is just a
+    // circle; for a hull they are not, and the foam then follows the ship's
+    // lines instead of ringing it in a circle that is far too wide at the bow
+    // and far too tight amidships.
+    vec2 rel = p - o.xy;
+    vec2 axis = normalize(ax.xy + vec2(1e-6, 0.0));
+    vec2 local = vec2(rel.x * axis.y - rel.y * axis.x, dot(rel, axis));
+    vec2 q = vec2(local.x / max(o.w, 0.05), local.y / max(o.z, 0.05));
+    float k = length(q);
+    if (k < 1e-5) continue;
+    // First-order distance to the ellipse: the unit-circle error divided by
+    // the gradient of the scaling, which is close enough for a foam band and
+    // far cheaper than solving it properly.
+    float grad = length(vec2(q.x / max(o.w, 0.05), q.y / max(o.z, 0.05)));
+    float d = (k - 1.0) / max(grad, 1e-5);
+
+    float small = min(o.z, o.w);
+    float outward = clamp(small * 0.55, 3.5, 40.0);
     // Shorter on the inside — the lee of an obstacle is calmer than its face.
     float inward = outward * 0.5;
     float band = d >= 0.0 ? outward : inward;
     if (abs(d) > band) continue;
-    float k = 1.0 - clamp(abs(d) / band, 0.0, 1.0);
-    // Cubic rather than squared: tighter to the edge, so the band reads as a
-    // line of broken water instead of a wide smear.
-    surf = max(surf, k * k);
+    float t = 1.0 - clamp(abs(d) / band, 0.0, 1.0);
+    surf = max(surf, t * t * ax.z);
   }
   return surf;
 }
@@ -431,7 +444,8 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uFoamColor: { value: new THREE.Color(0xccd8de) },
         // Sickly, not tropical — this is a bloom fed by fallout and run-off.
         uAlgaeColor: { value: new THREE.Color(0x35502c) },
-        uSurf: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector3()) },
+        uSurf: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector4()) },
+        uSurfAxis: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector3()) },
         uSurfCount: { value: 0 }
       }
     ]),
@@ -459,8 +473,13 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
   /**
    * Tell the water what it is breaking against.
    *
-   * @param {Array<{x:number,z:number,radius:number}>} obstacles everything the
-   *   sea should surf against — island coastlines, harbour footprints, shoals.
+   * @param {Array<{x:number,z:number,radius:number,halfLength?:number,
+   *   halfBeam?:number,heading?:number,strength?:number}>} obstacles everything
+   *   the sea should surf against — island coastlines, harbour footprints,
+   *   shoals, hulls. `radius` gives a circle; `halfLength`/`halfBeam`/`heading`
+   *   give an oriented ellipse, which is what a ship needs. `strength` fades
+   *   it — a hull under way should not have a standing collar of foam, because
+   *   what it makes then is a wake.
    *   Anything may be passed; the nearest SURF_SLOTS in range are kept.
    * @param {THREE.Camera} camera picks which of them those are.
    */
@@ -469,17 +488,29 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
     const cz = camera.position.z
     const near = []
     for (const o of obstacles) {
-      if (!(o.radius > 0)) continue
-      const d = Math.hypot(o.x - cx, o.z - cz) - o.radius
+      const halfLen = o.halfLength ?? o.radius ?? 0
+      const halfBeam = o.halfBeam ?? o.radius ?? 0
+      if (!(halfLen > 0) || !(halfBeam > 0)) continue
+      if ((o.strength ?? 1) <= 0.01) continue
+      const d = Math.hypot(o.x - cx, o.z - cz) - Math.max(halfLen, halfBeam)
       if (d > SURF_RANGE) continue
-      near.push({ o, d })
+      near.push({ o, d, halfLen, halfBeam })
     }
     near.sort((a, b) => a.d - b.d)
     const slots = material.uniforms.uSurf.value
+    const axes = material.uniforms.uSurfAxis.value
     const n = Math.min(SURF_SLOTS, near.length)
-    for (let i = 0; i < n; i++) slots[i].set(near[i].o.x, near[i].o.z, near[i].o.radius)
+    for (let i = 0; i < n; i++) {
+      const { o, halfLen, halfBeam } = near[i]
+      slots[i].set(o.x, o.z, halfLen, halfBeam)
+      const h = o.heading ?? 0
+      axes[i].set(Math.sin(h), Math.cos(h), o.strength ?? 1)
+    }
     // Zero the tail so a stale obstacle cannot keep foaming after we sail away.
-    for (let i = n; i < SURF_SLOTS; i++) slots[i].set(0, 0, 0)
+    for (let i = n; i < SURF_SLOTS; i++) {
+      slots[i].set(0, 0, 0, 0)
+      axes[i].set(0, 1, 0)
+    }
     material.uniforms.uSurfCount.value = n
   }
 

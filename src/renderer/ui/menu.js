@@ -1,4 +1,5 @@
 import { STARTER_SHIP_CLASS_ID, getShipClass } from '../data/shipClasses.js'
+import { wreckedTypeCSS } from './wreckedType.js'
 import {
   SETTINGS_VIEW_CSS,
   settingsViewHTML,
@@ -111,11 +112,14 @@ const STYLE = `
   color: transparent; -webkit-text-fill-color: transparent;
   animation: titleShift 6s linear infinite, titleGlow 5s ease-in-out infinite;
 }
-/* Second line sits under DROWNED a bit smaller so the hierarchy reads clearly. */
+/* The article sits above and much smaller — DROWNED carries the title, and a
+   full-size "THE" would fight it for the eye. margin-bottom, not top, because
+   this line now leads rather than follows. */
 #main-menu h1 .line.line-sub {
-  font-size: 42px; letter-spacing: 8px; margin-top: 6px;
-  opacity: 1;
+  font-size: 30px; letter-spacing: 14px; margin-bottom: 2px;
+  opacity: 0.85;
 }
+${wreckedTypeCSS('#main-menu h1 .line')}
 @keyframes titleShift { to { background-position: 300% center; } }
 /* Soft dark lift + wide, low-opacity halo so it dissolves into the starfield
    rather than sitting as a hard neon outline.
@@ -465,7 +469,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
     <div class="copyright">© Laughing In Purgatory 2026</div>
     <div class="panel main-view">
       <div class="title-block">
-        <h1><span class="line" data-text="DROWNED">DROWNED</span><span class="line line-sub" data-text="WORLD">WORLD</span></h1>
+        <h1><span class="line line-sub" data-text="THE">THE</span><span class="line" data-text="DROWNED">DROWNED</span></h1>
       </div>
       <div class="menu-links">
         <button class="new-game menu-link"><span class="glitch-text" data-text="New Game">New Game</span></button>
