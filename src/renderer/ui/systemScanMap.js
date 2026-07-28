@@ -1,5 +1,5 @@
 /**
- * 3D region sonar scan map — bodies + Spatial Anomalies + 4 repositionable scan probes.
+ * 3D region sonar scan map — bodies + Anomalous Signals + 4 repositionable scan probes.
  * Opened from the radar "Region Sonar Scan" button.
  */
 import * as THREE from 'three'
@@ -152,7 +152,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       <div class="ssm-header">
         <div>
           <h2>Region Sonar Scan</h2>
-          <span class="ssm-sub">Deploy probes · form on signals · lock Spatial Anomalies</span>
+          <span class="ssm-sub">Deploy probes · form on signals · lock Anomalous Signals</span>
         </div>
         <button type="button" class="ssm-close">Close</button>
       </div>
@@ -161,7 +161,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           <canvas class="ssm-canvas"></canvas>
           <div class="ssm-hint">WASD pan · Drag rotate · Scroll zoom · Select probe · Click map to place · Form probes ON the bright purple rings</div>
           <div class="ssm-legend">
-            <div class="lg-a">◆ PURPLE = Spatial Anomaly</div>
+            <div class="lg-a">◆ PURPLE = Anomalous Signal</div>
             <div class="lg-p">◇ CYAN = Scan probes</div>
             <div class="lg-y">▲ GREEN = Your ship</div>
           </div>
@@ -745,7 +745,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       const nm = a.fullyScanned
         ? escapeHtml(a.displayName)
         : sig > 0.08
-          ? 'Spatial Anomaly'
+          ? 'Anomalous Signal'
           : 'Unidentified'
       const distKm = Math.round(
         Math.hypot(
@@ -763,7 +763,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     sigListEl.innerHTML = rows.length
       ? rows.join('') +
         `<div style="margin-top:8px;font-size:10px;opacity:0.65;line-height:1.4">Click a signal to center the map. Place probes on the bright purple ring (~12 km from the beacon).</div>`
-      : `<div style="opacity:0.5;font-size:11px">No signatures in this system.</div>`
+      : `<div style="opacity:0.5;font-size:11px">No signatures in this region.</div>`
     sigListEl.querySelectorAll('.ssm-sig-row[data-anomaly-id]').forEach((el) => {
       el.addEventListener('click', () => {
         const id = el.dataset.anomalyId

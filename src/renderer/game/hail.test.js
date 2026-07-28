@@ -15,11 +15,17 @@ test('faction routes to the matching line pool', () => {
   assert.ok(line.length > 0)
 })
 
-test('alien NPCs never fall back to a human line pool', () => {
+test('Drowned NPCs use pre-war military hail lines, not corsair banter', () => {
   const { speaker, line } = buildHailResponse({ id: 'alien-1', isAlien: true })
-  assert.equal(speaker, 'Unknown Vessel')
-  // Alien lines are all bracketed/em-dash flavour text, never plain human dialogue.
-  assert.ok(/[[—]/.test(line), `expected alien flavour text, got: ${line}`)
+  assert.equal(speaker, 'Drowned Contact')
+  assert.ok(line.length > 0)
+  // Old sci-fi harmonic lines are gone; corsair banter is a different pool.
+  assert.ok(!/UNTRANSLATABLE|resonant hum|structured static/i.test(line), line)
+  assert.ok(!/Cargo or plasma|toll road/i.test(line), line)
+  // Same path via faction id.
+  const byFaction = buildHailResponse({ id: 'alien-2', faction: 'alien' })
+  assert.equal(byFaction.speaker, 'Drowned Contact')
+  assert.ok(byFaction.line.length > 0)
 })
 
 test('unnamed non-alien NPC falls back to a generic speaker label', () => {

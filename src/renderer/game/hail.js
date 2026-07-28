@@ -43,17 +43,23 @@ const POLICE_LINES = [
   'Standard hail acknowledged. No action required on our end.'
 ]
 
-const ALIEN_LINES = [
-  '[UNTRANSLATABLE HARMONIC RESPONSE]',
-  '— signal resolves to overlapping tones, no words —',
-  '[the channel carries only a low resonant hum]',
-  '— your hail is answered with silence and a slow bearing change —',
-  '[a burst of structured static, gone before it can be parsed]',
-  '[a pattern of tones that almost forms a word, then doesn’t]',
-  '— the response arrives already fading, as if sent long ago —',
-  '[your own hail is echoed back, subtly altered]',
-  '— something on the other end seems to be listening, not answering —',
-  '[a single sustained frequency, then the channel goes dead]'
+// The Drowned — pre-war hulls still answering. Clipped military radio, wet
+// static, orders from a navy that never stood down.
+const DROWNED_LINES = [
+  'This channel is reserved. Clear the water.',
+  'Negative contact. You are not on our board.',
+  'Hold your course and keep weapons cold. We will not warn twice.',
+  'You hail like a civilian. That is not a compliment out here.',
+  'Old war, old hull, same rules: do not approach.',
+  'We do not take contracts. We take what we need.',
+  'Your transponder reads soft. Ours does not.',
+  'Shore stations forgot us. The sea did not.',
+  'If you are lost, stay lost somewhere else.',
+  'We ran these lanes before the flood. We still do.',
+  'Copy your hail. Reply is: keep clear of the formation.',
+  'Salvage rights claimed. Move off or join the wrecks.',
+  'Comms are short-range and unfriendly. Make it count next time.',
+  'You sound dry. That will not last.'
 ]
 
 const TRADER_LINES = [
@@ -104,7 +110,7 @@ const DEFAULT_LINES = [
 ]
 
 function linesFor(npc, shipClass) {
-  if (npc.isAlien || npc.faction === 'alien') return ALIEN_LINES
+  if (npc.isAlien || npc.faction === 'alien') return DROWNED_LINES
   if (npc.faction === 'pirate') return PIRATE_LINES
   if (npc.faction === 'police') return POLICE_LINES
   if (npc.faction === 'trader') return TRADER_LINES
@@ -135,6 +141,8 @@ export function buildHailResponse(npc) {
   }
   const lines = linesFor(npc, shipClass)
   const line = pick(lines, seed)
-  const speaker = npc.pilotName || (npc.isAlien ? 'Unknown Vessel' : 'Unidentified Pilot')
+  const speaker =
+    npc.pilotName ||
+    (npc.isAlien || npc.faction === 'alien' ? 'Drowned Contact' : 'Unidentified Pilot')
   return { speaker, line }
 }

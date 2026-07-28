@@ -1,5 +1,5 @@
 /**
- * Runtime helpers for Spatial Anomaly sites once fully scanned.
+ * Runtime helpers for Anomalous Signal sites once fully scanned.
  */
 import { intRange } from '../procgen/prng.js'
 import { spawnNpc } from './spawner.js'

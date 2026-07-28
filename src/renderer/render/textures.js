@@ -164,170 +164,6 @@ function makeSandTextureSet() {
   return set
 }
 
-/**
- * Free procedural gas-giant cloud belts (albedo + normal + roughness).
- * Horizontal banding + soft storms; tiles with RepeatWrapping like ambientCG sets.
- * Built once via OffscreenCanvas / canvas when a DOM is available.
- */
-function makeGasGiantTextureSet() {
-  const key = 'gasGiant|proc|v1'
-  if (cache[key]) return cache[key]
-  // Headless tests: no canvas — skip maps (vertex color alone).
-  const hasDom = typeof document !== 'undefined' && typeof document.createElement === 'function'
-  const hasOffscreen = typeof OffscreenCanvas !== 'undefined'
-  if (!hasDom && !hasOffscreen) return undefined
-
-  const W = 1024
-  const H = 512
-  const canvas =
-    hasDom
-      ? document.createElement('canvas')
-      : new OffscreenCanvas(W, H)
-  canvas.width = W
-  canvas.height = H
-  const ctx = canvas.getContext('2d', { willReadFrequently: true })
-  if (!ctx) return undefined
-
-  // Soft noise helper (value noise via layered sin — free, deterministic).
-  const n2 = (x, y) => {
-    const s =
-      Math.sin(x * 1.7 + y * 2.3) * 0.5 +
-      Math.sin(x * 3.1 - y * 1.9 + 1.4) * 0.3 +
-      Math.sin(x * 6.4 + y * 5.2 + 2.7) * 0.2
-    return s * 0.5 + 0.5
-  }
-
-  const img = ctx.createImageData(W, H)
-  const d = img.data
-  // Warm amber / ochre cloud palette (Jupiter-like, free / original).
-  const deep = [92, 48, 28]
-  const mid = [168, 112, 62]
-  const bright = [228, 196, 150]
-  const storm = [48, 32, 36]
-
-  for (let y = 0; y < H; y++) {
-    const v = y / (H - 1) // 0..1 latitude-ish for equirect tile
-    const lat = (v - 0.5) * 2 // -1..1
-    for (let x = 0; x < W; x++) {
-      const u = x / W
-      // Cloud belts: many horizontal bands + longitudinal streaks.
-      const bands =
-        Math.sin(lat * Math.PI * 7.5) * 0.45 +
-        Math.sin(lat * Math.PI * 15.2 + 0.7) * 0.25 +
-        Math.sin(lat * Math.PI * 3.1 + u * Math.PI * 2) * 0.12
-      const swirl =
-        n2(u * 8 + lat * 2, lat * 10) * 0.55 +
-        n2(u * 18 - lat * 3, lat * 22) * 0.35 +
-        n2(u * 40, lat * 40) * 0.15
-      // Great-spot style ovals (a few soft dark storms).
-      const sx = ((u + 0.18) % 1) - 0.5
-      const sy = lat - 0.22
-      const oval1 = Math.exp(-(sx * sx * 28 + sy * sy * 55)) * 0.85
-      const sx2 = ((u + 0.62) % 1) - 0.5
-      const sy2 = lat + 0.35
-      const oval2 = Math.exp(-(sx2 * sx2 * 40 + sy2 * sy2 * 70)) * 0.55
-      let t = bands * 0.5 + 0.5
-      t = t * 0.65 + swirl * 0.35
-      t = Math.max(0, Math.min(1, t - oval1 * 0.45 - oval2 * 0.3))
-      // Pole darkening
-      const pole = Math.pow(Math.abs(lat), 2.2)
-      t *= 1 - pole * 0.25
-
-      let r, g, b
-      if (oval1 > 0.35 || oval2 > 0.4) {
-        const o = Math.max(oval1, oval2)
-        const tr = Math.min(1, o)
-        r = mid[0] * (1 - tr) + storm[0] * tr
-        g = mid[1] * (1 - tr) + storm[1] * tr
-        b = mid[2] * (1 - tr) + storm[2] * tr
-      } else if (t < 0.45) {
-        const k = t / 0.45
-        r = deep[0] + (mid[0] - deep[0]) * k
-        g = deep[1] + (mid[1] - deep[1]) * k
-        b = deep[2] + (mid[2] - deep[2]) * k
-      } else {
-        const k = (t - 0.45) / 0.55
-        r = mid[0] + (bright[0] - mid[0]) * k
-        g = mid[1] + (bright[1] - mid[1]) * k
-        b = mid[2] + (bright[2] - mid[2]) * k
-      }
-      const i = (y * W + x) * 4
-      d[i] = r
-      d[i + 1] = g
-      d[i + 2] = b
-      d[i + 3] = 255
-    }
-  }
-  ctx.putImageData(img, 0, 0)
-
-  // Roughness from luminance (bright tops smoother).
-  const roughCanvas =
-    hasDom ? document.createElement('canvas') : new OffscreenCanvas(W, H)
-  roughCanvas.width = W
-  roughCanvas.height = H
-  const rctx = roughCanvas.getContext('2d', { willReadFrequently: true })
-  const rimg = rctx.createImageData(W, H)
-  const rd = rimg.data
-  for (let i = 0; i < d.length; i += 4) {
-    const lum = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) / 255
-    const rv = Math.floor((0.35 + (1 - lum) * 0.5) * 255)
-    rd[i] = rd[i + 1] = rd[i + 2] = rv
-    rd[i + 3] = 255
-  }
-  rctx.putImageData(rimg, 0, 0)
-
-  // Fake normal from height (band derivative) — subtle relief on belt edges.
-  const nCanvas =
-    hasDom ? document.createElement('canvas') : new OffscreenCanvas(W, H)
-  nCanvas.width = W
-  nCanvas.height = H
-  const nctx = nCanvas.getContext('2d', { willReadFrequently: true })
-  const nimg = nctx.createImageData(W, H)
-  const nd = nimg.data
-  const heightAt = (x, y) => {
-    const xx = ((x % W) + W) % W
-    const yy = Math.max(0, Math.min(H - 1, y))
-    const i = (yy * W + xx) * 4
-    return (d[i] + d[i + 1] + d[i + 2]) / (3 * 255)
-  }
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const dx = heightAt(x + 1, y) - heightAt(x - 1, y)
-      const dy = heightAt(x, y + 1) - heightAt(x, y - 1)
-      const nx = Math.max(0, Math.min(255, Math.floor((-dx * 4.5 + 0.5) * 255)))
-      const ny = Math.max(0, Math.min(255, Math.floor((-dy * 4.5 + 0.5) * 255)))
-      const i = (y * W + x) * 4
-      nd[i] = nx
-      nd[i + 1] = ny
-      nd[i + 2] = 255
-      nd[i + 3] = 255
-    }
-  }
-  nctx.putImageData(nimg, 0, 0)
-
-  const wrapTex = (src, srgb = false) => {
-    const tex = new THREE.CanvasTexture(src)
-    if (srgb) tex.colorSpace = THREE.SRGBColorSpace
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-    // Few horizontal repeats so belts stay wide on the sphere (not micro-stripes).
-    tex.repeat.set(2, 1)
-    tex.anisotropy = 8
-    tex.minFilter = THREE.LinearMipmapLinearFilter
-    tex.magFilter = THREE.LinearFilter
-    tex.generateMipmaps = true
-    tex.needsUpdate = true
-    return tex
-  }
-
-  const set = {
-    map: wrapTex(canvas, true),
-    normalMap: wrapTex(nCanvas, false),
-    roughnessMap: wrapTex(roughCanvas, false)
-  }
-  cache[key] = set
-  return set
-}
-
 export function getSurfaceTextures(archetype) {
   if (archetype === 'sand') return makeSandTextureSet()
   const prefix = ARCHETYPE_PREFIX[archetype]
@@ -342,7 +178,7 @@ export function getSurfaceTextures(archetype) {
 //   hull        → armor (busy rivets/plates)
 //   panel/wall  → plates
 //   floor/beam  → darkmetal
-//   solar / radiator as named
+//   radiator    → darkmetal
 const STATION_ROLE = {
   // Dense plating — stations are huge in world space after scale-up.
   hull: { prefix: 'armor', repeatU: 14, repeatV: 12 },
@@ -351,7 +187,6 @@ const STATION_ROLE = {
   wall: { prefix: 'plates', repeatU: 15, repeatV: 12 },
   floor: { prefix: 'darkmetal', repeatU: 12, repeatV: 12 },
   beam: { prefix: 'darkmetal', repeatU: 10, repeatV: 8 },
-  solar: { prefix: 'solar', repeatU: 8, repeatV: 5 },
   radiator: { prefix: 'darkmetal', repeatU: 12, repeatV: 10 },
   settlementHull: { prefix: 'armor', repeatU: 12, repeatV: 10 },
   // Tipped rock: breakwaters and shoals. Coarse repeat — these are boulders,

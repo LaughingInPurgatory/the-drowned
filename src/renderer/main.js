@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { createScene } from './render/scene.js'
 import { buildShipMesh, updatePoliceLights } from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
-import { buildIslandMesh, islandMaxShoreline, islandCoastSurfSamples } from './render/islandMesh.js'
+import { buildIslandMesh, islandMaxShoreline } from './render/islandMesh.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
 import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from './render/projectileMesh.js'
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
@@ -1419,7 +1419,6 @@ function loadBodiesForCurrentSystem() {
       orientSettlementOnSurface(mesh, body.surfaceOffset)
     }
   }
-  rebuildSurfObstacles()
   refreshStationPolicePatrols()
 }
 
@@ -1440,148 +1439,6 @@ function updateBodyVisibility() {
     mesh.visible = d < BODY_CULL_DISTANCE + (body.radius ?? 0) * 1.5
   }
 }
-
-/**
- * Everything in the world the sea breaks against, as flat circles.
- *
- * Fine-grained on purpose: one circle per *thing*, not one per body. A single
- * circle drawn round a whole harbour cannot foam against its mole, its piles
- * or the rocks at its foot, and those are what the water is actually breaking
- * on — it just fills the footprint with white instead.
- *
- * The static half is built once when the world's meshes are, since nothing in
- * it moves. Vessels are added per frame.
- */
-let staticSurfObstacles = []
-const _surfBounds = new THREE.Box3()
-const _surfSize = new THREE.Vector3()
-
-function rebuildSurfObstacles() {
-  const world = getWorld(gameState.galaxy)
-  staticSurfObstacles = []
-  for (const body of world?.bodies ?? []) {
-    if (body.kind === 'island') {
-      // Samples on the real shoreline — a single maxShore circle foamed the
-      // whole approach and every empty bay inside the disc.
-      for (const s of islandCoastSurfSamples(body, 18)) {
-        staticSurfObstacles.push(s)
-      }
-      continue
-    }
-    if (body.kind === 'wreckField') {
-      // Every hulk individually. A field is a scatter of separate wrecks with
-      // open water between them, so one circle over the lot would foam the gaps.
-      for (const rock of getAsteroidRocks(body)) {
-        staticSurfObstacles.push({
-          x: body.position[0] + rock.position[0],
-          z: body.position[2] + rock.position[2],
-          // Tight collar on the wreck mass, not a white puddle between hulks.
-          radius: Math.max(3, rock.collisionRadius * 0.45)
-        })
-      }
-      continue
-    }
-    if (body.kind === 'port' || body.kind === 'outpost') {
-      const mesh = bodyMeshes.get(body.id)
-      if (!mesh) continue
-      _surfBounds.setFromObject(mesh)
-      _surfBounds.getSize(_surfSize)
-      // AABB half-extent is the full footprint (mole + jetties). Foam only
-      // wants a thin working-edge band, not a white disc over the anchorage.
-      const half = Math.max(_surfSize.x, _surfSize.z) * 0.5
-      if (!(half > 0)) continue
-      const r =
-        body.kind === 'outpost'
-          ? Math.min(half * 0.42, 28)
-          : Math.min(half * 0.38, 55)
-      if (r > 0) {
-        staticSurfObstacles.push({
-          x: body.position[0],
-          z: body.position[2],
-          radius: r,
-          strength: 0.9
-        })
-      }
-    }
-  }
-}
-
-/**
- * The static list plus everything afloat right now.
- *
- * Hulls get a foam collar too — a boat sitting in the water with no disturbance
- * at its waterline looks pasted on, the same way an island did before it had a
- * shoreline. This is separate from the wake, which is what a hull leaves
- * *behind*; this is what it displaces where it sits.
- */
-const _surfFrame = []
-
-/**
- * How much foam a hull is standing in, 0–1.
- *
- * Full when stopped or barely moving, gone by the time she is properly under
- * way. A moving hull does not sit in a ring of disturbed water — it leaves one
- * behind it, and that is the wake's job (render/wake.js). Leaving the collar on
- * at speed gives a boat two overlapping foam effects that fight each other.
- */
-function hullSurfStrength(entity, shipClass) {
-  const top = shipClass?.stats?.speed ?? 1
-  const speed = Math.hypot(entity.velocity?.[0] ?? 0, entity.velocity?.[2] ?? 0)
-  const frac = speed / Math.max(1e-3, top)
-  return Math.max(0, 1 - frac / 0.28)
-}
-
-/** An oriented ellipse matching the hull's own plan, not a circle round it. */
-function hullSurfEllipse(entity, shipClass, strength) {
-  const length = shipClass?.hull?.length ?? 16
-  const beam = Math.max(...(shipClass?.hull?.stationWidths ?? [2])) * 2
-  return {
-    x: entity.position[0],
-    z: entity.position[2],
-    // Slightly inside the plan so the collar sits at the waterline, not a halo.
-    halfLength: length * 0.48,
-    halfBeam: beam * 0.52,
-    heading: headingOf(entity),
-    strength
-  }
-}
-
-function currentSurfObstacles() {
-  _surfFrame.length = 0
-  for (const o of staticSurfObstacles) _surfFrame.push(o)
-  const ship = gameState?.player?.ship
-  if (ship && !docked) {
-    const st = hullSurfStrength(ship, playerShipClass)
-    if (st > 0.01) _surfFrame.push(hullSurfEllipse(ship, playerShipClass, st))
-  }
-  for (const npc of gameState?.npcs ?? []) {
-    if (npc.destroyed) continue
-    let cls = null
-    try {
-      cls = getShipClass(npc.shipClassId)
-    } catch {
-      continue
-    }
-    const st = hullSurfStrength(npc, cls)
-    if (st > 0.01) _surfFrame.push(hullSurfEllipse(npc, cls, st))
-  }
-  for (const wreck of gameState?.wrecks ?? []) {
-    if (!wreck?.position) continue
-    const mesh = wreckMeshes.get(wreck.id)
-    const r = (mesh?.userData?.surfRadius ?? 10) * 0.55
-    _surfFrame.push({
-      x: wreck.position[0],
-      z: wreck.position[2],
-      radius: r,
-      halfLength: r * 1.05,
-      halfBeam: r * 0.5,
-      heading: mesh?.rotation?.y ?? 0,
-      strength: 0.75
-    })
-  }
-  return _surfFrame
-}
-
 
 /** Spawn / top-up police patrols (stations Sec 3–6, warp gates Sec 4–6). */
 function refreshStationPolicePatrols() {
@@ -2253,7 +2110,7 @@ function updateAnomalySites(dt) {
             gameState.npcs.push(n)
             addNpcMesh(n)
           }
-          flashToast(`Alien Incursion — wave 1/${a.wavesTotal}`, 3.2)
+          flashToast(`Drowned Incursion — wave 1/${a.wavesTotal}`, 3.2)
         }
       }
       // Advance waves when site ships dead
@@ -2271,7 +2128,7 @@ function updateAnomalySites(dt) {
             gameState.npcs.push(n)
             addNpcMesh(n)
           }
-          flashToast(`Alien Incursion — wave ${next + 1}/${a.wavesTotal}`, 3.2)
+          flashToast(`Drowned Incursion — wave ${next + 1}/${a.wavesTotal}`, 3.2)
         } else if (!a.baseDestroyed && !alienSiteRuntime) {
           // Base becomes targetable (virtual HP entity tracked as runtime)
           alienSiteRuntime = {
@@ -2280,7 +2137,7 @@ function updateAnomalySites(dt) {
             hull: 420,
             maxHull: 420
           }
-          flashToast('Alien base exposed — destroy it!', 3.5)
+          flashToast('Drowned base exposed — destroy it!', 3.5)
         }
       }
     }
@@ -2382,7 +2239,7 @@ function tryDamageAlienBase(hitPos, damage = 40) {
         }
       }
       playShipDeathFx(alienSiteRuntime.position, 40)
-      let baseMsg = `Alien base destroyed — +${credits} cr (site despawns in 5 min)`
+      let baseMsg = `Drowned base destroyed — +${credits} cr (site despawns in 5 min)`
       if (loot?.blueprints || loot?.skillbooks) baseMsg += ' · rare salvage in wreck!'
       flashToast(baseMsg, 4.5)
     }
@@ -2583,7 +2440,6 @@ function clearSession() {
   currentTarget = null
   cruiseIndicatorEl?.remove()
   audio.setThrustState(null)
-  audio.setSupercruiseActive(false)
   audio.stopAmbientMusic()
   audio.stopSeaAmbient()
   camera.fov = BASE_FOV
@@ -2599,7 +2455,6 @@ function clearSession() {
   characterOpen = false
   cruising = false
   wasCruising = false
-  audio.stopHyperspaceAudio()
   dockEffect = null
   dockedApproach = null
   clearProbeEffect()
@@ -3205,7 +3060,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
 
   if (offlineCraftDone.length) toastCraftCompleted(offlineCraftDone)
   if (anomaliesRefreshedOffline) {
-    flashToast('Spatial anomalies refreshed while you were away', 4.5)
+    flashToast('Anomalous signals refreshed while you were away', 4.5)
   }
 
   // Restore free-flight pose or re-dock at the station saved in the file.
@@ -4047,7 +3902,7 @@ function computeRadarContacts() {
     pushRadarContact(contacts, wreck.position, 'wreck', targeted ? Infinity : RADAR_RANGE, targeted)
   }
 
-  // Fully scanned Spatial Anomaly sites (relic, nodules, exposed alien base).
+  // Fully scanned Anomalous Signal sites (relic, nodules, exposed alien base).
   ensureSystemAnomalies(currentSystem, gameState.galaxy)
   for (const a of currentSystem.spatialAnomalies ?? []) {
     if (!a.fullyScanned) continue
@@ -4068,16 +3923,6 @@ function computeRadarContacts() {
   return contacts
 }
 
-// Route autopilot: cruise straight to the plotted waypoint. One sea, so a
-// route is a single leg — there is nothing to hop through on the way.
-function isRouteAutopilotActive() {
-  return false
-}
-
-function cancelRouteAutopilot() {}
-
-function updateRouteAutopilot() {}
-
 function dock(body) {
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   if (!canDockWithLaw(gameState, body, system)) {
@@ -4088,7 +3933,6 @@ function dock(body) {
     )
     return
   }
-  cancelRouteAutopilot()
   docked = true
   resetDockOrbit(dockedApproach?.approachDir ?? null)
   audio.setThrustState(null)
@@ -4302,7 +4146,6 @@ function beginDocking(body) {
     hideHudToast(cruiseIndicatorEl)
     gameState.player.ship.velocity = [0, 0, 0]
     gameState.player.ship.throttle = 0
-    audio.setSupercruiseActive(false)
   }
   exitFlightMode()
   dockPromptEl.style.display = 'none'
@@ -4888,7 +4731,7 @@ function getTargetableEntities() {
     }
   }
 
-  // Fully scanned Spatial Anomaly sites — central relic, nodules, alien base.
+  // Fully scanned Anomalous Signal sites — central relic, nodules, alien base.
   if (currentSystem) {
     ensureSystemAnomalies(currentSystem, gameState.galaxy)
     for (const a of currentSystem.spatialAnomalies ?? []) {
@@ -4937,7 +4780,7 @@ function getTargetableEntities() {
             position: a.position,
             dist: bd,
             radius: 110,
-            name: 'Alien base'
+            name: 'Drowned base'
           })
         }
       }
@@ -5273,7 +5116,7 @@ function resolveTarget() {
     const hull = Math.max(0, alienSiteRuntime.hull ?? 0)
     return {
       position: alienSiteRuntime.position,
-      name: 'Alien base',
+      name: 'Drowned base',
       hostile: true,
       hullPct: maxHull > 0 ? hull / maxHull : 0,
       hull,
@@ -5339,9 +5182,9 @@ function updateTargetIndicator() {
   if (target.hullPct !== null) {
     label.textContent = `${target.name} · ${Math.round(dist)}m · ${Math.round(target.hullPct * 100)}%`
   } else if (target.isAsteroid && target.oreLeft != null) {
-    // Show remaining ore so you know when the rock will explode.
+    // Remaining salvage on the hulk — when it hits zero the wreck breaks up.
     const maxBit = target.oreMax != null ? `/${target.oreMax}` : ''
-    label.textContent = `${target.name} · ${Math.round(dist)}m · ${target.oreLeft}${maxBit} ore`
+    label.textContent = `${target.name} · ${Math.round(dist)}m · ${target.oreLeft}${maxBit} salvage`
   } else {
     label.textContent = `${target.name}${kindBit} · ${Math.round(dist)}m`
   }
@@ -5531,12 +5374,12 @@ function getActiveWaypoint() {
         arrivalRange: autopilotArrivalRangeFor(body)
       }
     }
-    // Fully scanned Spatial Anomaly (overview waypoint)
+    // Fully scanned Anomalous Signal (overview waypoint)
     const anomaly = getAnomaly(currentSystem, gameState.player.waypointBodyId, gameState.galaxy)
     if (anomaly?.fullyScanned && anomaly.position) {
       return {
         position: anomaly.position,
-        name: anomaly.displayName || 'Spatial Anomaly',
+        name: anomaly.displayName || 'Anomalous Signal',
         bodyId: anomaly.id,
         isMission: true,
         arrivalRange: 900
@@ -5776,7 +5619,7 @@ function animate() {
           ensureSystemAnomalies(cur, gameState.galaxy)
           loadBodiesForCurrentSystem()
         }
-        flashToast('Spatial anomalies refreshed across the galaxy', 4.5)
+        flashToast('Anomalous signals refreshed across the region', 4.5)
       }
     }
   }
@@ -5806,7 +5649,6 @@ function animate() {
 
   if (docked) {
     spray.clear()
-    cancelRouteAutopilot()
     audio.setStrafeActive(false)
     if (targetDirEl) targetDirEl.style.display = 'none'
     applyDockedHud()
@@ -5817,15 +5659,12 @@ function animate() {
     syncMeshToEntity(playerMesh, gameState.player.ship)
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
     updateBodyVisibility()
-    ocean.setSurfObstacles(currentSurfObstacles(), camera)
     applyDockOrbitCamera()
     refreshEnvironment(gameState.simTime)
     render()
     return
   }
 
-  // Multi-hop Jump Route: 10s pause after each arrival, then auto-jump next hop.
-  updateRouteAutopilot(dt)
   updateAnomalySites(dt)
 
   // Probe flight runs in normal play (ship can still fly while it works).
@@ -5881,10 +5720,21 @@ function animate() {
         toastIfDepletedField(wp.bodyId)
       }
     }
-    // Under autopilot the engine is wide open — the cruise bed sits on top of
-    // it, it does not replace it.
+    // Autopilot uses the same diesel as the helm — no separate cruise bed.
     audio.setThrustState('accel')
-    audio.setEngineRevs(1)
+    const apSpeed = Math.hypot(
+      gameState.player.ship.velocity[0] ?? 0,
+      gameState.player.ship.velocity[2] ?? 0
+    )
+    const skillAp = playerSkillBonuses(gameState)
+    const apTop = Math.max(
+      1e-3,
+      (playerShipClass.stats?.speed ?? 1) *
+        (skillAp.speedMult ?? 1) *
+        (skillAp.cruiseMult ?? 1)
+    )
+    // Rev with actual speed (ramp-up / approach), never silent while under way.
+    audio.setEngineRevs(Math.min(1, Math.max(0.2, apSpeed / apTop)))
   } else {
     // Lay the turret first: it is the only consumer of the accumulated mouse
     // delta, and doing it before the hull moves keeps a click-to-fire between
@@ -5925,9 +5775,7 @@ function animate() {
   if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
   syncChaseCamera(camera, gameState.player.ship, { cruising, dt })
 
-  // Edge-detect engage/disengage so sample spool-down + voice callout both
-  // fire on auto-arrival, combat interrupt, and manual KeyC alike.
-  audio.setSupercruiseActive(cruising)
+  // Edge-detect engage/disengage for HUD + residual speed cleanup.
   if (cruising !== wasCruising) {
     if (cruising) {
       // Ramp starts at 0 every engage (see autopilot.AUTOPILOT_RAMP_UP_S).
@@ -6284,7 +6132,6 @@ function animate() {
   // Harbour beacons pulse. Land does not animate.
   for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
   updateBodyVisibility()
-  ocean.setSurfObstacles(currentSurfObstacles(), camera)
   // Depleted rocks "explode" (see onProjectileHit) and stay hidden until
   // their own respawn delay passes — isRockAlive is the single source of
   // truth for that, shared with targeting (getTargetableEntities/resolveTarget).

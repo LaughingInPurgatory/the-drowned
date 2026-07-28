@@ -1,5 +1,5 @@
 /**
- * World meshes for fully-scanned Spatial Anomaly sites.
+ * World meshes for fully-scanned Anomalous Signal sites.
  * Datacore: central relic + locked-crate nodules (Tab-target + F to hack).
  * Alien base: organic habitat cluster once waves clear.
  */

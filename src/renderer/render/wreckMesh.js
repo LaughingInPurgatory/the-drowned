@@ -116,7 +116,6 @@ export function buildWreckMesh(shipClass = null) {
   group.userData.bobAmp = 0.25 + Math.random() * 0.2
   group.userData.rollAmp = 0.04 + Math.random() * 0.05
   group.userData.spinSpeed = (Math.random() - 0.5) * 0.04
-  group.userData.surfRadius = L * 0.45
   group.rotation.y = Math.random() * Math.PI * 2
 
   return group

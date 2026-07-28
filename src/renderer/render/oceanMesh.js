@@ -14,15 +14,6 @@ const SEGMENTS = 220
 // point each frame, which shimmers. Snapping the centre to a quantum holds the
 // sample points still between steps.
 const CENTER_SNAP = 4
-// How many obstacles the surf pass can consider at once.
-//
-// Coast samples are many small shoreline patches (not one fat island circle),
-// so the budget needs room for a nearby beach ring plus harbours and hulls.
-// Each slot costs one distance test per pixel, with an early-out for anything
-// not close to its own band.
-const SURF_SLOTS = 48
-// Past this there is nothing to see through the fog anyway.
-const SURF_RANGE = 3500
 
 /**
  * Camera-centred radial disc: a ring of vertices every `RINGS` steps out from
@@ -108,14 +99,6 @@ uniform vec3 uSkyColor;
 uniform vec3 uZenithColor;
 uniform vec3 uFoamColor;
 uniform vec3 uAlgaeColor;
-// Nearby things the sea breaks against, packed as (x, z, radius). Count is
-// capped at SURF_SLOTS; unused slots carry radius 0 and are skipped.
-// (x, z, half-length along the axis, half-beam across it)
-uniform vec4 uSurf[${SURF_SLOTS}];
-// (axis x, axis z, strength) — the axis a hull lies along, and how hard the
-// water is breaking on it right now.
-uniform vec3 uSurfAxis[${SURF_SLOTS}];
-uniform int uSurfCount;
 varying vec3 vWorldPos;
 varying float vDetail;
 #include <fog_pars_fragment>
@@ -232,59 +215,6 @@ float algaeMask(vec2 p, float t) {
   return slick * smoothstep(-0.18, 0.34, streak);
 }
 
-/**
- * Surf: how hard the sea is breaking at this point.
- *
- * Water piling against something solid is the one visual cue that says a thing
- * is *in* the sea rather than pasted on top of it — a shoreline with no white
- * water at its foot always reads as a decal. There is no depth buffer to work
- * from here, so obstacles are fed in as circles: island coastlines, harbour
- * footprints and wreck-field shoals all reduce to a centre and a radius.
- *
- * Returns 0 in open water, rising to 1 right at the obstacle's edge.
- */
-float surfAt(vec2 p) {
-  float surf = 0.0;
-  for (int i = 0; i < ${SURF_SLOTS}; i++) {
-    if (i >= uSurfCount) break;
-    vec4 o = uSurf[i];
-    if (o.z <= 0.0) continue;
-    vec3 ax = uSurfAxis[i];
-    if (ax.z <= 0.001) continue;
-
-    // Into the obstacle's own frame: y along its axis, x across it. For an
-    // island or a harbour the two half-extents are equal and this is just a
-    // circle; for a hull they are not, and the foam then follows the ship's
-    // lines instead of ringing it in a circle that is far too wide at the bow
-    // and far too tight amidships.
-    vec2 rel = p - o.xy;
-    vec2 axis = normalize(ax.xy + vec2(1e-6, 0.0));
-    vec2 local = vec2(rel.x * axis.y - rel.y * axis.x, dot(rel, axis));
-    vec2 q = vec2(local.x / max(o.w, 0.05), local.y / max(o.z, 0.05));
-    float k = length(q);
-    if (k < 1e-5) continue;
-    // First-order distance to the ellipse: the unit-circle error divided by
-    // the gradient of the scaling, which is close enough for a foam band and
-    // far cheaper than solving it properly.
-    float grad = length(vec2(q.x / max(o.w, 0.05), q.y / max(o.z, 0.05)));
-    float d = (k - 1.0) / max(grad, 1e-5);
-
-    // Tight collar only. Was clamp(small*0.55, 3.5, 40) which threw a 40 m
-    // white halo around every harbour and island sample — foam should hug the
-    // edge, not flood the approach.
-    float small = min(o.z, o.w);
-    float outward = clamp(small * 0.28, 1.6, 9.0);
-    // Shorter on the inside — the lee of an obstacle is calmer than its face.
-    float inward = outward * 0.4;
-    float band = d >= 0.0 ? outward : inward;
-    if (abs(d) > band) continue;
-    float t = 1.0 - clamp(abs(d) / band, 0.0, 1.0);
-    // Cubic falloff keeps the peak thin and bright at the edge.
-    surf = max(surf, t * t * t * ax.z);
-  }
-  return surf;
-}
-
 void main() {
   // Shading detail runs much further out than the geometry does. Displacement
   // has to fade or huge far triangles turn the swell into noise, but the normal
@@ -380,23 +310,11 @@ void main() {
   col += moonTint * pow(ndmh, 340.0) * 1.1 * moonUp * uMoonBright;
   col += moonTint * pow(ndmh, 26.0) * 0.055 * moonUp * uMoonBright;
 
-  // Water breaking against land, quays and shoals. Sampled before the algae
-  // because a slick gets torn apart in the surf line, not painted over it.
-  float surf = surfAt(vWorldPos.xz) * shadeDetail;
-  // Ragged, and moving: a static band of white reads as a painted outline.
-  if (surf > 0.001) {
-    float churn = noised(vWorldPos.xz * 0.09 + vec2(uTime * 0.5, uTime * -0.34)).x;
-    churn += noised(vWorldPos.xz * 0.32 - vec2(uTime * 0.9, uTime * 0.6)).x * 0.55;
-    // Breathe the band; keep the multiplier modest so churn doesn't re-widen it.
-    float surge = 0.78 + 0.22 * sin(uTime * 0.55 + noised(vWorldPos.xz * 0.004).x * 6.0);
-    surf = clamp(surf * surge * smoothstep(-0.35, 0.4, churn) * 1.15, 0.0, 1.0);
-  }
-
   // Algae. Ash and run-off feed it, so the drowned world is thick with the
   // stuff — scattered slicks of green sitting on top of the water rather than
   // in it, which is why this tints the surface *after* the fresnel and
-  // scattering and before the foam breaks over it.
-  float algae = algaeMask(vWorldPos.xz, uTime) * shadeDetail * (1.0 - surf);
+  // scattering and before open-sea whitecaps.
+  float algae = algaeMask(vWorldPos.xz, uTime) * shadeDetail;
   // Algae is not bioluminescent. Without tying it to the light level the slicks
   // glow bright green in the middle of the night, which is the one thing on the
   // whole sea that was lighting itself.
@@ -411,8 +329,8 @@ void main() {
     col += uSunColor * pow(ndh, 60.0) * 0.06 * sunUp * (1.0 - algae);
   }
 
-  // Whitecaps — only the steeper crests, and quieter so object-tied surf reads
-  // as the main white water rather than the whole sea looking foamy.
+  // Whitecaps only on steeper crests — no object-tied shoreline "surf foam"
+  // (that path was more trouble than it was worth).
   float steepness = 1.0 - seaNormal(vWorldPos.xz, uTime).y;
   float foamMask = smoothstep(0.11, 0.26, steepness);
   float breakup = noised(vWorldPos.xz * 0.55 + vec2(uTime * 0.22, uTime * -0.16)).x;
@@ -421,8 +339,6 @@ void main() {
   // water at the same steepness.
   float foam = foamMask * smoothstep(-0.05, 0.35, breakup) * shadeDetail * (1.0 - algae * 0.75);
   col = mix(col, uFoamColor, clamp(foam, 0.0, 0.38));
-  // Surf goes on last and goes on hardest — thin white collar at solid edges.
-  col = mix(col, uFoamColor * 1.06, surf * 0.88);
 
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
@@ -455,10 +371,7 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uZenithColor: { value: new THREE.Color(0x3a6e96) },
         uFoamColor: { value: new THREE.Color(0xd8e6ec) },
         // Thin coastal slicks — kept muted so they don't muddy the whole sea.
-        uAlgaeColor: { value: new THREE.Color(0x2c4a32) },
-        uSurf: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector4()) },
-        uSurfAxis: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector3()) },
-        uSurfCount: { value: 0 }
+        uAlgaeColor: { value: new THREE.Color(0x2c4a32) }
       }
     ]),
     vertexShader: VERTEX,
@@ -480,50 +393,6 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
       0,
       Math.round(camera.position.z / CENTER_SNAP) * CENTER_SNAP
     )
-  }
-
-  /**
-   * Tell the water what it is breaking against.
-   *
-   * @param {Array<{x:number,z:number,radius:number,halfLength?:number,
-   *   halfBeam?:number,heading?:number,strength?:number}>} obstacles everything
-   *   the sea should surf against — island coastlines, harbour footprints,
-   *   shoals, hulls. `radius` gives a circle; `halfLength`/`halfBeam`/`heading`
-   *   give an oriented ellipse, which is what a ship needs. `strength` fades
-   *   it — a hull under way should not have a standing collar of foam, because
-   *   what it makes then is a wake.
-   *   Anything may be passed; the nearest SURF_SLOTS in range are kept.
-   * @param {THREE.Camera} camera picks which of them those are.
-   */
-  mesh.setSurfObstacles = (obstacles, camera) => {
-    const cx = camera.position.x
-    const cz = camera.position.z
-    const near = []
-    for (const o of obstacles) {
-      const halfLen = o.halfLength ?? o.radius ?? 0
-      const halfBeam = o.halfBeam ?? o.radius ?? 0
-      if (!(halfLen > 0) || !(halfBeam > 0)) continue
-      if ((o.strength ?? 1) <= 0.01) continue
-      const d = Math.hypot(o.x - cx, o.z - cz) - Math.max(halfLen, halfBeam)
-      if (d > SURF_RANGE) continue
-      near.push({ o, d, halfLen, halfBeam })
-    }
-    near.sort((a, b) => a.d - b.d)
-    const slots = material.uniforms.uSurf.value
-    const axes = material.uniforms.uSurfAxis.value
-    const n = Math.min(SURF_SLOTS, near.length)
-    for (let i = 0; i < n; i++) {
-      const { o, halfLen, halfBeam } = near[i]
-      slots[i].set(o.x, o.z, halfLen, halfBeam)
-      const h = o.heading ?? 0
-      axes[i].set(Math.sin(h), Math.cos(h), o.strength ?? 1)
-    }
-    // Zero the tail so a stale obstacle cannot keep foaming after we sail away.
-    for (let i = n; i < SURF_SLOTS; i++) {
-      slots[i].set(0, 0, 0, 0)
-      axes[i].set(0, 1, 0)
-    }
-    material.uniforms.uSurfCount.value = n
   }
 
   return mesh

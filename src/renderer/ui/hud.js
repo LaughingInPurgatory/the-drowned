@@ -552,7 +552,7 @@ export function createHud(container) {
         parts.push(barRow('Hull', info.hull ?? 0, info.maxHull, 'hull'))
       }
       if (info.oreMax != null && info.oreMax > 0) {
-        parts.push(barRow('Ore', info.oreLeft ?? 0, info.oreMax, 'ore'))
+        parts.push(barRow('Salvage', info.oreLeft ?? 0, info.oreMax, 'ore'))
       }
       targetBarsEl.innerHTML = parts.join('')
     },

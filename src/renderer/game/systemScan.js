@@ -1,5 +1,5 @@
 /**
- * Region Sonar Scan / Spatial Anomalies — drone scan of nearby hidden sites.
+ * Region Sonar Scan / Anomalous Signals — drone scan of nearby hidden sites.
  * Anomalies roll per system; scan progress lives on the system object (saved with galaxy).
  */
 import { mulberry32, pick, intRange, range } from '../procgen/prng.js'
@@ -28,10 +28,11 @@ export const SITE_SKILLBOOK_CHANCE = 0.008
 export const ORE_ANOMALY_FIELD_RADIUS = 260
 
 const ANOMALY_DISPLAY_NAMES = {
-  alien_incursion: 'Alien Incursion',
+  // Faction id is still `alien` in code; player-facing name is The Drowned.
+  alien_incursion: 'Drowned Incursion',
   datacore: 'Datacore Relic',
   datacore_takeover: 'Datacore Takeover',
-  alien_datacore: 'Alien Datacore',
+  alien_datacore: 'Pre-war Datacore',
   ore_anomaly: 'Rare Salvage Cache'
 }
 
@@ -354,7 +355,7 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
       signal: 0,
       scanProgress: 0,
       fullyScanned: false,
-      displayName: 'Spatial Anomaly',
+      displayName: 'Anomalous Signal',
       status: 'hidden', // hidden | scanned | active | completed | despawning
       despawnAt: null,
       epoch
@@ -530,7 +531,7 @@ export function updateSystemScan(system, probePositions, shipClass, dt) {
       a.signal = 1
       a.scanProgress = 1
       a.status = 'scanned'
-      a.displayName = ANOMALY_DISPLAY_NAMES[a.type] ?? 'Spatial Anomaly'
+      a.displayName = ANOMALY_DISPLAY_NAMES[a.type] ?? 'Anomalous Signal'
       fullyScanned.push(a)
     }
   }

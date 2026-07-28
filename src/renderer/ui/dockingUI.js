@@ -1489,7 +1489,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
           ${equippedId
             ? `<div class="lo-equipped">
             ${itemNameCell(itemIcon('weapon', { weaponCategory: mountType, alien: equippedAlien }), equippedName)}
-            ${equippedAlien ? '<span class="lo-badge">Alien</span>' : ''}
+            ${equippedAlien ? '<span class="lo-badge">Drowned</span>' : ''}
             ${equippedMeta ? `<span class="lo-meta">${escapeHtml(equippedMeta)}</span>` : ''}
           </div>`
             : '<div class="lo-empty-slot">No weapon fitted</div>'}

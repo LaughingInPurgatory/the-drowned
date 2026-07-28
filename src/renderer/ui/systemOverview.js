@@ -129,7 +129,7 @@ export function createSystemOverview(container, gameState, hooks = {}) {
     const missionBodies = missionMarkedBodyIds(gameState, system.id)
     const anomalyRows = overviewAnomalies(system, gameState.galaxy).map((a) => ({
       id: a.id,
-      name: a.displayName || 'Spatial Anomaly',
+      name: a.displayName || 'Anomalous Signal',
       kind: a.type === 'alien_incursion' ? 'alien_incursion' : isDatacoreType(a.type) ? a.type : 'anomaly',
       position: a.position,
       anomaly: true

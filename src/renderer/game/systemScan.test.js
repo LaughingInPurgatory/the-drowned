@@ -167,7 +167,7 @@ test('updateSystemScan can fully lock a nearby anomaly', () => {
       scanProgress: 0,
       fullyScanned: false,
       status: 'hidden',
-      displayName: 'Spatial Anomaly'
+      displayName: 'Anomalous Signal'
     }
   ]
   const probes = Array.from({ length: 4 }, (_, i) => {
@@ -181,7 +181,7 @@ test('updateSystemScan can fully lock a nearby anomaly', () => {
     if (s.spatialAnomalies[0].fullyScanned) break
   }
   assert.equal(s.spatialAnomalies[0].fullyScanned, true)
-  assert.equal(s.spatialAnomalies[0].displayName, 'Alien Incursion')
+  assert.equal(s.spatialAnomalies[0].displayName, 'Drowned Incursion')
   assert.ok(done.length >= 1)
 })
 
