@@ -8,6 +8,7 @@ import { getBlueprint } from '../data/blueprints.js'
 import { mulberry32, pick } from '../procgen/prng.js'
 import { oreTierForField } from './mining.js'
 import { tryRollProbeSkillbook, getSkillDef, playerSkillBonuses } from './skills.js'
+import { landformForBody } from '../render/islandMesh.js'
 
 /** Chance a sounding turns up saleable survey data. */
 export const PROBE_FIND_CHANCE = 0.08
@@ -108,6 +109,23 @@ export function probeSurveyReport(body, system) {
     const arch = planetArchetypeForBody(body)
     // Extra flavour rolls on a separate stream so they cannot desync the mesh.
     const flavor = mulberry32(hashString(`${body.id}:probe-survey`))
+    const landform = landformForBody(body)
+
+    // Mountain tips dominate the survey — shape matters more than surface paint.
+    if (landform === 'spire') {
+      lines.push('Land type: Mountain tip — the peak of a drowned range')
+      lines.push('Surface: Craggy rock, nearly vertical flanks, no beach to speak of')
+      lines.push('Vegetation: None — bare stone from the waterline to the summit')
+      lines.push('Hazards: Falling rock, no shelter, deep water hard against the cliff')
+      lines.push(
+        flavor() < 0.3
+          ? 'Note: A navigational mark visible for many miles in clear weather'
+          : 'Note: The rest of the mountain is under you. Sound carefully near the walls.'
+      )
+      lines.push('Anchorage: None. Cliffs into the depths; keep clear in weather.')
+      return lines
+    }
+
     lines.push(`Land type: ${ARCHETYPE_LABEL[arch] ?? arch}`)
 
     if (arch === 'drowned') {

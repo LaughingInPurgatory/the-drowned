@@ -144,7 +144,9 @@ let sfxLoadPromise = null
 // sci-fi dock samples are gone.
 const SFX_FILES = [
   'engine_engage.ogg',
-  'rocket.ogg', 'missile.ogg', 'torpedo.ogg'
+  'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
+  // Sounding (P) — CC0 Freesound samples; see public/audio/sfx/SONAR_CREDITS.txt
+  'sonar_ping.ogg', 'sonar_return.ogg'
 ]
 
 function ensureSfx() {
@@ -707,7 +709,7 @@ export function playDockThrusterPulse() {
 let seaAmbient = null
 let seaLapTimer = null
 /** Peak gain for the continuous wash — keep low so dialogue/engines win. */
-const SEA_AMBIENT_VOLUME = 0.032
+const SEA_AMBIENT_VOLUME = 0.058
 
 function scheduleSeaLap() {
   if (!seaAmbient) return
@@ -719,7 +721,7 @@ function scheduleSeaLap() {
       scheduleSeaLap()
       return
     }
-    const peak = 0.018 + Math.random() * 0.02
+    const peak = 0.024 + Math.random() * 0.024
     noiseBurst({
       duration: 0.4 + Math.random() * 0.55,
       filterFreq: 220 + Math.random() * 280,
@@ -746,7 +748,20 @@ function scheduleSeaLap() {
  */
 export function startSeaAmbient() {
   ensureSfx()
-  if (seaAmbient) return
+  if (seaAmbient) {
+    // Already running (e.g. HMR volume tweak) — ease to the current constant.
+    try {
+      const audio = getContext()
+      const now = audio.currentTime
+      const g = seaAmbient.gain
+      g.gain.cancelScheduledValues(now)
+      g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), now)
+      g.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME, now + 0.6)
+    } catch {
+      /* */
+    }
+    return
+  }
   const audio = getContext()
   // 6 s loop of filtered brown noise — reads as continuous water, not static.
   const seconds = 6
@@ -993,39 +1008,43 @@ export function stopWeatherAudio(fadeOut = 0.8) {
 }
 
 /**
- * Classic movie sonar ping — the submarine “ping” everyone knows.
+ * Active sounding ping (P key).
  *
- * Pure mid-range sine, knife-edge attack, long exponential decay, slight
- * downward drift, muffled by a bandpass (water), then a quieter echo return.
- * Not a sci-fi zap and not a pitch-dive “pew”.
+ * Prefers a real CC0 sample (classic submarine ping with reverb). Falls back
+ * to the old oscillator stack if the buffer is not loaded yet.
  */
 export function playSonarPing(index = 0) {
   ensureSfx()
+  // Slight pitch step per ring in a sounding burst.
+  const rate = 1.0 - (index % 5) * 0.035
+  if (playSample('sonar_ping.ogg', { volume: 0.55, rate: rate * (0.98 + Math.random() * 0.04) })) {
+    return
+  }
+  playSonarPingSynth(index)
+}
+
+/** Synth fallback — knife-edge sine with underwater bandpass + echo. */
+function playSonarPingSynth(index = 0) {
   const audio = getContext()
-  // Slight pitch step per ring in a sounding burst (~semitone family).
   const freq = 880 - (index % 5) * 45
   const start = audio.currentTime
   const duration = 2.4
 
-  // Master for this ping (dry + wet echo).
   const master = audio.createGain()
   master.gain.setValueAtTime(1, start)
   master.connect(getMasterDestination())
 
-  // Water body: bandpass so it reads underwater, not a dry lab oscillator.
   const band = audio.createBiquadFilter()
   band.type = 'bandpass'
   band.frequency.setValueAtTime(freq, start)
   band.Q.setValueAtTime(2.2, start)
 
-  // Soft low shelf keeps the body without a harsh tick.
   const low = audio.createBiquadFilter()
   low.type = 'lowshelf'
   low.frequency.setValueAtTime(400, start)
   low.gain.setValueAtTime(2.5, start)
 
   const dryGain = audio.createGain()
-  // Instant strike, long underwater tail (exponential → 0).
   dryGain.gain.setValueAtTime(0.0001, start)
   dryGain.gain.exponentialRampToValueAtTime(0.22, start + 0.008)
   dryGain.gain.exponentialRampToValueAtTime(0.0001, start + duration)
@@ -1033,10 +1052,8 @@ export function playSonarPing(index = 0) {
   const osc = audio.createOscillator()
   osc.type = 'sine'
   osc.frequency.setValueAtTime(freq, start)
-  // Barely any gliss — classic pings hold pitch; a tiny drop sells distance.
   osc.frequency.exponentialRampToValueAtTime(freq * 0.92, start + duration)
 
-  // Quiet second harmonic for a touch of metal plate, not a square.
   const harm = audio.createOscillator()
   harm.type = 'sine'
   harm.frequency.setValueAtTime(freq * 2, start)
@@ -1053,7 +1070,6 @@ export function playSonarPing(index = 0) {
   low.connect(band)
   band.connect(master)
 
-  // Echo return — quieter, darker, delayed like a bounce off something out there.
   const delay = audio.createDelay(2.5)
   delay.delayTime.setValueAtTime(0.95 + (index % 3) * 0.08, start)
   const echoFilter = audio.createBiquadFilter()
@@ -1068,7 +1084,6 @@ export function playSonarPing(index = 0) {
   echoFilter.connect(echoGain)
   echoGain.connect(master)
 
-  // Very soft second bounce.
   const delay2 = audio.createDelay(3)
   delay2.delayTime.setValueAtTime(1.7, start)
   const echo2Gain = audio.createGain()
@@ -1085,9 +1100,13 @@ export function playSonarPing(index = 0) {
   harm.stop(start + duration + 0.05)
 }
 
-/** Whatever came back. Soft double ping — contact. */
+/** Whatever came back. Soft contact ping. */
 export function playSonarReturn() {
   ensureSfx()
+  if (playSample('sonar_return.ogg', { volume: 0.42, rate: 1.05 + Math.random() * 0.08 })) {
+    return
+  }
+  // Synth fallback — soft double tone.
   const audio = getContext()
   const start = audio.currentTime
   for (const [delay, freq, peak] of [

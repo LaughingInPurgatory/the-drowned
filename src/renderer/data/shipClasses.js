@@ -1259,34 +1259,97 @@ for (const c of SHIP_CLASSES) {
  */
 const HULL_DEPTH_SCALE = 2
 /**
- * Least fraction of a section's depth that must sit above the waterline.
- *
- * This is the half of the problem depth alone does not fix. The generated
- * roster authors a freeboard offset, but the hand-crafted classes carry no
- * `stationOffsetsY` at all — their sections are centred on y = 0, so they float
- * exactly half submerged however deep you make them. That is literally "sitting
- * half in it". Raising every hull to a floor here lifts the flat ones without
- * flattening the sheer the roster went to the trouble of drawing.
+ * Space-era hulls were pencil-thin (L/B often 7–9). Deck houses, masts and
+ * bulwarks were authored against that beam and hang off the rail. A modest
+ * widen gives a working deck without turning freighters into barges.
+ */
+const HULL_BEAM_SCALE = 1.24
+/**
+ * Least fraction of a section's half-depth that must sit above the waterline
+ * amidships. Hand-crafted classes were centred on y = 0 (half submerged); this
+ * floors freeboard so every hull floats rather than sits in the surface.
  */
 const MIN_FREEBOARD_FRACTION = 0.42
-/** Rise of the deck line toward the bow on hulls that had none authored. */
-const DEFAULT_SHEER = 0.22
+/**
+ * Deck rise at the stem above the midships deck, as a fraction of mid half-depth.
+ *
+ * The previous pass scaled sheer by *local* height. Needle bows (tiny h) got
+ * almost no lift, so the deck line *dropped* toward the ends — the opposite of
+ * a boat. Sheer is measured from the midships deck now, and depth is solved so
+ * the keel still kisses the water (rocker) instead of the whole bow lifting off.
+ */
+const SHEER_BOW = 0.55
+/** Transom deck rise — quieter than the bow, still a clear counter. */
+const SHEER_AFT = 0.32
+/**
+ * How far the keel may climb toward the surface at the ends, as a fraction of
+ * midships draft. 0 = flat keel; 1 = forefoot at the waterline. Enough rocker
+ * to read as a boat, not so much the ends fly clear of the sea.
+ */
+const ROCKER_BOW = 0.5
+const ROCKER_AFT = 0.28
 
 for (const c of SHIP_CLASSES) {
   const hull = c?.hull
   if (!hull?.stationHeights?.length) continue
-  hull.stationHeights = hull.stationHeights.map((h) => h * HULL_DEPTH_SCALE)
+
+  if (hull.stationWidths?.length) {
+    hull.stationWidths = hull.stationWidths.map((w) => w * HULL_BEAM_SCALE)
+  }
+  if (hull.stationOffsetsX?.length) {
+    hull.stationOffsetsX = hull.stationOffsetsX.map((x) => x * HULL_BEAM_SCALE)
+  }
 
   const last = Math.max(1, hull.stationHeights.length - 1)
+  const heightsIn = hull.stationHeights.map((h) => h * HULL_DEPTH_SCALE)
   const authored = hull.stationOffsetsY
-  hull.stationOffsetsY = hull.stationHeights.map((h, i) => {
-    const scaled = (authored?.[i] ?? 0) * HULL_DEPTH_SCALE
+
+  // Working-deck reference: deepest authored station (usually midships).
+  let midIdx = 0
+  for (let i = 1; i < heightsIn.length; i++) {
+    if (heightsIn[i] > heightsIn[midIdx]) midIdx = i
+  }
+
+  const midH = heightsIn[midIdx]
+  const midOy = Math.max(
+    (authored?.[midIdx] ?? 0) * HULL_DEPTH_SCALE,
+    midH * MIN_FREEBOARD_FRACTION
+  )
+  const midDeck = midH + midOy
+  const midKeel = midOy - midH
+  const midDraft = Math.max(1e-3, -midKeel)
+
+  const heights = []
+  const offsetsY = []
+  for (let i = 0; i < heightsIn.length; i++) {
     const t = i / last
-    // Classic sheer: lowest around midships where the working deck is, rising
-    // toward the bow so she lifts over a sea, with a little back at the transom.
-    const curve = Math.pow(t, 2.2) * DEFAULT_SHEER + Math.pow(1 - t, 3) * DEFAULT_SHEER * 0.35
-    return Math.max(scaled, h * (MIN_FREEBOARD_FRACTION + curve))
-  })
+    const sheerUp =
+      Math.pow(t, 1.7) * SHEER_BOW * midH + Math.pow(1 - t, 2.6) * SHEER_AFT * midH
+    const rockerUp =
+      Math.pow(t, 2.0) * ROCKER_BOW * midDraft + Math.pow(1 - t, 2.8) * ROCKER_AFT * midDraft
+
+    // Target waterlines for this station: deck rises (sheer), keel rises less
+    // (rocker). Depth is whatever sits between them.
+    const targetDeck = midDeck + sheerUp
+    const targetKeel = midKeel + rockerUp
+
+    let h = Math.max(heightsIn[i], (targetDeck - targetKeel) * 0.5)
+    let oy = targetDeck - h
+    // If authored freeboard wanted the section higher, honour it without
+    // drowning the keel below the rocker target.
+    const scaled = (authored?.[i] ?? 0) * HULL_DEPTH_SCALE
+    if (scaled > oy) {
+      oy = scaled
+      h = Math.max(h, oy - targetKeel)
+      // Keep the deck at least at the sheer target.
+      if (oy + h < targetDeck) h = targetDeck - oy
+    }
+
+    heights.push(h)
+    offsetsY.push(oy)
+  }
+  hull.stationHeights = heights
+  hull.stationOffsetsY = offsetsY
 }
 
 /**

@@ -19,18 +19,30 @@ const cache = {}
 // Configure wrap/colorSpace only in the load callback. Setting those on an
 // empty Texture marks needsUpdate before image data exists, which spams
 // "Texture marked for update but no image data found" every frame until load.
-function loadMap(url, { srgb = false, repeatU, repeatV } = {}) {
-  return loader.load(url, (tex) => {
-    if (srgb) tex.colorSpace = THREE.SRGBColorSpace
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-    tex.repeat.set(repeatU, repeatV)
-    // High anisotropy so dense station plating stays sharp at glancing angles.
-    tex.anisotropy = 16
-    tex.minFilter = THREE.LinearMipmapLinearFilter
-    tex.magFilter = THREE.LinearFilter
-    tex.generateMipmaps = true
-    tex.needsUpdate = true
-  })
+function configureMap(tex, { srgb = false, repeatU = 1, repeatV = 1 } = {}) {
+  if (srgb) tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.repeat.set(repeatU, repeatV)
+  // High anisotropy so dense plating / terrain stays sharp at glancing angles.
+  tex.anisotropy = 16
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  tex.magFilter = THREE.LinearFilter
+  tex.generateMipmaps = true
+  tex.needsUpdate = true
+  return tex
+}
+
+function loadMap(url, opts = {}) {
+  // Configure the placeholder immediately so wrap/colorSpace are right the
+  // moment the image arrives (and so we never leave a 0-size default that
+  // reads as a solid tint when multiplied by vertex colour).
+  const tex = loader.load(
+    url,
+    (t) => configureMap(t, opts),
+    undefined,
+    () => console.warn('[textures] failed to load', url)
+  )
+  return configureMap(tex, opts)
 }
 
 function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {}) {
@@ -54,120 +66,103 @@ function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {
 
 // CC0 (public domain, no attribution required) PBR photo textures from
 // ambientCG (ambientcg.com), tiled via RepeatWrapping so a handful of source
-// sets cover every surface on the sea. `sand` is generated instead (see above).
-// Returns undefined only in a headless context with no canvas.
+// sets cover every surface on the sea. See public/textures/AMBIENTCG_CC0.txt.
 //
-// These are island *surfaces*, not island archetypes. An island mixes two of these (see
-// render/islandMesh.js), so a rocky headland can have a sandy beach and a
-// grassy top without needing a texture per combination.
+// These are island *surfaces*, not island archetypes. An island mixes two of
+// these (see render/islandMesh.js), so a rocky headland can have a sandy beach
+// and a grassy top without needing a texture per combination.
+//
+//   sand    ← Ground037   gravel/shingle ← Gravel025
+//   grass   ← Grass003    rock/rocky     ← Rock048
+//   concrete ← Concrete034  brick ← Bricks075A  boulder ← Rock051
 const ARCHETYPE_PREFIX = {
+  sand: 'sand',
+  shingle: 'gravel',
   rocky: 'rock',
   barren: 'rock',
-  grass: 'lush',
-  scrub: 'lush',
-  ruin: 'plates',
-  drowned: 'plates',
+  grass: 'grass',
+  scrub: 'grass',
+  ruin: 'concrete',
+  drowned: 'concrete',
   works: 'darkmetal',
   industrial: 'darkmetal',
   volcanic: 'lava',
-  ash: 'lava'
+  ash: 'lava',
+  concrete: 'concrete',
+  brick: 'brick',
+  boulder: 'boulder'
 }
 
 /**
- * Sand. There is no CC0 sand set in the pack, and every shore wants one, so it
- * is generated: fine grain, a few shell flecks, and the ripple the tide leaves.
- * Cheap enough to bake once at boot and share across every beach on the sea.
+ * Island / terrain surface maps by surface key (see islandMesh SURFACES.tex).
+ * Returns undefined only headless (tests) or for unknown keys.
  */
-function makeSandTextureSet() {
-  const key = 'sand|proc|v1'
-  if (cache[key]) return cache[key]
-  const hasDom = typeof document !== 'undefined' && typeof document.createElement === 'function'
-  const hasOffscreen = typeof OffscreenCanvas !== 'undefined'
-  if (!hasDom && !hasOffscreen) return undefined
-
-  const S = 512
-  const make = () => {
-    const c = hasDom ? document.createElement('canvas') : new OffscreenCanvas(S, S)
-    c.width = S
-    c.height = S
-    return c
-  }
-
-  const albedo = make()
-  const ac = albedo.getContext('2d', { willReadFrequently: true })
-  if (!ac) return undefined
-  const img = ac.createImageData(S, S)
-  const d = img.data
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const i = (y * S + x) * 4
-      // Fine grain, plus a long low ripple across the beach.
-      const grain = (Math.random() - 0.5) * 26
-      const ripple = Math.sin(x * 0.09 + Math.sin(y * 0.021) * 2.2) * 7
-      const v = 196 + grain + ripple
-      d[i] = Math.max(0, Math.min(255, v))
-      d[i + 1] = Math.max(0, Math.min(255, v - 12))
-      d[i + 2] = Math.max(0, Math.min(255, v - 42))
-      d[i + 3] = 255
-    }
-  }
-  ac.putImageData(img, 0, 0)
-  // Shell and pebble flecks.
-  for (let i = 0; i < 900; i++) {
-    const x = Math.random() * S
-    const y = Math.random() * S
-    const r = 0.4 + Math.random() * 1.5
-    ac.fillStyle = Math.random() < 0.6 ? 'rgba(238,232,214,0.7)' : 'rgba(120,104,84,0.55)'
-    ac.beginPath()
-    ac.arc(x, y, r, 0, Math.PI * 2)
-    ac.fill()
-  }
-
-  // Normal map from the albedo's luminance — the grain is the relief.
-  const normal = make()
-  const nc = normal.getContext('2d', { willReadFrequently: true })
-  const src = ac.getImageData(0, 0, S, S).data
-  const nImg = nc.createImageData(S, S)
-  const nd = nImg.data
-  const lum = (x, y) => {
-    const i = ((((y % S) + S) % S) * S + (((x % S) + S) % S)) * 4
-    return src[i] / 255
-  }
-  for (let y = 0; y < S; y++) {
-    for (let x = 0; x < S; x++) {
-      const i = (y * S + x) * 4
-      const dx = lum(x + 1, y) - lum(x - 1, y)
-      const dy = lum(x, y + 1) - lum(x, y - 1)
-      nd[i] = Math.max(0, Math.min(255, 128 - dx * 300))
-      nd[i + 1] = Math.max(0, Math.min(255, 128 - dy * 300))
-      nd[i + 2] = 255
-      nd[i + 3] = 255
-    }
-  }
-  nc.putImageData(nImg, 0, 0)
-
-  const wrap = (src, srgb = false) => {
-    const tex = new THREE.CanvasTexture(src)
-    if (srgb) tex.colorSpace = THREE.SRGBColorSpace
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
-    tex.repeat.set(1, 1)
-    tex.anisotropy = 8
-    tex.minFilter = THREE.LinearMipmapLinearFilter
-    tex.magFilter = THREE.LinearFilter
-    tex.generateMipmaps = true
-    tex.needsUpdate = true
-    return tex
-  }
-
-  const set = { map: wrap(albedo, true), normalMap: wrap(normal, false) }
-  cache[key] = set
-  return set
+export function getSurfaceTextures(archetype) {
+  const prefix = ARCHETYPE_PREFIX[archetype]
+  if (!prefix) return undefined
+  // Island UVs are world XZ / TEXTURE_SCALE. Keep texture.repeat modest so
+  // tiles stay large enough to read from the title-orbit distance (~2–3 km),
+  // not fine noise that mipmaps into a solid plastic colour.
+  if (prefix === 'sand') return loadSet(prefix, { repeatU: 0.85, repeatV: 0.85 })
+  if (prefix === 'gravel') return loadSet(prefix, { repeatU: 0.9, repeatV: 0.9 })
+  if (prefix === 'grass') return loadSet(prefix, { repeatU: 0.75, repeatV: 0.75 })
+  if (prefix === 'rock') return loadSet(prefix, { repeatU: 0.7, repeatV: 0.7 })
+  if (prefix === 'concrete') return loadSet(prefix, { repeatU: 0.85, repeatV: 0.85 })
+  if (prefix === 'brick') return loadSet(prefix, { repeatU: 0.9, repeatV: 0.9 })
+  if (prefix === 'boulder') return loadSet(prefix, { repeatU: 0.65, repeatV: 0.65 })
+  return loadSet(prefix)
 }
 
-export function getSurfaceTextures(archetype) {
-  if (archetype === 'sand') return makeSandTextureSet()
-  const prefix = ARCHETYPE_PREFIX[archetype]
-  return prefix ? loadSet(prefix) : undefined
+/**
+ * Prop-scale maps (shore boulders, ruin walls, tree bark). Coarse enough that
+ * masonry still reads from a few hundred metres, not a solid grey face.
+ */
+export function getPropTextures(kind) {
+  if (kind === 'boulder') return loadSet('boulder', { repeatU: 1.1, repeatV: 1.1 })
+  if (kind === 'concrete') return loadSet('concrete', { repeatU: 1.2, repeatV: 1.2 })
+  if (kind === 'brick') return loadSet('brick', { repeatU: 1.35, repeatV: 1.35 })
+  if (kind === 'rock') return loadSet('rock', { repeatU: 1.0, repeatV: 1.0 })
+  // Tree trunks — ambientCG Bark012. Tighter tile than terrain so bark reads
+  // on ~2-unit baked protos that are later scaled up at placement.
+  if (kind === 'bark') return loadSet('bark', { repeatU: 1.6, repeatV: 1.6 })
+  return getSurfaceTextures(kind)
+}
+
+/**
+ * Vegetation maps: foliage reuses island grass; trunks use bark.
+ * Shared across every plant clone (maps are read-only).
+ */
+export function getPlantTextures(kind) {
+  if (kind === 'foliage' || kind === 'grass') {
+    // Slightly denser than island ground so canopies keep leaf grain after scale.
+    return loadSet('grass', { repeatU: 1.4, repeatV: 1.4 })
+  }
+  if (kind === 'bark' || kind === 'trunk') return getPropTextures('bark')
+  return undefined
+}
+
+/**
+ * Ocean micro-detail normal (Foam001 NormalGL, CC0). Not an albedo — used only
+ * as high-frequency normal detail that fades with distance so the open sea
+ * does not tile into a repeating photo.
+ */
+export function getWaterNormalMap() {
+  const key = 'water|normal|v1'
+  if (cache[key]) return cache[key]
+  if (typeof document === 'undefined') return undefined
+  loader ??= new THREE.TextureLoader()
+  const tex = loader.load('textures/water_normal.jpg', (t) => {
+    t.wrapS = t.wrapT = THREE.RepeatWrapping
+    t.repeat.set(1, 1)
+    t.anisotropy = 8
+    t.minFilter = THREE.LinearMipmapLinearFilter
+    t.magFilter = THREE.LinearFilter
+    t.generateMipmaps = true
+    t.needsUpdate = true
+  })
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  cache[key] = tex
+  return tex
 }
 
 // Station / settlement / bay-interior surface roles — ambientCG CC0, tiled
@@ -193,12 +188,15 @@ const STATION_ROLE = {
   // not gravel, and a tight tile makes them read as sandpaper.
   rubble: { prefix: 'rock', repeatU: 2.2, repeatV: 2.2 },
   settlementPanel: { prefix: 'plates', repeatU: 14, repeatV: 12 },
-  // Ship-specific CC0 maps (ambientCG PaintedMetal001 / Metal021 / MetalPlates013 / Metal009).
-  // Tint with MeshStandardMaterial.color — painted hull takes class color best.
-  shipHull: { prefix: 'painted', repeatU: 2.4, repeatV: 1.6 },
-  shipStructure: { prefix: 'shipmetal', repeatU: 2.0, repeatV: 1.4 },
-  shipArmor: { prefix: 'armor', repeatU: 1.8, repeatV: 1.3 },
-  shipTrim: { prefix: 'trim', repeatU: 2.2, repeatV: 1.5 },
+  // Ship hulls — neutral/grey photo metals that tint cleanly with class color.
+  // `painted` is baked bright orange and muddies every tint; rust-streaked
+  // armor / freckled shipmetal / mottled darkmetal read as worn plate instead.
+  shipHull: { prefix: 'armor', repeatU: 3.0, repeatV: 2.2 },
+  shipStructure: { prefix: 'shipmetal', repeatU: 2.6, repeatV: 1.9 },
+  shipArmor: { prefix: 'darkmetal', repeatU: 2.4, repeatV: 1.8 },
+  shipTrim: { prefix: 'trim', repeatU: 2.8, repeatV: 2.0 },
+  // Cleaner plate for police / fresher paint jobs.
+  shipPaint: { prefix: 'plates', repeatU: 2.8, repeatV: 2.0 },
   // Alien hulls — ambientCG Rock035 (organic) + MetalPlates006 (chitin plates), CC0.
   alienHull: { prefix: 'alienbio', repeatU: 1.8, repeatV: 1.4 },
   alienPlate: { prefix: 'alienplate', repeatU: 2.2, repeatV: 1.6 }
@@ -451,6 +449,29 @@ export function stationMaterialMaps(role, normalStrength = STATION_NORMAL_STRENG
     aoMap: wear?.aoMap,
     aoMapIntensity: wear?.aoMap ? 0.9 : undefined,
     normalScale: new THREE.Vector2(normalStrength * 0.85, normalStrength * 0.85)
+  }
+}
+
+/**
+ * Ship PBR maps: use the ambientCG photo sets as the albedo.
+ *
+ * `stationMaterialMaps` swaps in a procedural panel grid so huge station walls
+ * never read as plastic. On a 20 m boat that grid is the whole silhouette and
+ * kills the worn-metal look. Ships keep the photo color / normal / roughness /
+ * metalness and only borrow the wear set as soft AO grime.
+ */
+export function shipMaterialMaps(role, normalStrength = 1.15) {
+  const t = getStationTextures(role)
+  if (!t?.map && !t?.normalMap) return {}
+  const wear = getStationWearTextures()
+  return {
+    map: t.map,
+    normalMap: t.normalMap,
+    roughnessMap: t.roughnessMap,
+    metalnessMap: t.metalnessMap,
+    aoMap: wear?.aoMap ?? wear?.map,
+    aoMapIntensity: wear?.aoMap || wear?.map ? 0.45 : undefined,
+    normalScale: new THREE.Vector2(normalStrength, normalStrength)
   }
 }
 

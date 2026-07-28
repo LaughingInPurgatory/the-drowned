@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { seaShaderChunk, SEA_MAX_AMPLITUDE } from '../world/sea.js'
+import { getWaterNormalMap } from './textures.js'
 
 // Radius the water reaches. Well past the fog wall — the surface must still be
 // there when a crest lifts the camera, or you get a hole at the horizon.
@@ -108,6 +109,9 @@ uniform float uSearchIntensity;
 uniform float uSearchRange;
 uniform float uSearchCosOuter;
 uniform float uSearchCosInner;
+// Micro-detail normal map (CC0). Dual-scroll, fades with distance — not albedo.
+uniform sampler2D uWaterNormal;
+uniform float uWaterNormalStrength;
 varying vec3 vWorldPos;
 varying float vDetail;
 #include <fog_pars_fragment>
@@ -247,6 +251,19 @@ void main() {
   float rippleFade = 1.0 - smoothstep(80.0, 3200.0, dist);
   vec2 rs = rippleSlope(vWorldPos.xz, uTime, rippleFade);
   vec3 Ndetail = normalize(vec3(N.x - rs.x * 1.15, N.y, N.z - rs.y * 1.15));
+  // Photo normal detail — two scales, slow scroll so the sea feels alive without
+  // locking a tiled photo to the camera. Fades long before the horizon.
+  float texFade = (1.0 - smoothstep(90.0, 1600.0, dist)) * rippleFade;
+  if (uWaterNormalStrength > 0.001 && texFade > 0.002) {
+    vec2 driftA = vWorldPos.xz * 0.045 + uTime * vec2(0.011, 0.007);
+    vec2 driftB = vWorldPos.xz * 0.09 - uTime * vec2(0.006, 0.013);
+    vec3 tnA = texture2D(uWaterNormal, driftA).xyz * 2.0 - 1.0;
+    vec3 tnB = texture2D(uWaterNormal, driftB).xyz * 2.0 - 1.0;
+    vec3 tn = normalize(tnA + tnB);
+    float s = uWaterNormalStrength * texFade;
+    // Map tangent-space XY into world XZ slopes (Y up).
+    Ndetail = normalize(vec3(Ndetail.x + tn.x * s, Ndetail.y, Ndetail.z + tn.y * s));
+  }
   Ndetail = normalize(mix(vec3(0.0, 1.0, 0.0), Ndetail, shadeDetail));
   // Trace of ripple in body only — too much reads as wet plastic, not water.
   N = normalize(mix(N, Ndetail, 0.14));
@@ -391,6 +408,16 @@ void main() {
  * before rendering, with the same `t` the buoyancy maths is using.
  */
 export function createOcean({ sunDirection, skyColor, fogColor }) {
+  // Flat normal (0.5, 0.5, 1) so headless / missing file still compiles cleanly.
+  const fallbackNormal = new THREE.DataTexture(
+    new Uint8Array([128, 128, 255, 255]),
+    1,
+    1,
+    THREE.RGBAFormat
+  )
+  fallbackNormal.needsUpdate = true
+  const waterNormal = getWaterNormalMap() ?? fallbackNormal
+
   const material = new THREE.ShaderMaterial({
     uniforms: THREE.UniformsUtils.merge([
       THREE.UniformsLib.fog,
@@ -417,7 +444,10 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uSearchIntensity: { value: 0 },
         uSearchRange: { value: 140 },
         uSearchCosOuter: { value: Math.cos(0.22) },
-        uSearchCosInner: { value: Math.cos(0.1) }
+        uSearchCosInner: { value: Math.cos(0.1) },
+        uWaterNormal: { value: waterNormal },
+        // Keep subtle — photo normals overpower analytic swell if too strong.
+        uWaterNormalStrength: { value: 0.22 }
       }
     ]),
     vertexShader: VERTEX,

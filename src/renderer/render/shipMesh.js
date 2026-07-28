@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { turretMountLocal } from '../game/turret.js'
 import { buildHullGeometry } from '../procgen/hull.js'
 import { mulberry32 } from '../procgen/prng.js'
-import { stationMaterialMaps, retileUVsTriplanar } from './textures.js'
+import { shipMaterialMaps, stationMaterialMaps, retileUVsTriplanar } from './textures.js'
 
 function hashString(str) {
   let h = 0
@@ -10,54 +10,110 @@ function hashString(str) {
   return Math.abs(h)
 }
 
-// Ship-specific CC0 PBR (ambientCG) — tinted via material.color per class.
-function shipHullMaps(normalStrength = 0.55) {
-  return stationMaterialMaps('shipHull', normalStrength)
+// Photo ambientCG PBR for ships (not the station procedural panel grid).
+// Tint via material.color — maps are neutral grey so class colours still read.
+function shipHullMaps(normalStrength = 1.2) {
+  return shipMaterialMaps('shipHull', normalStrength)
 }
-function shipStructureMaps(normalStrength = 0.5) {
-  return stationMaterialMaps('shipStructure', normalStrength)
+function shipStructureMaps(normalStrength = 1.05) {
+  return shipMaterialMaps('shipStructure', normalStrength)
 }
-function shipArmorMaps(normalStrength = 0.62) {
-  return stationMaterialMaps('shipArmor', normalStrength)
+function shipArmorMaps(normalStrength = 1.1) {
+  return shipMaterialMaps('shipArmor', normalStrength)
 }
-function shipTrimMaps(normalStrength = 0.45) {
-  return stationMaterialMaps('shipTrim', normalStrength)
+function shipTrimMaps(normalStrength = 0.95) {
+  return shipMaterialMaps('shipTrim', normalStrength)
 }
-function alienHullMaps(normalStrength = 0.7) {
+function shipPaintMaps(normalStrength = 1.0) {
+  return shipMaterialMaps('shipPaint', normalStrength)
+}
+function alienHullMaps(normalStrength = 0.9) {
+  // Aliens keep the organic station path (bio albedo is intentional).
   return stationMaterialMaps('alienHull', normalStrength)
 }
-function alienPlateMaps(normalStrength = 0.65) {
+function alienPlateMaps(normalStrength = 0.85) {
   return stationMaterialMaps('alienPlate', normalStrength)
+}
+
+/**
+ * Pick a worn-metal kit for this hull so the sea is not one texture family.
+ * armor = rust streaks, shipmetal = freckled plate, darkmetal = heavy corrosion.
+ */
+function hullWearKit(shipClass) {
+  if (shipClass.faction === 'police' || shipClass.hull?.style?.policeLivery) return 'paint'
+  if (shipClass.role === 'miner' || shipClass.hull?.style?.miningRig) return 'dark'
+  const h = hashString(shipClass.id + ':wear')
+  if (shipClass.role === 'fighter') return h % 2 === 0 ? 'metal' : 'armor'
+  if (shipClass.role === 'trader') return h % 3 === 0 ? 'dark' : 'armor'
+  return ['armor', 'metal', 'dark'][h % 3]
+}
+
+function mapsForWearKit(kit, normalStrength) {
+  if (kit === 'dark') return shipArmorMaps(normalStrength)
+  if (kit === 'metal') return shipStructureMaps(normalStrength)
+  if (kit === 'paint') return shipPaintMaps(normalStrength)
+  return shipHullMaps(normalStrength)
 }
 
 function makeDetailMaterials(hullTint) {
   const tint = hullTint?.clone?.() ?? new THREE.Color(0x8899aa)
   const darkTint = tint.clone().multiplyScalar(0.55)
-  const lightTint = tint.clone().lerp(new THREE.Color(0xffffff), 0.25)
+  const lightTint = tint.clone().lerp(new THREE.Color(0xffffff), 0.22)
+  // Worn plated metal: mid metalness, high roughness — not chrome.
   return {
     hardpoint: new THREE.MeshStandardMaterial({
       color: 0x2a2e34,
-      metalness: 0.9,
-      roughness: 0.35,
-      ...shipTrimMaps(0.5)
+      metalness: 0.72,
+      roughness: 0.48,
+      envMapIntensity: 0.8,
+      ...shipTrimMaps(1.0)
     }),
-    canopy: new THREE.MeshStandardMaterial({
-      color: 0x0c1a28,
-      flatShading: false,
+    // Bridge glass — MeshPhysicalMaterial so IBL reflects like real panes
+    // (Standard + emissive read as plastic light-boxes). Keep tint near-neutral
+    // grey-green so it reads as glass, not bright blue acrylic.
+    canopy: new THREE.MeshPhysicalMaterial({
+      color: 0x9aa8a8,
+      metalness: 0,
+      roughness: 0.04,
+      transmission: 0.78,
+      thickness: 0.35,
+      ior: 1.5,
       transparent: true,
-      opacity: 0.82,
-      metalness: 0.12,
-      roughness: 0.06,
-      emissive: 0x0a3048,
-      emissiveIntensity: 0.55,
-      envMapIntensity: 1.2
+      opacity: 1,
+      envMapIntensity: 1.45,
+      clearcoat: 1,
+      clearcoatRoughness: 0.04,
+      // Warm cabin lamp, not a blue LED panel.
+      emissive: 0x2a2818,
+      emissiveIntensity: 0.06,
+      side: THREE.DoubleSide,
+      depthWrite: false
     }),
-    window: new THREE.MeshStandardMaterial({
-      color: 0x143848,
-      emissive: 0x3a90b0,
-      emissiveIntensity: 0.65,
-      metalness: 0.15,
-      roughness: 0.12
+    window: new THREE.MeshPhysicalMaterial({
+      color: 0xa8b0b0,
+      metalness: 0,
+      roughness: 0.04,
+      transmission: 0.72,
+      thickness: 0.22,
+      ior: 1.5,
+      transparent: true,
+      opacity: 1,
+      envMapIntensity: 1.55,
+      clearcoat: 1,
+      clearcoatRoughness: 0.035,
+      emissive: 0x2c281c,
+      emissiveIntensity: 0.08,
+      side: THREE.DoubleSide,
+      depthWrite: false
+    }),
+    // Masthead / sidelight bulbs — not glass panes.
+    lamp: new THREE.MeshStandardMaterial({
+      color: 0xe8f4ff,
+      emissive: 0x6ec8f0,
+      emissiveIntensity: 1.1,
+      metalness: 0.2,
+      roughness: 0.25,
+      envMapIntensity: 0.6
     }),
     engineGlow: new THREE.MeshBasicMaterial({
       color: 0x7fe6ff,
@@ -77,41 +133,47 @@ function makeDetailMaterials(hullTint) {
     }),
     panel: new THREE.MeshStandardMaterial({
       color: darkTint,
-      metalness: 0.86,
-      roughness: 0.42,
-      ...shipArmorMaps(0.58)
+      metalness: 0.58,
+      roughness: 0.62,
+      envMapIntensity: 0.75,
+      ...shipArmorMaps(1.1)
     }),
     structure: new THREE.MeshStandardMaterial({
       color: lightTint,
-      metalness: 0.9,
-      roughness: 0.38,
-      ...shipStructureMaps(0.52)
+      metalness: 0.62,
+      roughness: 0.55,
+      envMapIntensity: 0.8,
+      ...shipStructureMaps(1.05)
     }),
     radiator: new THREE.MeshStandardMaterial({
       color: 0x4a3830,
-      metalness: 0.88,
-      roughness: 0.4,
+      metalness: 0.7,
+      roughness: 0.55,
       emissive: 0x1a1008,
       emissiveIntensity: 0.14,
-      ...shipTrimMaps(0.4)
+      envMapIntensity: 0.7,
+      ...shipTrimMaps(0.9)
     }),
     accent: new THREE.MeshStandardMaterial({
       color: 0xc45a18,
-      metalness: 0.5,
-      roughness: 0.45,
-      ...shipHullMaps(0.4)
+      metalness: 0.4,
+      roughness: 0.55,
+      envMapIntensity: 0.75,
+      ...shipHullMaps(0.95)
     }),
     antenna: new THREE.MeshStandardMaterial({
       color: 0xa0b0c0,
-      metalness: 0.92,
-      roughness: 0.28,
-      ...shipTrimMaps(0.35)
+      metalness: 0.78,
+      roughness: 0.4,
+      envMapIntensity: 0.85,
+      ...shipTrimMaps(0.9)
     }),
     nacelle: new THREE.MeshStandardMaterial({
       color: darkTint.clone().offsetHSL(0, 0, -0.05),
-      metalness: 0.88,
-      roughness: 0.4,
-      ...shipStructureMaps(0.48)
+      metalness: 0.65,
+      roughness: 0.58,
+      envMapIntensity: 0.75,
+      ...shipStructureMaps(1.0)
     })
   }
 }
@@ -324,7 +386,9 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     role === 'trader' ? 0.22 : role === 'fighter' ? 0.44 : role === 'miner' ? 0.26 : 0.38
   const houseZ = zAt(housePos)
   const houseDeck = deckAt(housePos)
-  const houseW = halfBeamAt(housePos) * (1.05 + rng() * 0.3)
+  // Half-width of the house — stay inside the local beam so the wheelhouse
+  // sits on the deck rather than overhanging the bulwark (was often 1.05–1.35×).
+  const houseW = halfBeamAt(housePos) * (0.78 + rng() * 0.12)
   const houseL = length * (0.1 + rng() * 0.07)
   const houseH = depth * (0.85 + rng() * 0.6)
 
@@ -354,7 +418,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
   {
     const roof = add(
       new THREE.Mesh(
-        new THREE.BoxGeometry(houseW * 2.15, houseH * 0.07, houseL * 1.12),
+        new THREE.BoxGeometry(houseW * 2.08, houseH * 0.07, houseL * 1.12),
         mats.panel
       )
     )
@@ -362,7 +426,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     if (beam > length * 0.06 || rng() < 0.5) {
       const upper = add(
         new THREE.Mesh(
-          new THREE.BoxGeometry(houseW * 1.25, houseH * 0.5, houseL * 0.6),
+          new THREE.BoxGeometry(houseW * 1.2, houseH * 0.5, houseL * 0.6),
           mats.structure
         )
       )
@@ -426,13 +490,13 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       stay.rotation.z = sx * 0.32
       stay.rotation.x = 0.14
     }
-    // Masthead and sidelights.
+    // Masthead and sidelights (lamps, not bridge glass).
     const masthead = add(
-      new THREE.Mesh(new THREE.SphereGeometry(beam * 0.035, 8, 6), mats.window)
+      new THREE.Mesh(new THREE.SphereGeometry(beam * 0.035, 8, 6), mats.lamp)
     )
     masthead.position.set(0, mastBase + mastH, mastZ)
     for (const sx of [-1, 1]) {
-      const nav = add(new THREE.Mesh(new THREE.SphereGeometry(beam * 0.028, 6, 5), mats.window))
+      const nav = add(new THREE.Mesh(new THREE.SphereGeometry(beam * 0.028, 6, 5), mats.lamp))
       nav.position.set(sx * beam * 0.45, mastBase + mastH * 0.62, mastZ)
     }
   }
@@ -858,8 +922,9 @@ function addLiteSuperstructure(group, hull, mats) {
   const z = -length / 2 + length * 0.35
 
   const houseH = depth * 1.05
+  // Width uses half-beam * ~1.7 so the lite house stays inside the rails.
   const house = new THREE.Mesh(
-    new THREE.BoxGeometry(stationWidths[mid] * 2.1, houseH, length * 0.13),
+    new THREE.BoxGeometry(stationWidths[mid] * 1.7, houseH, length * 0.13),
     mats.structure
   )
   house.position.set(0, deck + houseH * 0.5, z)
@@ -1596,34 +1661,46 @@ export function buildShipMesh(shipClass, opts = {}) {
   const isMiner =
     shipClass.role === 'miner' || !!shipClass.hull?.style?.miningRig
 
-  // Police: bright white hull (skip heavy PBR maps — they mute pure white).
-  // Miners: dirtier bronze / ore-stained industrial paint.
+  // Class colour is a tint over neutral grey metal photos. Slight desat so
+  // rust streaks in the albedo still read through instead of turning into
+  // pure candy plastic.
+  const wearKit = hullWearKit(shipClass)
   const baseColor = isPolice
-    ? new THREE.Color(0xf4f7fb)
-    : isMiner
-      ? new THREE.Color(shipClass.hull.color).offsetHSL(0.02, 0.05, -0.04)
-      : new THREE.Color(shipClass.hull.color)
+    ? new THREE.Color(0xf0f3f7)
+    : new THREE.Color(shipClass.hull.color)
+  if (!isPolice && !isAlien) {
+    // Soften pure hues a touch so multiply-with-rust stays metallic.
+    baseColor.offsetHSL(0, -0.06, isMiner ? -0.04 : 0.02)
+  }
+  // Per-hull micro-variation so two green traders are not pixel-identical.
+  const wearRng = mulberry32(hashString(shipClass.id + ':surf'))
+  if (!isPolice && !isAlien) {
+    baseColor.offsetHSL((wearRng() - 0.5) * 0.04, (wearRng() - 0.5) * 0.08, (wearRng() - 0.5) * 0.06)
+  }
   const mats = makeDetailMaterials(isPolice ? new THREE.Color(0x1a1c20) : baseColor)
 
   if (isMiner && !isAlien) {
-    // Worked metal — less polished than combat hulls.
+    // Ore-stained industrial plate — darker, rougher, more corrosion map.
     mats.panel = new THREE.MeshStandardMaterial({
-      color: baseColor.clone().multiplyScalar(0.65),
-      metalness: 0.78,
-      roughness: 0.58,
-      ...shipArmorMaps(0.7)
+      color: baseColor.clone().multiplyScalar(0.62),
+      metalness: 0.55,
+      roughness: 0.72,
+      envMapIntensity: 0.65,
+      ...shipArmorMaps(1.2)
     })
     mats.structure = new THREE.MeshStandardMaterial({
       color: baseColor.clone().offsetHSL(-0.02, -0.05, -0.08),
-      metalness: 0.82,
-      roughness: 0.52,
-      ...shipStructureMaps(0.62)
+      metalness: 0.6,
+      roughness: 0.65,
+      envMapIntensity: 0.7,
+      ...shipStructureMaps(1.1)
     })
     mats.accent = new THREE.MeshStandardMaterial({
-      color: 0xe0a010,
-      metalness: 0.4,
-      roughness: 0.5,
-      ...shipHullMaps(0.4)
+      color: 0xd09018,
+      metalness: 0.35,
+      roughness: 0.58,
+      envMapIntensity: 0.7,
+      ...shipHullMaps(1.0)
     })
   }
 
@@ -1635,13 +1712,13 @@ export function buildShipMesh(shipClass, opts = {}) {
       roughness: 0.62,
       emissive: baseColor.clone().multiplyScalar(0.12),
       emissiveIntensity: 0.35,
-      ...alienPlateMaps(0.72)
+      ...alienPlateMaps(0.9)
     })
     mats.structure = new THREE.MeshStandardMaterial({
       color: baseColor.clone().offsetHSL(0.05, 0.1, -0.1),
       metalness: 0.28,
       roughness: 0.7,
-      ...alienHullMaps(0.8)
+      ...alienHullMaps(0.95)
     })
     mats.engineGlow = new THREE.MeshBasicMaterial({
       color: 0x9bff4a,
@@ -1662,13 +1739,19 @@ export function buildShipMesh(shipClass, opts = {}) {
   }
 
   const { geometry, seams, rim: rimGeo } = getCachedHullGeometries(shipClass)
+  // Worn seagoing metal: mid metalness, high roughness. Jitter so fleet
+  // members of the same class still look individually weathered.
+  const metalJ = 0.48 + wearRng() * 0.18
+  const roughJ = 0.55 + wearRng() * 0.18
   const material = isPolice
     ? new THREE.MeshStandardMaterial({
         color: baseColor,
         side: THREE.DoubleSide,
-        metalness: 0.28,
-        roughness: 0.48,
-        envMapIntensity: 0.85
+        metalness: 0.32,
+        roughness: 0.52,
+        envMapIntensity: 0.9,
+        // Light diamond plate under white so police are not flat plastic.
+        ...shipPaintMaps(0.85)
       })
     : isAlien
       ? new THREE.MeshStandardMaterial({
@@ -1679,25 +1762,16 @@ export function buildShipMesh(shipClass, opts = {}) {
           emissive: baseColor.clone().multiplyScalar(0.08),
           emissiveIntensity: 0.28,
           envMapIntensity: 0.7,
-          ...alienHullMaps(0.75)
+          ...alienHullMaps(0.95)
         })
-      : isMiner
-        ? new THREE.MeshStandardMaterial({
-            color: baseColor,
-            side: THREE.DoubleSide,
-            metalness: 0.62,
-            roughness: 0.58,
-            envMapIntensity: 0.75,
-            ...shipHullMaps(0.72)
-          })
-        : new THREE.MeshStandardMaterial({
-            color: baseColor,
-            side: THREE.DoubleSide,
-            metalness: 0.72,
-            roughness: 0.42,
-            envMapIntensity: 1.05,
-            ...shipHullMaps(0.58)
-          })
+      : new THREE.MeshStandardMaterial({
+          color: baseColor,
+          side: THREE.DoubleSide,
+          metalness: isMiner ? metalJ + 0.05 : metalJ,
+          roughness: isMiner ? Math.min(0.82, roughJ + 0.08) : roughJ,
+          envMapIntensity: isMiner ? 0.68 : 0.82,
+          ...mapsForWearKit(wearKit, isMiner ? 1.25 : 1.2)
+        })
   const hullMesh = new THREE.Mesh(geometry, material)
   group.add(hullMesh)
 
@@ -1803,9 +1877,9 @@ function retileShipUVs(group) {
     if (o.geometry.userData.shipRetiled) return
     const mats = Array.isArray(o.material) ? o.material : [o.material]
     if (!mats.some((m) => m?.map)) return
-    // ~1 plate per world unit: hulls run 15-30 units, so this gives plating
-    // that reads at cockpit range without turning into noise from outside.
-    const retiled = retileUVsTriplanar(o.geometry, 1.1)
+    // Larger tiles (~2 world units) so armor/rust photos read as plate sheets
+    // from chase-cam range instead of a fine noise field.
+    const retiled = retileUVsTriplanar(o.geometry, 1.85)
     retiled.userData.shipRetiled = true
     o.geometry = retiled
   })

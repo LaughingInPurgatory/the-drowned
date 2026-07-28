@@ -1,0 +1,16 @@
+Island surface and water-detail maps from ambientCG (https://ambientcg.com/).
+All ambientCG assets are Creative Commons CC0 1.0 (public domain dedication).
+No attribution required.
+
+  sand_*   <- Ground037
+  gravel_* <- Gravel025
+  grass_*  <- Grass003
+  rock_*   <- Rock048 (replaces prior rock pack)
+  water_normal.jpg <- Foam001 NormalGL (micro-detail only)
+
+Downloaded as 1K JPG packs for tiling / VRAM budget.
+
+  concrete_* <- Concrete034
+  brick_*    <- Bricks075A
+  boulder_*  <- Rock051 (prop rocks / talus)
+  bark_*     <- Bark012 (tree trunks)

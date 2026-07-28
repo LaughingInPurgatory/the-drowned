@@ -9,6 +9,7 @@ import {
 } from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
 import { buildIslandMesh, islandMaxShoreline } from './render/islandMesh.js'
+import { preloadNatureModels } from './render/natureModels.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
 import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from './render/projectileMesh.js'
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
@@ -90,6 +91,7 @@ import {
 } from './game/security.js'
 import {
   resolveBodyCollisions,
+  resolveShipCollisions,
   collisionRadiusFor,
   exteriorRadiusFor,
   rockCollisionRadius
@@ -641,8 +643,8 @@ function syncProjectileMeshesNow() {
 }
 
 /**
- * Take / leave the helm — same path for Space and middle mouse.
- * Locked in flight → exit. Off or lost lock → (re)enter.
+ * Take / leave the helm (Space). Locked in flight → exit. Off or lost lock → (re)enter.
+ * Middle mouse is intentionally not bound — unreliable under pointer-lock / Electron.
  */
 function toggleHelmMode() {
   if (
@@ -674,19 +676,13 @@ function setFireButton(button, down) {
   else if (button === 2) missileFireHeld = down
 }
 function onFireButtonDown(e) {
-  if (e.button !== 0 && e.button !== 1 && e.button !== 2) return
+  if (e.button !== 0 && e.button !== 2) return
   // Ignore UI targets (menus, overview) so we don't steal clicks.
   const t = e.target
   if (t && t !== document && t !== document.body && t !== renderer?.domElement) {
     if (typeof t.closest === 'function' && t.closest('button, input, select, textarea, a, #nav-map, #inventory-ui, #missions-ui, #character-ui, #system-overview.interactive, #docking-ui, #pause-menu, #menu')) {
       return
     }
-  }
-  if (e.button === 1) {
-    // Same as Space: take / leave the helm (never a fire button; block autoscroll).
-    e.preventDefault()
-    toggleHelmMode()
-    return
   }
   setFireButton(e.button, true)
   if (!canPlayerFire()) return
@@ -1290,9 +1286,34 @@ renderer.domElement.addEventListener('lostpointercapture', () => {
 
 // Chase-camera zoom (works with or without pointer lock). Scroll up = closer.
 // Docked: orbit look-around only (click-drag) — no zoom.
+// Over the system overview: scroll the body list instead of zooming the seat.
 window.addEventListener('wheel', (e) => {
   if (!gameState || dockEffect || paused || chartOpen || inventoryOpen || missionsOpen || characterOpen) return
   if (docked) return
+
+  const overview = document.getElementById('system-overview')
+  if (overview?.classList.contains('visible')) {
+    const r = overview.getBoundingClientRect()
+    if (
+      e.clientX >= r.left &&
+      e.clientX <= r.right &&
+      e.clientY >= r.top &&
+      e.clientY <= r.bottom
+    ) {
+      const list = overview.querySelector('.ov-list')
+      if (list && list.scrollHeight > list.clientHeight) {
+        list.scrollTop += e.deltaY
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
+      // Pointer is on the panel but the list does not need scroll — still
+      // swallow the wheel so a hover on the header does not yank the camera.
+      e.preventDefault()
+      return
+    }
+  }
+
   e.preventDefault()
   adjustChaseZoom(e.deltaY)
 }, { passive: false })
@@ -4566,13 +4587,19 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault()
     hailCurrentTarget()
   } else if (e.code === 'Escape') {
-    // Esc only *opens* pause (Resume button to continue). Open panels are closed
-    // inside setGamePaused → dismissOpenPanelsForPause.
+    // Esc toggles pause. Open panels are closed inside setGamePaused when
+    // opening; while already paused, Esc backs out of settings/controls first,
+    // then resumes.
     e.preventDefault()
-    if (paused || dockEffect) return
+    if (dockEffect) return
     // Pointer-lock may unlock first (pointerlockchange opens pause); ignore
     // a same-tick keydown bounce after auto-pause from unlock.
     if (performance.now() - pauseOpenedAtMs < 280) return
+    if (paused) {
+      if (pauseMenu?.handleEscape?.()) return
+      setGamePaused(false)
+      return
+    }
     setGamePaused(true)
   } else if (e.code === 'Backspace' && flightMode && !paused && !dockEffect) {
     // Dedicated clear-target key — Shift+Tab already does this too, this is
@@ -6104,6 +6131,31 @@ function animate() {
       factionToastUntil = gameState.simTime + FACTION_TOAST_DURATION_S
     }
   }
+
+  // Hull–hull bumps after every boat has moved this frame. No damage — a
+  // soft scrape stops the closing way, a harder hit bounces them apart.
+  // Docked player is out of the set so a harbour throng cannot shove the berth.
+  if (!gameState.player.dockedBodyId) {
+    const shipBodies = [
+      {
+        ship: gameState.player.ship,
+        radius: shipRadius,
+        mass: shipRadius * shipRadius
+      }
+    ]
+    for (const npc of gameState.npcs) {
+      if (npc.destroyed) continue
+      const r = getShipCollisionRadius(getShipClass(npc.shipClassId))
+      shipBodies.push({ ship: npc, radius: r, mass: r * r })
+    }
+    resolveShipCollisions(shipBodies)
+    // A bounce can shove someone into a mole — re-seat the player on solid.
+    resolveBodyCollisions(gameState.player.ship, currentBodies, shipRadius, {
+      isRockAlive: (fieldId, index) => isRockAlive(gameState, fieldId, index)
+    })
+    snapToSea(gameState.player.ship, gameState.simTime)
+  }
+
   updateProjectiles(gameState, dt, onProjectileHit)
   updateCombatFlag(gameState, combatFrame)
   updateDamageVignette(dt)
@@ -6556,9 +6608,14 @@ function animate() {
 }
 animate()
 
-// Intro/menu — apply saved sound + UI colour defaults, then title screen.
-// Display mode is already applied by the main process on window create.
-void Promise.all([loadSoundPreference(), loadUiThemePreference()]).finally(() => {
+// Intro/menu — apply saved sound + UI colour defaults, preload Quaternius
+// nature (trees/grass/foliage), then title screen. Display mode is already
+// applied by the main process on window create.
+void Promise.all([
+  loadSoundPreference(),
+  loadUiThemePreference(),
+  preloadNatureModels()
+]).finally(() => {
   startMenuBackground()
   hasSave().then((exists) => menu.show(exists))
 })

@@ -392,18 +392,37 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
   const transom = range(rng, 0.62, 0.9)
   stationWidths[0] = Math.max(stationWidths[0], stationWidths[1] * transom)
   stationHeights[0] = Math.max(stationHeights[0], stationHeights[1] * transom)
-  // Fine the bow so it parts water instead of pushing it.
+  // Fine the bow so it parts water instead of pushing it — but keep enough
+  // depth that the stem has freeboard. Width can go fine; height should not.
   stationWidths[last] *= range(rng, 0.35, 0.6)
   stationWidths[last - 1] *= range(rng, 0.6, 0.85)
+  {
+    const peakH = Math.max(...stationHeights)
+    const endFloor = peakH * range(rng, 0.5, 0.7)
+    for (let i = 0; i < stationHeights.length; i++) {
+      const t = i / last
+      const end = Math.pow(Math.abs(t - 0.5) * 2, 1.6)
+      stationHeights[i] = Math.max(
+        stationHeights[i],
+        stationHeights[i] * (1 - end) + endFloor * end
+      )
+    }
+  }
 
-  const sheer = range(rng, 0.1, 0.32)
-  const freeboard = range(rng, 0.16, 0.3)
+  // Sheer is authored as a fraction of *mid* half-depth and applied to the
+  // deck line (not local h). Local-h sheer made needle bows drop instead of
+  // rise — shipClasses post-process enforces the same deck-line rule fleet-wide.
+  const sheerBow = range(rng, 0.4, 0.65)
+  const sheerAft = range(rng, 0.14, 0.28)
+  const freeboard = range(rng, 0.18, 0.32)
+  const midH = Math.max(...stationHeights)
+  const midDeck = midH * (1 + freeboard)
   const baseOffsetsY = stationHeights.map((h, i) => {
     const t = i / last
-    // Rises toward the bow, and a little at the transom — the classic sheer
-    // line, lowest around midships where the working deck is.
-    const curve = Math.pow(t, 2.2) * sheer + Math.pow(1 - t, 3) * sheer * 0.35
-    return h * (freeboard + curve)
+    const sheerUp =
+      Math.pow(t, 1.7) * sheerBow * midH + Math.pow(1 - t, 2.6) * sheerAft * midH
+    const minDeck = midDeck + sheerUp
+    return Math.max(h * freeboard, minDeck - h)
   })
 
   const crossSectionSides = pick(

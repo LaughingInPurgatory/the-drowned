@@ -3,8 +3,10 @@
  * Keep in sync with README Controls table when changing bindings.
  */
 export const CONTROLS = [
-  ['Space / MMB', 'Take / leave the helm'],
+  ['Space', 'Take / leave the helm'],
   ['Mouse', 'Lay the gun — traverse and elevate the turret'],
+  ['Mouse wheel', 'Chase-camera zoom (closer / further)'],
+  ['Wheel on Overview', 'Scroll the body list (does not zoom)'],
   ['Alt + Enter', 'Toggle fullscreen'],
   ['W / S', 'Ahead / astern'],
   ['A / D', 'Helm to port / starboard'],
@@ -15,12 +17,12 @@ export const CONTROLS = [
   ['Shift+Tab', 'Clear target lock'],
   ['Backspace', 'Clear target lock'],
   ['Ctrl+Tab', 'Set waypoint under the crosshair (any distance, if on screen)'],
-  ['C', 'Toggle open-sea cruise (requires a waypoint)'],
+  ['C', 'Toggle autopilot (requires a waypoint)'],
   ['S', 'Services (alongside only)'],
   ['M', 'Sea chart'],
   ['B', 'Region Sonar Scan (deploy drones, run down signals)'],
   ['F', 'Use targeted: salvage wreck · come alongside · crack a datacore'],
-  ['P', 'Sonar pulse (sound the water)'],
+  ['P', 'Sonar pulse — sound a nearby island or wreck field'],
   ['G', 'Launch combat drones (airborne escorts — buy & fit at the Boatyard Armoury)'],
   ['H', 'Recall combat drones'],
   ['L', 'Bow searchlight on / off'],
@@ -29,7 +31,7 @@ export const CONTROLS = [
   ['F1', 'Character sheet'],
   ['Esc', 'Pause (Resume to continue)'],
   ['F5', 'Hail locked target'],
-  ['Free mouse', 'Click the contacts list (right) to set waypoints']
+  ['Free mouse', 'Click Overview / contacts to set waypoints; scroll Overview with the wheel']
 ]
 
 /** CSS for a scrollable key/action list (scope under parent id). */
@@ -40,7 +42,7 @@ export const CONTROLS_LIST_CSS = `
   margin: 0 0 4px 0; padding-right: 4px;
 }
 .controls-list .row {
-  display: grid; grid-template-columns: 120px 1fr; gap: 10px; align-items: baseline;
+  display: grid; grid-template-columns: 140px 1fr; gap: 10px; align-items: baseline;
   font-size: 12px; line-height: 1.35;
 }
 .controls-list .key {

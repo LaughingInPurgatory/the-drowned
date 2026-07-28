@@ -70,6 +70,39 @@ test('every island name is unique and facilities never reuse a bare island name'
   }
 })
 
+test('every harbour is attached to an island shore', () => {
+  // Working ports never float free — only outposts may sit in open water.
+  for (const seed of [1, 42, 99, 8675309]) {
+    const bodies = getWorld(generateWorld(seed, TEST_WORLD_OPTS)).bodies
+    const ports = bodies.filter((b) => b.kind === 'port')
+    assert.ok(ports.length >= 1, `seed ${seed}: expected harbours`)
+    for (const port of ports) {
+      assert.ok(port.parentId, `${port.name} has no host island`)
+      const host = bodies.find((b) => b.id === port.parentId)
+      assert.ok(host && host.kind === 'island', `${port.name} host is not an island`)
+      assert.ok(port.surfaceOffset, `${port.name} missing surfaceOffset for seaward facing`)
+      // Hard against the landmass — not parked at the generation disc edge mid-channel.
+      const d = Math.hypot(
+        port.position[0] - host.position[0],
+        port.position[2] - host.position[2]
+      )
+      assert.ok(
+        d < host.radius * 1.15 + 400,
+        `${port.name} sits ${d.toFixed(0)} from ${host.name} (radius ${host.radius}) — too far offshore`
+      )
+    }
+  }
+})
+
+test('outposts may float free of land', () => {
+  let floating = 0
+  for (let seed = 1; seed < 30; seed++) {
+    const bodies = getWorld(generateWorld(seed, TEST_WORLD_OPTS)).bodies
+    floating += bodies.filter((b) => b.kind === 'outpost' && !b.parentId).length
+  }
+  assert.ok(floating > 0, 'expected some open-water outposts across seeds')
+})
+
 test('coastal ports can inherit their host island into the name', () => {
   // Across a few seeds, some hosted ports should include the host name.
   let inherited = 0

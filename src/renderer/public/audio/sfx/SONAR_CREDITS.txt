@@ -1,0 +1,15 @@
+Sonar SFX (CC0 / public domain)
+
+  sonar_ping.ogg
+    Source: "Sonar Ping" by SamsterBirdies on Freesound
+    https://freesound.org/people/SamsterBirdies/sounds/539957/
+    License: Creative Commons 0 (CC0)
+    Note: HQ preview re-encoded to Opus/Ogg for the game pack.
+
+  sonar_return.ogg
+    Source: "jsyd_ping.wav" by jbum on Freesound
+    https://freesound.org/people/jbum/sounds/32093/
+    License: Creative Commons 0 (CC0)
+    Note: Facsimile of a submarine sonar ping (synthesized from analysis).
+
+No attribution required under CC0; credit listed for provenance.

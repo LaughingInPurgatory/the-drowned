@@ -36,6 +36,14 @@ const STYLE = `
 #system-overview.interactive .ov-hint { color: #7fe0a0; opacity: 0.85; }
 #system-overview .ov-list {
   overflow-y: auto; flex: 1; padding: 2px 0; min-height: 0;
+  /* Thin bar so a long body list is obviously scrollable. */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.45) transparent;
+}
+#system-overview .ov-list::-webkit-scrollbar { width: 6px; }
+#system-overview .ov-list::-webkit-scrollbar-thumb {
+  background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.4);
+  border-radius: 3px;
 }
 #system-overview .ov-row {
   display: grid; grid-template-columns: 1fr auto; gap: 4px 6px; align-items: center;

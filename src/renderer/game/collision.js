@@ -119,6 +119,101 @@ function resolveAsteroidFieldCollisions(shipState, shipPos, body, shipRadius, is
   }
 }
 
+/**
+ * Relative closing speed (m/s) above which two hulls bounce; softer contacts
+ * just kill the way into each other (come to a stop / scrape along).
+ * Tuned for boat speeds after SPEED_SCALE (~4–50 m/s typical).
+ */
+export const SHIP_BOUNCE_SPEED = 10
+/** How lively a hard bump is (0 = dead stop, 1 = perfectly elastic). */
+export const SHIP_BOUNCE_RESTITUTION = 0.42
+/** Soft contact restitution — nearly stops the closing component. */
+export const SHIP_SCRAPE_RESTITUTION = 0.05
+
+/**
+ * Ship–ship collisions in the horizontal plane. No damage — only separation
+ * and a speed-dependent bounce or stop.
+ *
+ * Each entry: `{ ship: { position, velocity }, radius, mass? }`.
+ * Equal-mass when mass is omitted. Positions/velocities are written back
+ * in place. Y is never touched (the sea owns vertical).
+ *
+ * Call once per frame after every hull has integrated its motion for that
+ * step, so the player and all live NPCs see each other.
+ */
+export function resolveShipCollisions(ships) {
+  if (!ships || ships.length < 2) return
+
+  for (let i = 0; i < ships.length; i++) {
+    const A = ships[i]
+    if (!A?.ship?.position || !A.ship.velocity) continue
+    const ra = Math.max(0.5, A.radius ?? 5)
+    const ma = Math.max(1e-3, A.mass ?? ra * ra)
+
+    for (let j = i + 1; j < ships.length; j++) {
+      const B = ships[j]
+      if (!B?.ship?.position || !B.ship.velocity) continue
+      const rb = Math.max(0.5, B.radius ?? 5)
+      const mb = Math.max(1e-3, B.mass ?? rb * rb)
+
+      const ax = A.ship.position[0]
+      const az = A.ship.position[2]
+      const bx = B.ship.position[0]
+      const bz = B.ship.position[2]
+      let dx = ax - bx
+      let dz = az - bz
+      let dist = Math.hypot(dx, dz)
+      const minDist = ra + rb
+      if (dist >= minDist) continue
+
+      // Contact normal: from B toward A (A is pushed along +n).
+      let nx
+      let nz
+      if (dist < 1e-8) {
+        nx = 1
+        nz = 0
+        dist = 0
+      } else {
+        nx = dx / dist
+        nz = dz / dist
+      }
+
+      // Separate so hulls just touch. Split by inverse mass.
+      const overlap = minDist - dist
+      const invMa = 1 / ma
+      const invMb = 1 / mb
+      const invSum = invMa + invMb
+      const pushA = (overlap * invMa) / invSum
+      const pushB = (overlap * invMb) / invSum
+      A.ship.position[0] = ax + nx * pushA
+      A.ship.position[2] = az + nz * pushA
+      B.ship.position[0] = bx - nx * pushB
+      B.ship.position[2] = bz - nz * pushB
+
+      // Relative velocity of A as seen from B, along the contact normal.
+      // Positive → already separating; leave the velocities alone.
+      const vax = A.ship.velocity[0] ?? 0
+      const vaz = A.ship.velocity[2] ?? 0
+      const vbx = B.ship.velocity[0] ?? 0
+      const vbz = B.ship.velocity[2] ?? 0
+      const vrelN = (vax - vbx) * nx + (vaz - vbz) * nz
+      if (vrelN >= 0) continue
+
+      const closing = -vrelN
+      const e = closing >= SHIP_BOUNCE_SPEED ? SHIP_BOUNCE_RESTITUTION : SHIP_SCRAPE_RESTITUTION
+      // Impulse along n: changes relative normal speed to -e * vrelN.
+      const impulse = (-(1 + e) * vrelN) / invSum
+      A.ship.velocity[0] = vax + impulse * invMa * nx
+      A.ship.velocity[2] = vaz + impulse * invMa * nz
+      B.ship.velocity[0] = vbx - impulse * invMb * nx
+      B.ship.velocity[2] = vbz - impulse * invMb * nz
+      // Keep vertical way at zero — boats don't leap on impact.
+      if (A.ship.velocity[1]) A.ship.velocity[1] = 0
+      if (B.ship.velocity[1]) B.ship.velocity[1] = 0
+    }
+  }
+}
+
 // Horizontal circle-circle collision against world bodies: pushes the hull back
 // off the obstruction and cancels the velocity driving into it, so running onto
 // a shore sheers you along it rather than damaging you or letting you pass

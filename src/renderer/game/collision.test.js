@@ -2,12 +2,14 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   resolveBodyCollisions,
+  resolveShipCollisions,
   collisionRadiusFor,
   exteriorRadiusFor,
   npcExclusionRadiusFor,
   rockCollisionRadius,
   PORT_EXTERIOR_RADIUS,
-  OUTPOST_EXTERIOR_RADIUS
+  OUTPOST_EXTERIOR_RADIUS,
+  SHIP_BOUNCE_SPEED
 } from './collision.js'
 import { getAsteroidRocks } from '../render/asteroidFieldMesh.js'
 import { islandShorelineToward, islandMaxShoreline } from '../render/islandMesh.js'
@@ -32,10 +34,11 @@ test('an outpost is a smaller obstruction than a harbour', () => {
 test('an island is solid out to its coastline, not its whole disc', () => {
   // The disc is the volume the shape was generated in; the land inside it can
   // be a fraction of that. Blocking the disc would hold a boat hundreds of
-  // metres off a rock it can plainly see.
+  // metres off a rock it can plainly see. Collision reach includes a short
+  // keep-out past the traced waterline (keel / beach), so it may exceed radius.
   const island = { id: 'i-shore', kind: 'island', position: [0, 0, 0], radius: 900 }
   const reach = islandMaxShoreline(island)
-  assert.ok(reach > 0 && reach <= 900, `coastline ${reach} should sit inside the disc`)
+  assert.ok(reach > 0 && reach <= 900 + 20, `coastline ${reach} should sit near the disc`)
   assert.equal(collisionRadiusFor(island), reach)
   assert.equal(exteriorRadiusFor(island), reach)
   assert.equal(npcExclusionRadiusFor(island), reach)
@@ -128,4 +131,60 @@ test('wreck fields push the hull off an individual hulk', () => {
   resolveBodyCollisions(shipState, [field], 2)
   const dist = Math.hypot(shipState.position[0] - cx, shipState.position[2] - cz)
   assert.ok(dist > 0, 'a hull buried in a hulk must be pushed clear of it')
+})
+
+test('overlapping ships are pushed apart without damage fields', () => {
+  const a = { position: [0, 1.5, 0], velocity: [0, 0, 0], hull: 100 }
+  const b = { position: [2, 1.5, 0], velocity: [0, 0, 0], hull: 100 }
+  resolveShipCollisions([
+    { ship: a, radius: 5 },
+    { ship: b, radius: 5 }
+  ])
+  const dist = Math.hypot(a.position[0] - b.position[0], a.position[2] - b.position[2])
+  assert.ok(Math.abs(dist - 10) < 1e-5, `should rest exactly on each other (dist=${dist})`)
+  assert.equal(a.hull, 100)
+  assert.equal(b.hull, 100)
+  assert.equal(a.position[1], 1.5, 'Y is the sea’s — do not lift on impact')
+})
+
+test('a slow scrape kills the closing way (ships stop into each other)', () => {
+  const a = { position: [0, 0, 0], velocity: [4, 0, 0] } // closing under bounce threshold
+  const b = { position: [8, 0, 0], velocity: [-4, 0, 0] }
+  assert.ok(4 + 4 < SHIP_BOUNCE_SPEED * 2 || 8 < SHIP_BOUNCE_SPEED + 1)
+  resolveShipCollisions([
+    { ship: a, radius: 5 },
+    { ship: b, radius: 5 }
+  ])
+  // Relative normal velocity should be nearly zero / separating, not still closing hard.
+  const vrel = a.velocity[0] - b.velocity[0]
+  assert.ok(vrel >= -0.5, `slow contact should stop the close (vrel=${vrel})`)
+  assert.ok(a.velocity[0] < 4, 'A should lose way into B')
+  assert.ok(b.velocity[0] > -4, 'B should lose way into A')
+})
+
+test('a hard hit bounces the hulls apart', () => {
+  const a = { position: [0, 0, 0], velocity: [30, 0, 0] }
+  const b = { position: [8, 0, 0], velocity: [-30, 0, 0] }
+  resolveShipCollisions([
+    { ship: a, radius: 5 },
+    { ship: b, radius: 5 }
+  ])
+  // After a bounce, A should be going left-ish and B right-ish (reversed).
+  assert.ok(a.velocity[0] < 0, `A should rebound (vx=${a.velocity[0]})`)
+  assert.ok(b.velocity[0] > 0, `B should rebound (vx=${b.velocity[0]})`)
+  const dist = Math.hypot(a.position[0] - b.position[0], a.position[2] - b.position[2])
+  assert.ok(dist >= 10 - 1e-5, 'still separated after bounce')
+})
+
+test('ships that are clear of each other are left alone', () => {
+  const a = { position: [0, 0, 0], velocity: [5, 0, 0] }
+  const b = { position: [100, 0, 0], velocity: [-5, 0, 0] }
+  resolveShipCollisions([
+    { ship: a, radius: 5 },
+    { ship: b, radius: 5 }
+  ])
+  assert.deepEqual(a.position, [0, 0, 0])
+  assert.deepEqual(a.velocity, [5, 0, 0])
+  assert.deepEqual(b.position, [100, 0, 0])
+  assert.deepEqual(b.velocity, [-5, 0, 0])
 })

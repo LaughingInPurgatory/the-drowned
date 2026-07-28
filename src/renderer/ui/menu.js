@@ -30,7 +30,9 @@ import { isPortraitImageFile, resizeImageToDataUrl } from './portrait.js'
  */
 const SMOKE_FILTER_SVG = `
 <svg class="smoke-defs" width="0" height="0" aria-hidden="true" focusable="false">
-  <filter id="drowned-smoke" x="-60%" y="-80%" width="220%" height="260%"
+  <!-- Wide filter region: displacement + blur would otherwise clip the
+       silhouette at the glyph box, which read as hard vertical cuts. -->
+  <filter id="drowned-smoke" x="-100%" y="-80%" width="300%" height="280%"
           color-interpolation-filters="sRGB">
     <feTurbulence type="fractalNoise" baseFrequency="0.02 0.045" numOctaves="5"
                   seed="5" result="noise">
@@ -98,6 +100,8 @@ const STYLE = `
   justify-content: center;
   text-align: center;
   pointer-events: none; /* only interactive children re-enable */
+  /* Title smoke is wider than this panel — do not box-clip the plume. */
+  overflow: visible;
 }
 /* Horizontal strip a bit above the footer / lower HUD band (footer ~26px). */
 #main-menu .main-view .menu-links {
@@ -124,6 +128,27 @@ const STYLE = `
   text-align: center;
   pointer-events: none;
   z-index: 2;
+  /* Smoke field is wider than the mark — never clip its sides here. */
+  overflow: visible;
+}
+/* Random salt-line under the wordmark — apocalyptic water-world dad jokes.
+   Colour matches the cool steel / gunmetal on the upper faces of title-drowned.png
+   (not the rust/ember along the lower edge, and not the UI accent). */
+#main-menu .title-pun {
+  margin: 10px auto 0;
+  max-width: min(90vw, 520px);
+  min-height: 2.6em;
+  padding: 0 12px;
+  font-family: monospace;
+  font-size: clamp(11px, 1.6vw, 13px);
+  letter-spacing: 0.6px;
+  line-height: 1.4;
+  color: #b4bcc6;
+  opacity: 0.9;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.95),
+    0 0 10px rgba(140, 150, 165, 0.25),
+    0 2px 8px rgba(0, 0, 0, 0.7);
 }
 
 /* Cinematic vignette so the 3D backdrop darkens toward the edges and the
@@ -176,12 +201,22 @@ const STYLE = `
    move, and their mask would ride up with them. This box is anchored to the
    bottom of the title and reaches far above it, and its mask fades out at its
    own bottom edge, so nothing ever appears below the letters however the
-   layers inside it drift or scale. */
+   layers inside it drift or scale.
+
+   Width is viewport-wide (not the title box): CSS masks clip to the element
+   box, and rising layers scale past the wordmark — a narrow field was cutting
+   the plume into hard left/right edges. */
 #main-menu .title-smoke-field {
-  position: absolute; left: 0; right: 0; bottom: 0;
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  /* Full viewport — mask clips to this box; a title-width field cut the plume. */
+  width: 100vw;
   height: 150vh;
+  transform: translateX(-50%);
   pointer-events: none;
   z-index: -1;
+  overflow: visible;
   -webkit-mask-image: linear-gradient(to top, transparent 0%, #000 5%, #000 100%);
   mask-image: linear-gradient(to top, transparent 0%, #000 5%, #000 100%);
 }
@@ -210,9 +245,9 @@ const STYLE = `
 @keyframes titleSmoulder {
   /* Even the layer that stays drifts upward across its cycle, so nothing in
      the plume is ever moving down or sitting still. */
-  0%   { opacity: 0.30; transform: translate(0, 2px) scale(1.01);   filter: blur(2.5px); }
-  50%  { opacity: 0.55; transform: translate(3px, -4px) scale(1.05); filter: blur(4px); }
-  100% { opacity: 0.30; transform: translate(6px, -10px) scale(1.10); filter: blur(6px); }
+  0%   { opacity: 0.30; transform: translate(0, 2px) scale(1.01, 1.01);   filter: blur(2.5px); }
+  50%  { opacity: 0.55; transform: translate(3px, -4px) scale(1.04, 1.06); filter: blur(4px); }
+  100% { opacity: 0.30; transform: translate(6px, -10px) scale(1.07, 1.12); filter: blur(6px); }
 }
 #main-menu .title-smoke .smoke-art {
   /* The same artwork at the same size, so the smoke starts exactly on top of
@@ -228,16 +263,18 @@ const STYLE = `
 @keyframes titleSmokeRise {
   /* Position and scale are spaced evenly so the rise rate stays constant all
      the way up; only opacity and blur are shaped, and both are held over a
-     long plateau so the column is continuous instead of pulsing. */
+     long plateau so the column is continuous instead of pulsing.
+     Grow more in Y than X so the plume climbs without slamming into the
+     left/right edges of the smoke field (or the viewport). */
   /* Already blurred at birth. With a linear rise there is no fast opening
      move to hide behind, so a riser that starts sharp just sits there as a
      legible second copy of the word — which is exactly what it looked like. */
-  0%   { opacity: 0;    transform: translate(0, 0) scale(1.03);     filter: blur(3.5px); }
-  8%   { opacity: 0.62; transform: translate(3px, -5vh) scale(1.09); filter: blur(4.5px); }
-  25%  { transform: translate(9px, -16vh) scale(1.22);              filter: blur(3px); }
-  50%  { opacity: 0.5;  transform: translate(19px, -32vh) scale(1.46); filter: blur(6.5px); }
-  75%  { opacity: 0.3;  transform: translate(29px, -48vh) scale(1.7);  filter: blur(11px); }
-  100% { opacity: 0;    transform: translate(38px, -64vh) scale(1.94); filter: blur(16px); }
+  0%   { opacity: 0;    transform: translate(0, 0) scale(1.02, 1.04);       filter: blur(3.5px); }
+  8%   { opacity: 0.62; transform: translate(3px, -5vh) scale(1.06, 1.12);  filter: blur(4.5px); }
+  25%  { transform: translate(8px, -16vh) scale(1.12, 1.28);               filter: blur(3px); }
+  50%  { opacity: 0.5;  transform: translate(14px, -32vh) scale(1.22, 1.55); filter: blur(6.5px); }
+  75%  { opacity: 0.3;  transform: translate(20px, -48vh) scale(1.32, 1.78); filter: blur(11px); }
+  100% { opacity: 0;    transform: translate(26px, -64vh) scale(1.42, 2.0);  filter: blur(16px); }
 }
 @media (prefers-reduced-motion: reduce) {
   #main-menu .title-smoke { animation: none; opacity: 0.28; transform: none; }
@@ -559,6 +596,111 @@ ${SETTINGS_VIEW_CSS}
 @keyframes riseIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
 `
 
+/** Life after the flood — mostly water, mostly jokes. */
+const TITLE_PUNS = [
+  'The property market is terrible. Everything’s a waterfront now.',
+  'Welcome to the future: 90% water, 10% regret.',
+  'Global warming completed successfully.',
+  'Estate agents still say “roomy.” They mean the ocean.',
+  'The apocalypse came with excellent sea views.',
+  'Humanity adapted. Mostly by learning to float.',
+  'Maps are simpler now. Blue. More blue.',
+  'Your grandparents had lawns. You have swell.',
+  'The coast moved inland. Then inland moved on.',
+  'Post-war reconstruction is going swimmingly. Unfortunately.',
+  'Dry land is a premium feature. Unlock with luck.',
+  'The weather forecast is always “wet.” Accuracy: 100%.',
+  'Civilisation rebuilt on barges, hulls, and denial.',
+  'There used to be countries. Now there are currents.',
+  'The drowned world still needs captains. Bad ones, even.',
+  'Mountains are islands. Islands are real estate. Real estate is wet.',
+  'You can see forever. It’s all the same colour.',
+  'The future is fluid. Literally.',
+  'History books float. The historians mostly don’t.',
+  'Welcome aboard. Everyone’s aboard something.',
+  'The sea level rose. Ambition mostly sank.',
+  'Post-apocalyptic chic: salt, rust, and a working bilge.',
+  'There is no “away from the water.” There is only “on it.”',
+  'The old world is under you. Mind the keel.',
+  'Population density is low. Water density is not.',
+  'The horizon is free. Dry socks are not.',
+  'After the flood, everyone became a coastal nation. Of one ship.',
+  'The skyline is shorter. The swell is not.',
+  'Progress report: still wet. Still here. Still hiring captains.',
+  'The end of the world came with a tide table.',
+  'Roads are a myth. Wake is the new highway.',
+  'You inherited the Earth. It was mostly refunded as ocean.',
+  'Climate change: delivered. Please rate your experience.',
+  'The last forest is a rumour. The first reef is a landmark.',
+  'In this economy? Everything’s shipping. Including civilisation.',
+  'Dry land: limited stock. Act never.',
+  'The war ended. The water didn’t get the memo.',
+  'Humanity’s plan B was a boat. Plan C was a better boat.',
+  'The drowned keep the streets. You keep the surface. Barely.',
+  'Welcome to life after land. Bring a towel. And guns.',
+  'The atlas is one page now. It’s blue.',
+  'Survivors specialised: sailors, scavengers, and people who lie about both.',
+  'The new normal is 3 metres of freeboard and low expectations.',
+  'Cities drowned. The paperwork floated. Of course.',
+  'It’s not the end of the world. It’s the end of walking to work.',
+  'The ocean ate the continents. It’s still hungry.',
+  'Post-flood fashion: anything that doesn’t rust in the first week.',
+  'You can own a house. It’s called a hull.',
+  'The future arrived waterlogged and slightly hostile.',
+  'Landmarks are now sea marks. The irony is not lost. The land is.',
+  'Commuting means crossing a swell. Traffic is weather.',
+  'The suburbs are submerged. The commute is worse.',
+  'Fresh water is currency. Salt water is the scenery.',
+  'You don’t visit the beach. You live on it. Forever.',
+  'The old capitals are dive sites. Bring a light and a warrant.',
+  'Agriculture moved to algae. The menu is green and resigned.',
+  'National borders: redrawn by the tide. Daily.',
+  'The underground is underwater. So is the overground.',
+  'Skyscrapers make excellent reefs. Location, location, location.',
+  'The sun still sets. It just reflects a lot more.',
+  'Wildlife thrives. Especially the things with teeth.',
+  'You measure wealth in fuel, hull, and dry socks.',
+  'The archive is a wreck field. History is salvage.',
+  'Religion adapted: more holy water than anyone asked for.',
+  'The stock exchange is a floating market. Literally floating.',
+  'Children learn to swim before they learn the alphabet.',
+  'The moon still pulls the tide. The tide pulls everything else.',
+  'There are no land wars. Only boarding actions.',
+  'The postal service is “hope a boat goes that way.”',
+  'Night life is lighthouse-watching and not dying.',
+  'The desert is a legend. The doldrums are a Tuesday.',
+  'You don’t mow the lawn. You scrape the barnacles.',
+  'The world map folds into a napkin. A very blue napkin.',
+  'Airports are harbours. The runways are wakes.',
+  'The rich live on high ground. “High” means “still wet.”',
+  'Museums are underwater tours. Admission: don’t drown.',
+  'The power grid is a rumour. Generators are gospel.',
+  'You can still get lost. There’s just less variety in the scenery.',
+  'The final frontier is… more water. Sorry.',
+  'Diplomacy is done by radio and who has the bigger gun.',
+  'The planet is open plan now. Open, and plan-less.',
+  'You inherit your father’s ship. And his debts. And his leaks.',
+  'The stars are still there. Good for navigation. Bad for optimism.',
+  'Every island is a rumour until you hit it with the keel.',
+  'The drowned world is hiring. Experience with floating preferred.',
+  'Sanitation: complicated. Optimism: optional.',
+  'The war left scars. The flood left a gloss finish.',
+  'You can still farm. Hydroponics. On a boat. In a storm.',
+  'The last train left decades ago. It is a reef now.',
+  'Tourism is “visit the ruins before they finish sinking.”',
+  'The constitution is waterproof. The government less so.',
+  'Seasons still change. Mostly between “wet” and “also wet.”',
+  'You don’t lock the front door. You dog the hatches.',
+  'The skyline is a mast forest and a few stubborn peaks.',
+  'Empires fell. Flotsam rose. Same energy, worse furniture.',
+  'The future is bright. It’s the glare off the water.',
+  'Bring a chart, a gun, and a joke. You’ll need all three.'
+]
+
+function pickTitlePun() {
+  return TITLE_PUNS[Math.floor(Math.random() * TITLE_PUNS.length)]
+}
+
 export function createMenu(container, { onNewGame, onLoadGame }) {
   const style = document.createElement('style')
   style.textContent = STYLE
@@ -583,6 +725,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
             .join('')}
         </div>
         <h1><img class="title-art" src="title-drowned.png" alt="The Drowned" /></h1>
+        <p class="title-pun" aria-live="polite"></p>
       </div>
       <div class="menu-links">
         <button class="new-game menu-link"><span class="menu-link-text">New Game</span></button>
@@ -632,6 +775,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
   container.appendChild(root)
 
   const mainView = root.querySelector('.main-view')
+  const titlePunEl = root.querySelector('.title-pun')
   const newGameView = root.querySelector('.new-game-view')
   const settingsView = root.querySelector('.settings-view')
   const uiColourView = root.querySelector('.ui-colour-view')
@@ -790,6 +934,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
       mainView.style.display = 'flex'
       newGameView.style.display = 'none'
       hideSubpanels()
+      if (titlePunEl) titlePunEl.textContent = pickTitlePun()
       root.style.display = 'flex'
       replayEntrance()
     },

@@ -89,3 +89,84 @@ test('landform is stable for a body and spreads across the world', () => {
   )
   assert.ok(seen.size >= 4, `expected varied landforms, saw ${[...seen].join(', ')}`)
 })
+
+test('mountain spires are rare, tall, and rocky', () => {
+  const all = getWorld(generateWorld(8675309)).bodies.filter((b) => b.kind === 'island')
+  const spires = all.filter((b) => landformForBody(b) === 'spire')
+  // A handful per world — navigational landmarks, not the default coast.
+  assert.ok(spires.length >= 1, 'expected at least one mountain spire')
+  assert.ok(
+    spires.length <= Math.max(12, all.length * 0.12),
+    `too many spires: ${spires.length} of ${all.length}`
+  )
+  for (const body of spires) {
+    const profile = getIslandProfile(body)
+    assert.equal(profile.landform, 'spire')
+    // Taller than the island is wide — tip of a drowned mountain.
+    assert.ok(
+      profile.height >= body.radius * 1.2,
+      `${body.name} spire height ${profile.height.toFixed(0)} vs radius ${body.radius}`
+    )
+    // Craggy rock surfaces only (no grassy crown / sandy beach blend intent).
+    assert.ok(
+      ['rocky', 'shingle'].includes(profile.surfaces.body.tex) ||
+        profile.surfaces.body.tex === 'rocky' ||
+        profile.surfaces.body.color != null,
+      `${body.name} body surface ${profile.surfaces.body.tex}`
+    )
+    const mesh = buildIslandMesh(body)
+    assert.equal(mesh.userData.landform, 'spire')
+    // Steep rock: almost no vegetation on the typical roll.
+    const veg = mesh.getObjectByName('vegetation')?.children.length ?? 0
+    assert.ok(veg < 40, `${body.name} should not be forested (veg=${veg})`)
+  }
+})
+
+test('every island mesh can carry vegetation and ruins — not only the home rock', () => {
+  // Same builder titles the menu and the sailing world. Cover is rolled per
+  // island so some are bare, some wooded, some ruined, some both.
+  const sample = getWorld(generateWorld(8675309))
+    .bodies.filter((b) => b.kind === 'island')
+    .slice(0, 48)
+
+  let withVeg = 0
+  let withRuins = 0
+  let bare = 0
+  let vegOnly = 0
+  let ruinsOnly = 0
+  for (const body of sample) {
+    const mesh = buildIslandMesh(body)
+    const veg = mesh.getObjectByName('vegetation')
+    const ruins = mesh.getObjectByName('ruins')
+    assert.ok(veg, `${body.name} missing vegetation group`)
+    assert.ok(ruins, `${body.name} missing ruins group`)
+    const v = veg.children.length
+    const r = ruins.children.length
+    if (v > 0) withVeg++
+    if (r > 0) withRuins++
+    if (v === 0 && r === 0) bare++
+    if (v > 0 && r === 0) vegOnly++
+    if (v === 0 && r > 0) ruinsOnly++
+  }
+
+  assert.ok(withVeg >= 8, `expected wooded islands, saw ${withVeg}`)
+  assert.ok(withRuins >= 5, `expected ruined islands, saw ${withRuins}`)
+  assert.ok(bare >= 2, `expected some fully barren islands, saw ${bare}`)
+  // Independent cover rolls: vegetation without buildings, and the reverse.
+  assert.ok(vegOnly + ruinsOnly >= 1, 'expected mixed cover (trees without ruins or ruins without trees)')
+})
+
+test('island props are stable across rebuilds', () => {
+  const body = islands(1)[0]
+  getIslandProfile(body) // collision / shore can warm the profile first
+  const a = buildIslandMesh(body)
+  const b = buildIslandMesh(body)
+  assert.equal(
+    a.getObjectByName('vegetation').children.length,
+    b.getObjectByName('vegetation').children.length
+  )
+  assert.equal(
+    a.getObjectByName('ruins').children.length,
+    b.getObjectByName('ruins').children.length
+  )
+})

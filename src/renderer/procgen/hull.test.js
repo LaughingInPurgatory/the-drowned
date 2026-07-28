@@ -135,3 +135,28 @@ test('hull proportions stay in boat territory, not aircraft', () => {
     assert.ok(size.y < size.z, `${cls.id} is deeper than it is long`)
   }
 })
+
+test('deck line sheers up at bow and stern', () => {
+  // A boat's deck is lowest around the working midships and lifts toward the
+  // stem (and a little at the counter). Space-era station bands tapered the
+  // ends so hard the deck *dropped* there — pin the opposite.
+  for (const cls of sample()) {
+    const h = cls.hull.stationHeights
+    const oy = cls.hull.stationOffsetsY ?? h.map(() => 0)
+    const deck = h.map((hh, i) => hh + oy[i])
+    const a = Math.floor(h.length * 0.3)
+    const b = Math.ceil(h.length * 0.7)
+    let work = deck[a]
+    for (let i = a; i <= b; i++) work = Math.min(work, deck[i])
+    const bowRise = deck[deck.length - 1] - work
+    const aftRise = deck[0] - work
+    assert.ok(
+      bowRise > work * 0.08,
+      `${cls.id}: bow deck only ${bowRise.toFixed(2)} above mid (${work.toFixed(2)}) — no sheer`
+    )
+    assert.ok(
+      aftRise > -work * 0.02,
+      `${cls.id}: transom deck ${aftRise.toFixed(2)} below mid — stern droops`
+    )
+  }
+})

@@ -2,6 +2,7 @@ import { mulberry32, pick, range, intRange } from './prng.js'
 import { generateBodyName, generateHumanName, generateSpeciesName, claimFixedName } from './names.js'
 import { ECONOMY_TAGS } from '../data/economyTags.js'
 import { rollSecurityRating } from '../game/security.js'
+import { islandShorelineToward, SHORE_KEEP_OUT } from '../render/islandMesh.js'
 
 /**
  * The drowned world: one seamless sea with everything in a single coordinate
@@ -42,8 +43,10 @@ const OUTPOST_CLEARANCE = 150
 const PLACEMENT_MARGIN = 380
 const PLACE_ATTEMPTS = 60
 
-/** Fraction of ports that float free (rigs, moored hulks) rather than hug a coast. */
-const FLOATING_PORT_CHANCE = 0.28
+/**
+ * Outposts may sit in open water (rigs, weather posts). Harbours never do —
+ * a working port is always hard against an island shore.
+ */
 const FLOATING_OUTPOST_CHANCE = 0.45
 /** Ports that keep a crew berth — where you wake up after being sunk. */
 const BERTH_CHANCE = 0.3
@@ -111,8 +114,13 @@ export function bodyShellRadius(body) {
   return body.radius ?? 0
 }
 
-function overlapsAnything(position, shell, bodies) {
+/**
+ * @param {string|null} [ignoreId] body to skip — used when seating a harbour on
+ *   its own island (parent shells intentionally overlap).
+ */
+function overlapsAnything(position, shell, bodies, ignoreId = null) {
   for (const other of bodies) {
+    if (ignoreId && other.id === ignoreId) continue
     const dx = position[0] - other.position[0]
     const dz = position[2] - other.position[2]
     const need = shell + bodyShellRadius(other) + PLACEMENT_MARGIN
@@ -129,11 +137,24 @@ function seaPosition(rng, minR = 0, maxR = WORLD_RADIUS) {
   return [Math.cos(a) * r, 0, Math.sin(a) * r]
 }
 
-/** A berth on an island's coast: just outside the shore, lifted to sea level. */
-function coastPosition(rng, host, ownShell) {
+/**
+ * Seat a settlement on an island's real waterline (not the generation disc).
+ * `ownShell` is only used as a soft push so large harbours sit a little further
+ * out than a jetty — still hard against the landmass, never mid-channel.
+ */
+function coastPosition(rng, host, ownShell = 0) {
   const a = rng() * Math.PI * 2
-  const r = host.radius + ownShell + range(rng, PLACEMENT_MARGIN * 0.4, PLACEMENT_MARGIN * 1.4)
-  return [host.position[0] + Math.cos(a) * r, 0, host.position[2] + Math.sin(a) * r]
+  const dirX = Math.cos(a)
+  const dirZ = Math.sin(a)
+  // islandShorelineToward includes ship keep-out; strip that so the quay sits
+  // on the beach edge, then add a short jetty reach.
+  const probeX = host.position[0] + dirX * (host.radius * 3 + 2000)
+  const probeZ = host.position[2] + dirZ * (host.radius * 3 + 2000)
+  const shore =
+    islandShorelineToward(host, probeX, probeZ) - SHORE_KEEP_OUT
+  const jetty = range(rng, 50, 140) + Math.min(120, ownShell * 0.12)
+  const r = Math.max(80, shore) + jetty
+  return [host.position[0] + dirX * r, 0, host.position[2] + dirZ * r]
 }
 
 function placeFree(rng, bodies, shell, minR = 0, maxR = WORLD_RADIUS) {
@@ -360,28 +381,28 @@ export function generateWorld(seed = CANONICAL_WORLD_SEED, opts = {}) {
 
   const islands = bodies.filter((b) => b.kind === 'island')
 
-  // Harbours: most hug a coast, the rest are rigs and moored hulks in open water.
+  // Harbours: always hard against an island shore. Never mid-ocean.
   for (let i = 0; i < portCount; i++) {
-    const floating = rng() < FLOATING_PORT_CHANCE || islands.length === 0
+    if (islands.length === 0) break
     let position = null
     let host = null
-    if (!floating) {
-      for (let a = 0; a < PLACE_ATTEMPTS && !position; a++) {
-        const candidate = pick(rng, islands)
-        // One harbour per island — two on the same rock is a town, not a coast.
-        if (bodies.some((b) => b.kind === 'port' && b.parentId === candidate.id)) continue
-        const p = coastPosition(rng, candidate, PORT_CLEARANCE)
-        if (!overlapsAnything(p, PORT_CLEARANCE, bodies)) {
-          position = p
-          host = candidate
-        }
+    for (let a = 0; a < PLACE_ATTEMPTS * 2 && !position; a++) {
+      const candidate = pick(rng, islands)
+      // One harbour per island — two on the same rock is a town, not a coast.
+      if (bodies.some((b) => b.kind === 'port' && b.parentId === candidate.id)) continue
+      const p = coastPosition(rng, candidate, PORT_CLEARANCE)
+      // Ignore the host island: quays sit inside its placement shell by design.
+      if (!overlapsAnything(p, PORT_CLEARANCE, bodies, candidate.id)) {
+        position = p
+        host = candidate
       }
     }
-    position ??= placeFree(rng, bodies, PORT_CLEARANCE)
-    if (!position) continue
+    // No free-sea fallback: skip rather than invent a floating harbour.
+    if (!position || !host) continue
     bodies.push(makePort(rng, `body-${nextId()}`, position, host, usedNames))
   }
 
+  // Outposts: may hug a coast or sit alone (rigs, weather posts, salvage yards).
   for (let i = 0; i < outpostCount; i++) {
     const floating = rng() < FLOATING_OUTPOST_CHANCE || islands.length === 0
     let position = null
@@ -390,7 +411,7 @@ export function generateWorld(seed = CANONICAL_WORLD_SEED, opts = {}) {
       for (let a = 0; a < PLACE_ATTEMPTS && !position; a++) {
         const candidate = pick(rng, islands)
         const p = coastPosition(rng, candidate, OUTPOST_CLEARANCE)
-        if (!overlapsAnything(p, OUTPOST_CLEARANCE, bodies)) {
+        if (!overlapsAnything(p, OUTPOST_CLEARANCE, bodies, candidate.id)) {
           position = p
           host = candidate
         }
