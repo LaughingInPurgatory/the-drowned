@@ -80,14 +80,27 @@ test('with no input the boat carries way and decays toward rest', () => {
 
 // --- steering: heading is authoritative, rudder needs way on ---
 
-test('a stopped boat cannot steer — the rudder has nothing to bite', () => {
+test('a stopped boat can still be walked round, just not as fast', () => {
+  // Arcade handling: dead in the water you can kick the stern round on the
+  // screws. It is slower than with way on, but it is not zero — being unable to
+  // turn while stopped is the thing that made coming alongside miserable.
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const shipState = freshShipState()
-  const before = headingOf(shipState)
+
+  const stopped = freshShipState()
   for (let i = 0; i < 60; i++) {
-    updateFlight(shipState, shipClass, new Set(['KeyA']), { dx: 80, dy: 0 }, 1 / 60)
+    updateFlight(stopped, shipClass, new Set(), { dx: 40, dy: 0 }, 1 / 60)
   }
-  assert.ok(Math.abs(shipState.heading - before) < 1e-6, 'heading must not change with no way on')
+  const turnedStopped = Math.abs(stopped.heading)
+  assert.ok(turnedStopped > 0.05, `a stopped boat should still come round, got ${turnedStopped}`)
+
+  const moving = freshShipState()
+  underway(moving, shipClass)
+  const before = moving.heading
+  for (let i = 0; i < 60; i++) {
+    updateFlight(moving, shipClass, new Set(['KeyW']), { dx: 40, dy: 0 }, 1 / 60)
+  }
+  const turnedMoving = Math.abs(moving.heading - before)
+  assert.ok(turnedMoving > turnedStopped, 'the rudder should still bite harder under way')
 })
 
 test('mouse right turns to screen-right, mouse left to screen-left', () => {
@@ -107,20 +120,37 @@ test('mouse right turns to screen-right, mouse left to screen-left', () => {
   assert.ok(left.heading > start, 'mouse left should turn the other way')
 })
 
-test('A and D steer, and steer opposite ways', () => {
+test('A and D crab the hull sideways without turning it', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const a = freshShipState()
   const d = freshShipState()
-  underway(a, shipClass)
-  underway(d, shipClass)
-  const start = a.heading
 
-  for (let i = 0; i < 30; i++) {
-    updateFlight(a, shipClass, new Set(['KeyW', 'KeyA']), noMouse(), 1 / 60)
-    updateFlight(d, shipClass, new Set(['KeyW', 'KeyD']), noMouse(), 1 / 60)
+  for (let i = 0; i < 60; i++) {
+    updateFlight(a, shipClass, new Set(['KeyA']), noMouse(), 1 / 60)
+    updateFlight(d, shipClass, new Set(['KeyD']), noMouse(), 1 / 60)
   }
-  assert.ok(a.heading > start, 'A should turn to screen-left')
-  assert.ok(d.heading < start, 'D should turn to screen-right')
+  // Heading 0 means the bow is along +Z, so starboard is +X.
+  assert.ok(d.position[0] > 0.5, `D should move to starboard, got x=${d.position[0]}`)
+  assert.ok(a.position[0] < -0.5, `A should move to port, got x=${a.position[0]}`)
+  assert.ok(Math.abs(a.heading) < 1e-6, 'crabbing must not turn the hull')
+  assert.ok(Math.abs(d.heading) < 1e-6, 'crabbing must not turn the hull')
+})
+
+test('crabbing works dead in the water — that is the point of it', () => {
+  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
+  const s = freshShipState()
+  for (let i = 0; i < 60; i++) updateFlight(s, shipClass, new Set(['KeyD']), noMouse(), 1 / 60)
+  assert.ok(s.position[0] > 0.5, 'you must be able to come alongside from a standstill')
+})
+
+test('sideways way dies almost immediately once you stop crabbing', () => {
+  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
+  const s = freshShipState()
+  for (let i = 0; i < 60; i++) updateFlight(s, shipClass, new Set(['KeyD']), noMouse(), 1 / 60)
+  const drifting = Math.abs(s.velocity[0])
+  assert.ok(drifting > 0.1)
+  for (let i = 0; i < 60; i++) updateFlight(s, shipClass, new Set(), noMouse(), 1 / 60)
+  assert.ok(Math.abs(s.velocity[0]) < drifting * 0.1, 'a hull does not slide sideways for long')
 })
 
 test('mouse aim delta is consumed, including the unused vertical axis', () => {
@@ -162,7 +192,7 @@ test('quaternion heading agrees with the authoritative heading scalar', () => {
   const shipState = freshShipState()
   underway(shipState, shipClass)
   for (let i = 0; i < 90; i++) {
-    updateFlight(shipState, shipClass, new Set(['KeyW', 'KeyA']), noMouse(), 1 / 60)
+    updateFlight(shipState, shipClass, new Set(['KeyW']), { dx: 30, dy: 0 }, 1 / 60)
   }
   const f = forwardOf(shipState)
   const fromQuat = Math.atan2(f.x, f.z)
@@ -176,7 +206,7 @@ test('the boat heels into a sustained turn and rights itself afterward', () => {
   const shipState = freshShipState()
   underway(shipState, shipClass)
   for (let i = 0; i < 90; i++) {
-    updateFlight(shipState, shipClass, new Set(['KeyW', 'KeyA']), noMouse(), 1 / 60)
+    updateFlight(shipState, shipClass, new Set(['KeyW']), { dx: 30, dy: 0 }, 1 / 60)
   }
   const heeled = Math.abs(shipState.bank)
   assert.ok(heeled > 0.02, `expected heel into the turn, got ${heeled}`)

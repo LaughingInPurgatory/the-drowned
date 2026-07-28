@@ -12,6 +12,7 @@ import {
 import { getShipClass, STARTER_SHIP_CLASS_ID } from '../data/shipClasses.js'
 import { getAsteroidRocks } from '../render/asteroidFieldMesh.js'
 import { flushPendingToasts } from './security.js'
+import { getWeapon } from '../data/weapons.js'
 
 const DT = 1 / 60
 
@@ -99,7 +100,13 @@ test('fireProjectile uses the shooter\'s equipped weapon stats, not just a fixed
 
   fireProjectile(gameState, shooter, shipClass, 'player', null, 'laser')
   assert.equal(gameState.projectiles[0].weaponId, 'plasma_cannon')
-  assert.equal(gameState.projectiles[0].damage, 22, 'should use plasma_cannon\'s damage, not the old fixed laser preset')
+  // Read the expected damage from the catalogue rather than pinning a number —
+  // the point of the test is the lookup, not the balance figure.
+  assert.equal(
+    gameState.projectiles[0].damage,
+    getWeapon('plasma_cannon').damage,
+    'should use the equipped weapon\'s damage, not a fixed per-type preset'
+  )
 
   // The missile hardpoint has no explicit equippedWeapons entry, so it
   // should fall back to the category's free base weapon.

@@ -12,7 +12,10 @@ import * as THREE from 'three'
 /** Seconds for a full day + night. Long enough to notice, short enough to see. */
 export const DAY_LENGTH_S = 1500
 /** Where in the cycle a new game opens — mid-morning, so the first voyage is lit. */
-const DAY_START_PHASE = 0.32
+// Start mid-morning. A new game used to open at 21:21 — a black sea and a
+// black sky, which is a poor first thing to see and made the title screen look
+// broken rather than atmospheric.
+const DAY_START_PHASE = 0.2
 /** The sun's arc tilts off vertical so it tracks across the sky rather than over it. */
 const SUN_TILT = 0.42
 
@@ -35,8 +38,8 @@ const KEYS = [
     hemiGround: 0x0e1518,
     hemiIntensity: 0.42,
     env: 0.25,
-    seaDeep: 0x050a10,
-    seaCrest: 0x0d1a24,
+    seaDeep: 0x040b18,
+    seaCrest: 0x0d2136,
     cloud: 0x2a3547,
     cloudLit: 0x3d4a60,
     stars: 1
@@ -54,8 +57,8 @@ const KEYS = [
     hemiGround: 0x241f1c,
     hemiIntensity: 0.8,
     env: 0.7,
-    seaDeep: 0x0d1116,
-    seaCrest: 0x33302e,
+    seaDeep: 0x0a1522,
+    seaCrest: 0x2c3c4e,
     cloud: 0x6d5566,
     cloudLit: 0xffb079,
     stars: 0.35
@@ -73,8 +76,8 @@ const KEYS = [
     hemiGround: 0x2c332e,
     hemiIntensity: 1.0,
     env: 0.9,
-    seaDeep: 0x0c161a,
-    seaCrest: 0x25423d,
+    seaDeep: 0x081c2e,
+    seaCrest: 0x1c4c66,
     cloud: 0x9a94a0,
     cloudLit: 0xffe0c0,
     stars: 0
@@ -92,8 +95,8 @@ const KEYS = [
     hemiGround: 0x2b3a33,
     hemiIntensity: 1.15,
     env: 1.0,
-    seaDeep: 0x0d1a1c,
-    seaCrest: 0x27453f,
+    seaDeep: 0x0a2136,
+    seaCrest: 0x216580,
     cloud: 0xb9bcc0,
     cloudLit: 0xfff4e2,
     stars: 0

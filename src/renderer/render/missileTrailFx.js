@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { buildGlowTexture } from './thrusterParticles.js'
+import { buildGlowTexture } from './particles.js'
 
 // World-space fire + smoke contrail for flying missiles.
 

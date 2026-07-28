@@ -77,18 +77,7 @@ const STYLE = `
   content: ''; position: absolute; inset: 0; pointer-events: none;
   background: radial-gradient(ellipse at center, transparent 40%, rgba(2,4,8,0.75) 100%);
 }
-#main-menu .frame { position: absolute; inset: 14px; pointer-events: none; z-index: 2; }
-#main-menu .frame .corner { position: absolute; width: 44px; height: 44px; border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.45); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.9)) drop-shadow(0 6px 12px rgba(0,0,0,0.55)); }
-#main-menu .frame .corner.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
-#main-menu .frame .corner.tr { top: 0; right: 0; border-left: none; border-bottom: none; }
-#main-menu .frame .corner.bl { bottom: 0; left: 0; border-right: none; border-top: none; }
-#main-menu .frame .corner.br { bottom: 0; right: 0; border-left: none; border-top: none; }
 
-#main-menu .footer {
-  position: absolute; bottom: 26px; left: 0; right: 0; text-align: center; z-index: 2;
-  font-size: 10px; letter-spacing: 3px; color: var(--ui-muted); pointer-events: none;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.8), 0 2px 6px rgba(0,0,0,0.5);
-}
 /* Same monospace / cyan HUD type as in-game panels. */
 #main-menu .copyright {
   position: absolute; bottom: 22px; right: 28px; z-index: 2;
@@ -191,19 +180,6 @@ const STYLE = `
 }
 
 /* Thin glowing rule lines flanking the subtitle — cheap cinematic framing. */
-#main-menu .subtitle {
-  margin: 0; font-size: 11px; letter-spacing: 5px; color: var(--ui-soft);
-  display: flex; align-items: center; justify-content: center; gap: 14px;
-  animation: flicker 5s ease-in-out infinite;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.8), 0 2px 6px rgba(0,0,0,0.5),
-    0 2px 4px rgba(0,0,0,0.75);
-}
-#main-menu .subtitle::before, #main-menu .subtitle::after {
-  content: ''; height: 1px; width: 70px;
-  background: linear-gradient(90deg, transparent, rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.6));
-  box-shadow: 0 1px 3px rgba(0,0,0,0.7);
-}
-#main-menu .subtitle::after { background: linear-gradient(90deg, rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.6), transparent); }
 @keyframes flicker {
   0%, 92%, 100% { opacity: 0.7; }
   93%, 95% { opacity: 0.2; }
@@ -486,16 +462,10 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
   const root = document.createElement('div')
   root.id = 'main-menu'
   root.innerHTML = `
-    <div class="frame">
-      <div class="corner tl"></div><div class="corner tr"></div>
-      <div class="corner bl"></div><div class="corner br"></div>
-    </div>
-    <div class="footer">HARBOURMASTER TERMINAL // CHARTS LOADED</div>
     <div class="copyright">© Laughing In Purgatory 2026</div>
     <div class="panel main-view">
       <div class="title-block">
         <h1><span class="line" data-text="DROWNED">DROWNED</span><span class="line line-sub" data-text="WORLD">WORLD</span></h1>
-        <div class="subtitle">A PROCEDURALLY GENERATED SEA</div>
       </div>
       <div class="menu-links">
         <button class="new-game menu-link"><span class="glitch-text" data-text="New Game">New Game</span></button>

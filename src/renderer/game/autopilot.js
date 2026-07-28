@@ -30,8 +30,11 @@ const AVOID_MARGIN = 90
 const AVOID_LEAD = 0.75
 /** Floor on approach speed, so it always creeps the last few metres in. */
 const APPROACH_MIN = 0.08
-/** Deceleration distance ≈ this many seconds of travel at full autopilot speed. */
-const DECEL_TRAVEL_S = 4
+/** How long the boat spends shedding way before arrival. */
+const DECEL_TRAVEL_S = 2.5
+/** Bounds on that, so a very slow or very fast hull still eases in sensibly. */
+const DECEL_MIN = 120
+const DECEL_MAX = 600
 /** Inside this, run straight in — otherwise a harbour against its own island
  *  is circled forever by the avoidance. */
 const FINAL_APPROACH_MUL = 3.5
@@ -60,11 +63,20 @@ export function autopilotRampUpFactor(elapsedS) {
   return smoothstep01((elapsedS ?? 0) / AUTOPILOT_RAMP_UP_S)
 }
 
+/**
+ * How much of full speed to use, given how far there is still to run.
+ *
+ * The ramp is sized by how long the boat needs to shed way — nothing else.
+ * It deliberately does **not** scale with `arrivalRange`: that value says where
+ * to stop, not how long stopping takes, and a big island has an arrival ring
+ * kilometres across. Tying the two together made the autopilot crawl from 6 km
+ * out and read as slower than steering by hand.
+ *
+ * `remaining` already subtracts the ring, so a large one just means the boat
+ * comes to rest further off — at full speed right up until it needs not to be.
+ */
 export function autopilotApproachFactor(dist, arrivalRange, topSpeed) {
-  const DECEL_MAX = 6000
-  const fromArrival = Math.min(Math.max(arrivalRange * 2.2, 300), DECEL_MAX)
-  const fromSpeed = Math.min(topSpeed * DECEL_TRAVEL_S, DECEL_MAX)
-  const decelDistance = Math.max(300, Math.min(DECEL_MAX, Math.max(fromArrival, fromSpeed)))
+  const decelDistance = Math.max(DECEL_MIN, Math.min(DECEL_MAX, topSpeed * DECEL_TRAVEL_S))
   const remaining = Math.max(0, dist - arrivalRange)
   return Math.min(1, Math.max(APPROACH_MIN, remaining / decelDistance))
 }

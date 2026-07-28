@@ -25,20 +25,9 @@ const STYLE = `
   border-right: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.45);
 }
 
-/* Cockpit chrome: four corner braces plus a faint full-screen scanline wash,
-   so gameplay reads as looking through a ship canopy HUD rather than a bare
-   viewport. pointer-events: none throughout — pure decoration. */
-#hud .cockpit-frame { position: fixed; inset: 10px; pointer-events: none; z-index: 5; }
-#hud .cockpit-frame .corner {
-  position: absolute; width: 34px; height: 34px; border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.5);
-  filter:
-    drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-    drop-shadow(0 3px 6px rgba(0,0,0,0.7));
-}
-#hud .cockpit-frame .corner.tl { top: 0; left: 0; border-right: none; border-bottom: none; }
-#hud .cockpit-frame .corner.tr { top: 0; right: 0; border-left: none; border-bottom: none; }
-#hud .cockpit-frame .corner.bl { bottom: 0; left: 0; border-right: none; border-top: none; }
-#hud .cockpit-frame .corner.br { bottom: 0; right: 0; border-left: none; border-top: none; }
+/* Faint full-screen scanline wash. The four corner braces this used to sit
+   with are gone — you are on an open bridge, not looking through a canopy.
+   pointer-events: none throughout — pure decoration. */
 #hud .scanlines {
   position: fixed; inset: 0; pointer-events: none; z-index: 4; opacity: 0.35;
   background: repeating-linear-gradient(0deg, rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb),0.025) 0px, rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb),0.025) 1px, transparent 1px, transparent 4px);
@@ -312,10 +301,6 @@ export function createHud(container) {
   hud.innerHTML = `
     <div class="scanlines"></div>
     <div class="static-noise" aria-hidden="true"></div>
-    <div class="cockpit-frame">
-      <div class="corner tl"></div><div class="corner tr"></div>
-      <div class="corner bl"></div><div class="corner br"></div>
-    </div>
     <div class="system-label" role="button" tabindex="0" title="Sounding (B)" aria-label="Sounding">
       <span class="sys-name">—</span>
       <span class="nearest-body"><span class="nb-name"></span></span>

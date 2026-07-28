@@ -215,6 +215,7 @@ export function createScene(container) {
     ou.uDeepColor.value.copy(day.seaDeep)
     ou.uCrestColor.value.copy(day.seaCrest)
     ou.uSkyColor.value.copy(day.horizon)
+    ou.uSunColor.value.copy(day.sunColor)
     ou.fogColor.value.copy(day.fog)
     ocean.update(camera, t)
   }

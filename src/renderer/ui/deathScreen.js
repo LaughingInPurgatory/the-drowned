@@ -116,10 +116,21 @@ function pickPun() {
   return DEATH_PUNS[Math.floor(Math.random() * DEATH_PUNS.length)]
 }
 
+/**
+ * Faction ids are internal; these are what the player is told sank them.
+ * `police` in particular has to read as the Coast Guard, not as police.
+ */
+const FACTION_LABEL = {
+  police: 'Coast Guard',
+  pirate: 'Corsair',
+  trader: 'Merchant',
+  alien: 'The Drowned'
+}
+
 function formatFaction(faction) {
   if (!faction) return null
   const f = String(faction)
-  return f.charAt(0).toUpperCase() + f.slice(1)
+  return FACTION_LABEL[f] ?? f.charAt(0).toUpperCase() + f.slice(1)
 }
 
 export function createDeathScreen(container, onReturnToMenu) {

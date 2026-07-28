@@ -12,9 +12,16 @@ const THROTTLE_DECAY = 0.55 // throttle returns toward 0 per second when W/S rel
 const THROTTLE_MIN = -1 // S can ramp throttle negative for astern
 const REVERSE_SPEED_FRACTION = 0.25 // astern speed never exceeds this fraction of the hull's forward max
 const MOUSE_SENSITIVITY = 0.0022 // radians per pixel of mouse movement, scaled by the hull's turnRate
-// A rudder only bites against water flowing past it. Below this fraction of top
-// speed steering authority tapers off, so a stopped boat cannot spin on the spot.
+// A rudder bites harder with water flowing past it, but this is an arcade boat:
+// even dead in the water you can kick the stern round on the screws. This is the
+// authority floor at a standstill, rising to full once under way.
+const STEER_AUTHORITY_AT_REST = 0.55
 const STEER_AUTHORITY_SPEED_FRACTION = 0.25
+// Bow and stern thrusters: A/D crab the hull sideways. Works stopped, which is
+// what makes coming alongside feel good rather than fiddly.
+const STRAFE_ACCEL_MULTIPLIER = 1.6
+// Sideways way bleeds off fast — a hull has enormous lateral resistance.
+const STRAFE_DAMPING_PER_SECOND = 0.02
 // How much of the wave normal the hull adopts. Full normal is far too lively —
 // a hull spans several metres and averages the slope it sits across.
 const WAVE_TILT = 0.7
@@ -116,37 +123,54 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
     shipState.throttle = Math.min(0, shipState.throttle + THROTTLE_DECAY * dt)
   }
 
-  // Rudder: mouse X and A/D both steer. Authority scales with way through the
-  // water, so a dead-stopped hull will not pivot in place.
-  const wayFraction = Math.min(1, velocity.length() / Math.max(1e-3, speed * STEER_AUTHORITY_SPEED_FRACTION))
+  // Rudder: the mouse steers. Authority rises with way through the water but
+  // never falls to nothing, so a stopped boat can still be walked round.
+  const way = Math.min(1, velocity.length() / Math.max(1e-3, speed * STEER_AUTHORITY_SPEED_FRACTION))
+  const authority = STEER_AUTHORITY_AT_REST + (1 - STEER_AUTHORITY_AT_REST) * way
   // Camera sits astern looking forward, so hull local +X is screen-left (the
   // same reason radar negates x). Mouse-right must therefore yaw negative.
-  let rudder = -mouseAim.dx * MOUSE_SENSITIVITY
-  if (keys.has('KeyA')) rudder += turnRate * dt
-  if (keys.has('KeyD')) rudder -= turnRate * dt
+  const rudder = -mouseAim.dx * MOUSE_SENSITIVITY
   mouseAim.dx = 0
   mouseAim.dy = 0 // no pitch input on the water — consume it so it cannot pile up
 
-  const yawDelta = rudder * turnRate * wayFraction
+  const yawDelta = rudder * turnRate * authority
   heading += yawDelta
   shipState.heading = heading
 
   const forward = _fwd.set(Math.sin(heading), 0, Math.cos(heading)).clone()
+  const starboard = _right.set(Math.cos(heading), 0, -Math.sin(heading)).clone()
 
   // Thrust response > 1 so we settle on stats.speed quickly; terminal speed
   // is still exactly `speed` (dragK scales with the same factor).
   const thrustResponse = 2.5
   velocity.addScaledVector(forward, accel * thrustResponse * shipState.throttle * dt)
 
-  // Implicit drag: equilibrium at full throttle is stats.speed.
-  const thrusting = Math.abs(shipState.throttle) > 0.01
-  if (thrusting) {
-    const dragK = (accel * thrustResponse) / Math.max(1e-3, speed)
-    velocity.multiplyScalar(1 / (1 + dragK * dt))
-  } else {
-    velocity.multiplyScalar(Math.pow(DAMPING_PER_SECOND, dt))
+  // A/D crab sideways. Deliberately usable at a standstill — this is how you
+  // come alongside a quay without a twelve-point turn.
+  let strafe = 0
+  if (keys.has('KeyA')) strafe -= 1
+  if (keys.has('KeyD')) strafe += 1
+  if (strafe !== 0) {
+    velocity.addScaledVector(starboard, strafe * accel * STRAFE_ACCEL_MULTIPLIER * dt)
   }
 
+  // Split the velocity so drag can act differently along and across the hull.
+  const alongSpeed = velocity.dot(forward)
+  const acrossSpeed = velocity.dot(starboard)
+
+  // Implicit drag along the hull: equilibrium at full throttle is stats.speed.
+  const thrusting = Math.abs(shipState.throttle) > 0.01
+  const along = thrusting
+    ? alongSpeed / (1 + ((accel * thrustResponse) / Math.max(1e-3, speed)) * dt)
+    : alongSpeed * Math.pow(DAMPING_PER_SECOND, dt)
+  // Across it, way dies almost at once — a hull has vastly more lateral
+  // resistance than fore-and-aft, which is why crabbing is a manoeuvre and not
+  // a way to travel.
+  const across = strafe !== 0
+    ? acrossSpeed / (1 + ((accel * STRAFE_ACCEL_MULTIPLIER) / Math.max(1e-3, speed * 0.4)) * dt)
+    : acrossSpeed * Math.pow(STRAFE_DAMPING_PER_SECOND, dt)
+
+  velocity.copy(forward).multiplyScalar(along).addScaledVector(starboard, across)
   if (velocity.length() > speed) velocity.setLength(speed)
 
   // Cap astern speed to a small fraction of the ahead max — the speed clamp
@@ -171,8 +195,8 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
   shipState.bank += (targetBank - shipState.bank) * Math.min(1, BANK_SMOOTHING * dt)
   applySeaAttitude(shipState, heading, t, shipState.bank, TRIM_PITCH * Math.max(0, shipState.throttle))
 
-  // Exposed for wake/spray VFX + SFX (main.js). strafeX carries rudder side so
-  // the wake kicks out of the turn; there is no vertical thruster on a boat.
-  shipState.strafeX = Math.sign(yawDelta)
+  // Exposed for wake/spray VFX + SFX (main.js).
+  shipState.strafeX = strafe
   shipState.strafeY = 0
+  shipState.rudder = Math.sign(yawDelta)
 }

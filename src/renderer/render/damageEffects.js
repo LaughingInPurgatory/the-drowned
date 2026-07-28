@@ -1,7 +1,7 @@
 import * as THREE from 'three'
-import { createPuffEmitter, buildGlowTexture } from './thrusterParticles.js'
+import { createPuffEmitter, buildGlowTexture } from './particles.js'
 
-// Reuses thrusterParticles.js's round glow-sprite puff emitter for smoke
+// Reuses particles.js's round glow-sprite puff emitter for smoke
 // (armor damage), flame, and scattering hull-debris chunks — the same
 // "recycled pool drifting forever" technique, just recolored and driven by
 // damage fraction instead of thrust state. Intensity (spawn rate/speed) scales

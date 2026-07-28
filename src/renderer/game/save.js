@@ -10,7 +10,6 @@ import { ensureLawStanding } from './security.js'
 import { getWorld } from '../procgen/world.js'
 import { tickGalaxyAnomalies } from './systemScan.js'
 import { ensureSkills } from './skills.js'
-import { ensureClones, ensureGalaxyCloneBays } from './clones.js'
 
 /** Remap qty map keys through a resolver, merging collisions. */
 function remapCountMap(map, resolveKey) {
@@ -195,7 +194,6 @@ export function deserializeGameState(data) {
   gameState.player.ship.drones ??= []
   // Skills (0–20) + skillbooks on ship; normalize missing keys from older saves.
   ensureSkills(gameState)
-  ensureClones(gameState)
   // Ensure bay-compatible drone slots after load (class may have gained bays).
   try {
     ensureDrones(gameState.player.ship)
@@ -228,8 +226,6 @@ export function deserializeGameState(data) {
       if (body.kind === 'port') body.hasShipyard = true
     }
   }
-  // Berths: deterministic ~30% of harbours (stable body-id hash).
-  ensureGalaxyCloneBays(gameState.galaxy)
   const world = getWorld(gameState.galaxy)
   // One sea — both ids always name it, whatever a save happened to store.
   gameState.player.currentSystemId = world?.id ?? gameState.player.currentSystemId

@@ -62,8 +62,6 @@ export function createGameState({
       portraitDataUrl: portraitDataUrl || null,
       // Player-only skills 0–20 (data/skills.js) — raised via skillbooks.
       skills: emptySkills(),
-      // Placed clone bodies (game/clones.js) — capacity 1 + Cloning skill.
-      clones: [],
       ship: {
         classId: shipClassId,
         instanceName: shipInstanceName,

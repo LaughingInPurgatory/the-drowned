@@ -74,6 +74,8 @@ const SEGMENTS = 52
 const SHELF_RINGS = 6
 /** How far past the coast the shelf reaches, as a fraction of the radius. */
 const SHELF_REACH = 0.22
+/** Where the rim taper starts, as a fraction of the disc radius. */
+const RIM_FADE_FROM = 0.88
 /** How far the skirt runs below the surface, so no swell can undercut it. */
 const SKIRT_DEPTH = SEA_MAX_AMPLITUDE + 12
 /** World units per texture tile. Keeps a 300 m islet and a 3 km island looking
@@ -212,8 +214,13 @@ function makeHeightField(rng, landform) {
   }
 }
 
-/** Bearings sampled around an island when tracing its coastline. */
-const SHORE_SAMPLES = 96
+/**
+ * Bearings sampled around an island when tracing its coastline. Deliberately a
+ * multiple of SEGMENTS: the mesh evaluates the height field at its own
+ * bearings, and if the trace samples fewer, land can stand up between two of
+ * them — visible ground with no collision behind it.
+ */
+const SHORE_SAMPLES = 208
 /** Radial steps per bearing. More is a tighter shoreline, at build cost only. */
 const SHORE_STEPS = 48
 /**
@@ -231,8 +238,11 @@ const GROUNDING_HEIGHT = SEA_MAX_AMPLITUDE * 0.4
  * actual beach rather than a circle drawn round the whole disc. Same rule as
  * the sea — one definition, two consumers.
  */
+const islandProfiles = new WeakMap()
+
 export function getIslandProfile(body) {
-  if (body._islandProfile) return body._islandProfile
+  const cached = islandProfiles.get(body)
+  if (cached) return cached
 
   const seed = body.shapeSeed ?? hashString(body.id)
   const rng = mulberry32(seed)
@@ -249,7 +259,16 @@ export function getIslandProfile(body) {
   const radius = Math.max(60, body.radius ?? 400)
   const heightBand = LANDFORM_HEIGHT[landform] ?? LANDFORM_HEIGHT.dome
   const height = radius * range(rng, heightBand[0], heightBand[1])
-  const heightAt = makeHeightField(rng, landform)
+  const rawHeight = makeHeightField(rng, landform)
+  // Force every landform to reach nothing by the disc edge. Some of them (mesa,
+  // atoll, cluster) can still be above water at r = 1, and the shelf beyond
+  // that starts from wherever the land finished — so land ended up standing
+  // proud *outside* the traced coastline, which is water you can sail through.
+  const heightAt = (r, theta) => {
+    if (r >= 1) return 0
+    const rim = r > RIM_FADE_FROM ? 1 - (r - RIM_FADE_FROM) / (1 - RIM_FADE_FROM) : 1
+    return rawHeight(r, theta) * rim * rim * (3 - 2 * rim)
+  }
 
   // Trace the coastline: per bearing, the furthest point still standing above
   // the waterline. Everything beyond that is open water you can sail into —
@@ -282,9 +301,15 @@ export function getIslandProfile(body) {
     shore[i] = lo * radius
     if (shore[i] > maxShore) maxShore = shore[i]
   }
+  // A hair of slack, so the outermost mesh vertex is never outside the shell
+  // that the cheap reject in resolveBodyCollisions tests against.
+  maxShore *= 1.01
 
   const profile = { archetype, surfaces, landform, radius, height, heightAt, shore, maxShore, rng }
-  body._islandProfile = profile
+  // A WeakMap, not a field on the body. The world is structured-cloned to the
+  // main process on every save, and this profile holds closures — parking it on
+  // the body made saving throw "object could not be cloned".
+  islandProfiles.set(body, profile)
   return profile
 }
 
@@ -296,12 +321,14 @@ export function islandShorelineToward(body, x, z) {
   const profile = getIslandProfile(body)
   const theta = Math.atan2(z - body.position[2], x - body.position[0])
   const t = ((theta / (Math.PI * 2)) % 1 + 1) % 1
-  // Interpolate between samples so the coast is a curve, not 96 flat facets.
+  // Take the *outer* of the two bracketing samples rather than blending them.
+  // Between bearings the true coast can bulge past a linear interpolation, and
+  // erring outward means you ground a metre early somewhere rather than sailing
+  // through a headland you can see.
   const f = t * SHORE_SAMPLES
   const i0 = Math.floor(f) % SHORE_SAMPLES
   const i1 = (i0 + 1) % SHORE_SAMPLES
-  const k = f - Math.floor(f)
-  return profile.shore[i0] * (1 - k) + profile.shore[i1] * k
+  return Math.max(profile.shore[i0], profile.shore[i1])
 }
 
 /** Furthest the land reaches — the shell for targeting and arrival ranges. */
@@ -391,14 +418,19 @@ export function buildIslandMesh(body) {
     }
   }
 
+  // Winding matters. Seen from above, increasing theta runs clockwise in the
+  // XZ plane, so the naive order puts every face's normal *downward* — the
+  // island is then back-faced from any normal viewpoint and you see straight
+  // through it to the inside of the far slope. Emit reversed. (The ocean disc
+  // had exactly this bug; see render/oceanMesh.js.)
   const indices = []
   const row = SEGMENTS + 1
   for (let i = 0; i < total; i++) {
     for (let s = 0; s < SEGMENTS; s++) {
       const a = i * row + s
       const b = a + row
-      indices.push(a, b, a + 1)
-      indices.push(a + 1, b, b + 1)
+      indices.push(a, a + 1, b)
+      indices.push(a + 1, b + 1, b)
     }
   }
 

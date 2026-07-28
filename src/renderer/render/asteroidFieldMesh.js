@@ -20,9 +20,12 @@ const MIN_SEP_MUL = 1.55
 // clearance). Flight collision uses each rock individually — see collision.js.
 // Exported so main.js targeting and game/collision.js share one rock layout.
 // Cached on the body — regenerating every projectile/frame was a belt combat hitch.
+const asteroidRockCache = new WeakMap()
+
 export function getAsteroidRocks(body) {
   if (!body) return []
-  if (body._asteroidRocks) return body._asteroidRocks
+  const cached = asteroidRockCache.get(body)
+  if (cached) return cached
 
   const rng = mulberry32(hashString(body.id))
   // Field scatter radius (procgen ~180–320×system scale).
@@ -33,6 +36,20 @@ export function getAsteroidRocks(body) {
   // Anomaly ore fields roll a smaller, variable rock count (6–15); normal
   // fields keep the fixed ROCK_COUNT.
   const rockCount = body.rockCount ?? ROCK_COUNT
+
+  /**
+   * Where a hulk floats.
+   *
+   * A wreck is a *wreck*: it is on the bottom, or awash, or aground on the
+   * shoal. What it must never be is hanging clear of the water with daylight
+   * under it, which is what a symmetric scatter around y = 0 produced — a few
+   * per field ended up entirely above the surface.
+   *
+   * So the vertical placement is measured from the hulk's own size: the top of
+   * it lands somewhere between well submerged and standing most of the way
+   * proud, and never higher.
+   */
+  const settleDepth = (collR) => range(rng, -collR * 1.35, -collR * 0.12)
 
   const rocks = []
   for (let i = 0; i < rockCount; i++) {
@@ -49,11 +66,7 @@ export function getAsteroidRocks(body) {
     for (let attempt = 0; attempt < 48; attempt++) {
       // Slightly larger placement volume so separation succeeds more often.
       const place = spread * 1.05
-      const p = [
-        range(rng, -place, place),
-        range(rng, -place, place) * 0.22,
-        range(rng, -place, place)
-      ]
+      const p = [range(rng, -place, place), settleDepth(collR), range(rng, -place, place)]
       let ok = true
       for (const other of rocks) {
         const dx = p[0] - other.position[0]
@@ -74,7 +87,7 @@ export function getAsteroidRocks(body) {
     if (!position) {
       const a = rng() * Math.PI * 2
       const r = spread * (0.55 + rng() * 0.5)
-      position = [Math.cos(a) * r, range(rng, -spread * 0.1, spread * 0.1), Math.sin(a) * r]
+      position = [Math.cos(a) * r, settleDepth(collR), Math.sin(a) * r]
     }
 
     rocks.push({
@@ -87,7 +100,9 @@ export function getAsteroidRocks(body) {
       collisionRadius: collR
     })
   }
-  body._asteroidRocks = rocks
+  // Cached off the body for the same reason as the island profile: the world
+  // is cloned wholesale on save (see render/islandMesh.js).
+  asteroidRockCache.set(body, rocks)
   return rocks
 }
 

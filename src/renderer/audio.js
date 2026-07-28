@@ -137,9 +137,11 @@ window.addEventListener('click', resumeAudioOnGesture, { once: true })
 const sfxBuffers = new Map()
 let sfxLoadPromise = null
 
+// No thrust.ogg and no laser_*.ogg any more: nothing on this sea runs on
+// reaction mass or coherent light. The engine is a synthesised diesel (see
+// setThrustState) and the guns are synthesised reports (WEAPON_SYNTH).
 const SFX_FILES = [
-  'thrust.ogg', 'thrust_brake.ogg', 'supercruise.ogg', 'engine_engage.ogg',
-  'laser_pulse.ogg', 'laser_rapid.ogg', 'laser_burst.ogg', 'laser_beam.ogg', 'laser_plasma.ogg',
+  'supercruise.ogg', 'engine_engage.ogg',
   'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
   'dock.ogg', 'undock.ogg', 'dock_clamp.ogg', 'dock_seal.ogg'
 ]
@@ -158,12 +160,6 @@ function ensureSfx() {
       console.warn(`sfx load failed: ${name}`, err)
     }
   })).then(() => {
-    // If thrust started on synth before decode finished, swap to samples.
-    if (thrustMode && !thrustNodes) {
-      const mode = thrustMode
-      thrustMode = null
-      setThrustState(mode)
-    }
     // Cruise bed is pure synth (stretched thunder) — only re-arm if still wanted.
     if (cruiseWanted) {
       if (!cruiseRumble) startCruiseLoop()
@@ -282,103 +278,103 @@ function noiseBurst({ duration, filterFreq = 800, peak = 0.4, drive = 0, delay =
   source.start(start)
 }
 
-// One sample (plus small rate jitter) per weapon id in data/weapons.js.
-// Lasers: lower rate = beefier / lower-pitched. Missiles: rumble launch.
-// Synth fallbacks keep fire audible if samples haven't decoded yet.
+// Weapon report, per weapon id in data/weapons.js.
+//
+// All synthesised, deliberately. There is no energy weapon on this sea, so the
+// laser samples are gone; what is left is powder, hydraulics and counterweights.
+// A gun report is a very short shaped noise transient over a low thump, which
+// oscillators do well and a generic "zap" sample does not.
+//
+// The launcher samples (rocket/missile/torpedo) survive — they were already
+// low whooshes rather than sci-fi, and they read fine as a harpoon or a fish
+// leaving the tube.
 const WEAPON_SAMPLES = {
-  pulse_laser: { file: 'laser_pulse.ogg', volume: 0.6, rate: 0.58 },
-  rapid_laser: { file: 'laser_rapid.ogg', volume: 0.52, rate: 0.62 },
-  burst_laser: { file: 'laser_burst.ogg', volume: 0.6, rate: 0.54 },
-  beam_laser: { file: 'laser_beam.ogg', volume: 0.64, rate: 0.56 },
-  plasma_cannon: { file: 'laser_plasma.ogg', volume: 0.72, rate: 0.5 },
-  rocket_pod: { file: 'rocket.ogg', volume: 0.74, rate: 0.72 },
-  seeker_missile: { file: 'missile.ogg', volume: 0.78, rate: 0.68 },
-  torpedo: { file: 'torpedo.ogg', volume: 0.84, rate: 0.62 }
-  // Alien weapons: synth-only (no ogg) — organic/void character in fallbacks.
+  rocket_pod: { file: 'rocket.ogg', volume: 0.7, rate: 0.62 },
+  seeker_missile: { file: 'missile.ogg', volume: 0.74, rate: 0.6 },
+  torpedo: { file: 'torpedo.ogg', volume: 0.84, rate: 0.58 },
+  singularity_seed: { file: 'torpedo.ogg', volume: 0.88, rate: 0.5 }
+}
+
+/**
+ * A gun going off: a crack (the muzzle blast), a body thump (the breech and the
+ * mount taking the recoil), and a tail (the report rolling away over water).
+ *
+ * @param {object} o
+ * @param {number} o.crack   brightness of the muzzle blast, Hz
+ * @param {number} o.body    fundamental of the thump, Hz
+ * @param {number} o.punch   overall level
+ * @param {number} o.tail    seconds of roll-off across the water
+ */
+function gunReport({ crack, body, punch = 0.4, tail = 0.35, drive = 2.4 }) {
+  noiseBurst({ duration: 0.035, filterFreq: crack, peak: punch, drive })
+  noiseBurst({ duration: tail, filterFreq: crack * 0.28, peak: punch * 0.55, drive: drive * 1.4, delay: 0.01 })
+  tone({ type: 'sine', freq: body, freqEnd: body * 0.35, duration: tail * 0.8, peak: punch * 0.9 })
+  tone({ type: 'square', freq: body * 2.4, freqEnd: body * 0.7, duration: 0.06, peak: punch * 0.35 })
 }
 
 const WEAPON_SYNTH_FALLBACK = {
-  pulse_laser: () => {
-    tone({ type: 'sawtooth', freq: 300, freqEnd: 70, duration: 0.22, peak: 0.34 })
-    tone({ type: 'square', freq: 130, freqEnd: 42, duration: 0.2, peak: 0.24 })
-    tone({ type: 'sine', freq: 55, freqEnd: 26, duration: 0.24, peak: 0.32 })
-    noiseBurst({ duration: 0.14, filterFreq: 500, peak: 0.2, drive: 1.5 })
-  },
-  rapid_laser: () => {
-    tone({ type: 'sawtooth', freq: 380, freqEnd: 95, duration: 0.11, peak: 0.28 })
-    tone({ type: 'square', freq: 160, freqEnd: 55, duration: 0.1, peak: 0.18 })
-    tone({ type: 'sine', freq: 65, freqEnd: 32, duration: 0.11, peak: 0.22 })
-  },
+  // --- Guns ---
+  // Deck gun: a single heavy shell. Slow, loud, and it rolls.
+  pulse_laser: () => gunReport({ crack: 2600, body: 78, punch: 0.5, tail: 0.55, drive: 3 }),
+  // Autocannon: fast and dry, no time for a tail before the next round.
+  rapid_laser: () => gunReport({ crack: 3600, body: 150, punch: 0.3, tail: 0.12, drive: 1.8 }),
+  // Chain gun: faster still, brighter, mechanical.
   burst_laser: () => {
-    tone({ type: 'square', freq: 260, freqEnd: 72, duration: 0.18, peak: 0.3 })
-    tone({ type: 'sawtooth', freq: 220, freqEnd: 55, duration: 0.18, peak: 0.24, delay: 0.05 })
-    tone({ type: 'sine', freq: 52, freqEnd: 22, duration: 0.22, peak: 0.3 })
-    noiseBurst({ duration: 0.16, filterFreq: 420, peak: 0.22, drive: 2 })
+    gunReport({ crack: 4200, body: 190, punch: 0.26, tail: 0.09, drive: 1.6 })
+    // The action cycling — this is what separates a chain gun from a rifle.
+    tone({ type: 'square', freq: 620, freqEnd: 380, duration: 0.04, peak: 0.1, delay: 0.02 })
   },
+  // Rivet gun: a compressed-air slam driving a steel bolt. More clang than bang.
   beam_laser: () => {
-    tone({ type: 'sawtooth', freq: 400, freqEnd: 110, duration: 0.38, peak: 0.3 })
-    tone({ type: 'sine', freq: 72, freqEnd: 32, duration: 0.42, peak: 0.34 })
-    noiseBurst({ duration: 0.36, filterFreq: 700, peak: 0.2, drive: 1.8 })
+    noiseBurst({ duration: 0.06, filterFreq: 1400, peak: 0.36, drive: 2 })
+    tone({ type: 'square', freq: 210, freqEnd: 60, duration: 0.18, peak: 0.34 })
+    tone({ type: 'triangle', freq: 1250, freqEnd: 700, duration: 0.22, peak: 0.14, delay: 0.01 })
+    tone({ type: 'sine', freq: 52, freqEnd: 24, duration: 0.3, peak: 0.3 })
   },
+  // Stone catapult: rope, timber and a counterweight. No powder at all — a
+  // creak, the arm slamming its stop, and the rock leaving.
   plasma_cannon: () => {
-    tone({ type: 'sine', freq: 110, freqEnd: 32, duration: 0.55, peak: 0.45 })
-    noiseBurst({ duration: 0.5, filterFreq: 360, peak: 0.42, drive: 2.8 })
-    tone({ type: 'square', freq: 55, freqEnd: 22, duration: 0.45, peak: 0.3 })
+    tone({ type: 'sawtooth', freq: 90, freqEnd: 130, duration: 0.28, peak: 0.1 })
+    noiseBurst({ duration: 0.09, filterFreq: 900, peak: 0.4, drive: 2.6, delay: 0.26 })
+    tone({ type: 'sine', freq: 62, freqEnd: 28, duration: 0.5, peak: 0.5, delay: 0.26 })
+    tone({ type: 'square', freq: 140, freqEnd: 48, duration: 0.2, peak: 0.2, delay: 0.27 })
   },
-  // Missile launch: low whoosh + crackle, not a laser zap.
+
+  // --- Launchers ---
+  // Harpoon gun: the charge, then line running off the drum behind it.
   rocket_pod: () => {
-    noiseBurst({ duration: 0.14, filterFreq: 1100, peak: 0.36, drive: 2 })
-    noiseBurst({ duration: 0.62, filterFreq: 220, peak: 0.45, drive: 3.2, delay: 0.03 })
-    noiseBurst({ duration: 0.8, filterFreq: 550, peak: 0.2, delay: 0.1 })
-    tone({ type: 'sine', freq: 40, freqEnd: 18, duration: 0.8, peak: 0.48 })
+    noiseBurst({ duration: 0.05, filterFreq: 2200, peak: 0.42, drive: 2.4 })
+    tone({ type: 'sine', freq: 95, freqEnd: 40, duration: 0.3, peak: 0.4 })
+    noiseBurst({ duration: 0.7, filterFreq: 1700, peak: 0.14, delay: 0.05 })
   },
   seeker_missile: () => {
-    noiseBurst({ duration: 0.12, filterFreq: 1300, peak: 0.4, drive: 2.2 })
-    noiseBurst({ duration: 0.7, filterFreq: 260, peak: 0.48, drive: 3.5, delay: 0.04 })
-    noiseBurst({ duration: 0.95, filterFreq: 700, peak: 0.18, delay: 0.12 })
-    tone({ type: 'sine', freq: 45, freqEnd: 20, duration: 0.85, peak: 0.5 })
-    tone({ type: 'triangle', freq: 140, freqEnd: 48, duration: 0.4, peak: 0.12, delay: 0.05 })
+    noiseBurst({ duration: 0.06, filterFreq: 2600, peak: 0.46, drive: 2.6 })
+    tone({ type: 'sine', freq: 80, freqEnd: 34, duration: 0.38, peak: 0.46 })
+    noiseBurst({ duration: 0.95, filterFreq: 1500, peak: 0.16, delay: 0.06 })
   },
   torpedo: () => {
-    noiseBurst({ duration: 0.16, filterFreq: 750, peak: 0.44, drive: 2.5 })
-    noiseBurst({ duration: 0.85, filterFreq: 160, peak: 0.52, drive: 4, delay: 0.05 })
-    noiseBurst({ duration: 1.15, filterFreq: 400, peak: 0.22, delay: 0.14 })
-    tone({ type: 'sine', freq: 32, freqEnd: 15, duration: 1.05, peak: 0.58 })
+    // Compressed air slamming a fish out of the tube, then it swims.
+    noiseBurst({ duration: 0.22, filterFreq: 480, peak: 0.5, drive: 3.4 })
+    tone({ type: 'sine', freq: 38, freqEnd: 17, duration: 0.9, peak: 0.55 })
+    noiseBurst({ duration: 1.1, filterFreq: 300, peak: 0.2, delay: 0.15 })
   },
-  // Alien — wet chirps, sub-growls, dissonant inharmonics (no human zap).
-  phase_spit: () => {
-    tone({ type: 'sine', freq: 180, freqEnd: 48, duration: 0.2, peak: 0.28 })
-    tone({ type: 'triangle', freq: 920, freqEnd: 210, duration: 0.16, peak: 0.18 })
-    tone({ type: 'sawtooth', freq: 67, freqEnd: 28, duration: 0.22, peak: 0.2 })
-    noiseBurst({ duration: 0.12, filterFreq: 900, peak: 0.16, drive: 2.2 })
-  },
+
+  // --- The Drowned: pre-war military ordnance, salvaged and refitted ---
+  phase_spit: () => gunReport({ crack: 3900, body: 165, punch: 0.34, tail: 0.14, drive: 2 }),
+  // Railgun: not a chemical propellant — a capacitor bank dumping, then a
+  // supersonic slug tearing the air. The one weapon allowed an electrical edge.
   void_lance: () => {
-    tone({ type: 'sine', freq: 55, freqEnd: 22, duration: 0.45, peak: 0.42 })
-    tone({ type: 'sawtooth', freq: 1400, freqEnd: 90, duration: 0.38, peak: 0.16 })
-    tone({ type: 'triangle', freq: 280, freqEnd: 60, duration: 0.4, peak: 0.22, delay: 0.04 })
-    noiseBurst({ duration: 0.35, filterFreq: 280, peak: 0.28, drive: 3.2 })
-    noiseBurst({ duration: 0.2, filterFreq: 1800, peak: 0.14, delay: 0.05 })
+    tone({ type: 'sawtooth', freq: 2400, freqEnd: 120, duration: 0.05, peak: 0.2 })
+    noiseBurst({ duration: 0.05, filterFreq: 6000, peak: 0.45, drive: 1.4 })
+    noiseBurst({ duration: 0.45, filterFreq: 900, peak: 0.3, drive: 2.6, delay: 0.02 })
+    tone({ type: 'sine', freq: 60, freqEnd: 26, duration: 0.6, peak: 0.42 })
   },
-  neural_sear: () => {
-    tone({ type: 'square', freq: 480, freqEnd: 120, duration: 0.14, peak: 0.22 })
-    tone({ type: 'sine', freq: 510, freqEnd: 95, duration: 0.15, peak: 0.2, delay: 0.02 })
-    tone({ type: 'triangle', freq: 1100, freqEnd: 200, duration: 0.12, peak: 0.12 })
-    noiseBurst({ duration: 0.1, filterFreq: 2400, peak: 0.18, drive: 1.8 })
-  },
+  neural_sear: () => gunReport({ crack: 5200, body: 240, punch: 0.22, tail: 0.07, drive: 1.4 }),
+  // Depth charge: a drum rolled off the stern. Barely a sound until it goes.
   spore_pod: () => {
-    noiseBurst({ duration: 0.2, filterFreq: 600, peak: 0.32, drive: 2.4 })
-    noiseBurst({ duration: 0.7, filterFreq: 140, peak: 0.4, drive: 3.5, delay: 0.04 })
-    tone({ type: 'sine', freq: 70, freqEnd: 24, duration: 0.75, peak: 0.38 })
-    tone({ type: 'triangle', freq: 210, freqEnd: 40, duration: 0.5, peak: 0.14, delay: 0.08 })
-    // Wet "pop" layers
-    tone({ type: 'sine', freq: 340, freqEnd: 80, duration: 0.18, peak: 0.16, delay: 0.02 })
-  },
-  singularity_seed: () => {
-    tone({ type: 'sine', freq: 28, freqEnd: 12, duration: 1.1, peak: 0.55 })
-    tone({ type: 'sawtooth', freq: 90, freqEnd: 18, duration: 0.95, peak: 0.28 })
-    noiseBurst({ duration: 0.25, filterFreq: 400, peak: 0.35, drive: 3 })
-    noiseBurst({ duration: 1.0, filterFreq: 90, peak: 0.48, drive: 4.5, delay: 0.06 })
-    tone({ type: 'triangle', freq: 600, freqEnd: 40, duration: 0.6, peak: 0.12, delay: 0.1 })
+    noiseBurst({ duration: 0.12, filterFreq: 700, peak: 0.24, drive: 2 })
+    tone({ type: 'square', freq: 120, freqEnd: 70, duration: 0.16, peak: 0.16 })
+    noiseBurst({ duration: 0.5, filterFreq: 260, peak: 0.2, drive: 3, delay: 0.1 })
   }
 }
 
@@ -719,7 +715,7 @@ export function setStrafeActive(active) {
     }
     return
   }
-  const nodes = playSample('thrust.ogg', { volume: 0.22, rate: 1.35, loop: true, fadeIn: 0.06 })
+  const nodes = playSample('engine_engage.ogg', { volume: 0.2, rate: 0.55, loop: true, fadeIn: 0.06 })
   if (nodes) {
     strafeNodes = nodes
     return
@@ -741,8 +737,8 @@ export function setStrafeActive(active) {
 // Kenney CC0 samples (see public/audio/sfx/); synth fallback if not loaded.
 export function playDock() {
   ensureSfx()
-  // Soft thruster wash as the ship glides into the hang.
-  playSample('thrust.ogg', { volume: 0.22, rate: 0.72, fadeIn: 0.05 })
+  // Slow burble of the main engine as she comes alongside.
+  noiseBurst({ duration: 1.1, filterFreq: 190, peak: 0.24, drive: 2.6 })
   const clamp = playSample('dock_clamp.ogg', { volume: 0.62, rate: 0.88, delay: 0.35 })
   const door = playSample('dock.ogg', { volume: 0.55, delay: 0.48 })
   const seal = playSample('dock_seal.ogg', { volume: 0.32, rate: 0.82, delay: 0.72 })
@@ -774,7 +770,7 @@ export function playUndock() {
   const door = playSample('undock.ogg', { volume: 0.58, delay: 0.08 })
   const clamp = playSample('dock_clamp.ogg', { volume: 0.5, rate: 1.12, delay: 0.32 })
   playSample('dock_clamp.ogg', { volume: 0.32, rate: 0.95, delay: 0.55 })
-  playSample('thrust.ogg', { volume: 0.28, rate: 0.85, delay: 0.7 })
+  noiseBurst({ duration: 1.2, filterFreq: 220, peak: 0.3, drive: 2.8, delay: 0.7 })
   playSample('engine_engage.ogg', { volume: 0.22, rate: 1.15, delay: 0.85 })
   if (seal || door || clamp) {
     tone({ type: 'sine', freq: 660, freqEnd: 440, duration: 0.15, peak: 0.07, delay: 0.05 })
@@ -791,7 +787,7 @@ export function playUndock() {
 // Mid-sequence thruster nudge during the exterior approach / back-away half.
 export function playDockThrusterPulse() {
   ensureSfx()
-  const s = playSample('thrust.ogg', { volume: 0.2, rate: 1.05, fadeIn: 0.02 })
+  const s = playSample('engine_engage.ogg', { volume: 0.16, rate: 0.7, fadeIn: 0.02 })
   if (s) return
   tone({ type: 'sawtooth', freq: 95, freqEnd: 55, duration: 0.28, peak: 0.1 })
   noiseBurst({ duration: 0.22, filterFreq: 700, peak: 0.1 })
@@ -1101,63 +1097,177 @@ export function announce(text) {
   window.speechSynthesis.speak(utterance)
 }
 
-let thrustNodes = null
-let thrustMode = null // 'accel' | 'brake' | null
-// Synth fallback nodes when samples aren't ready yet.
-let thrustOsc = null
-let thrustGain = null
+/**
+ * Main engine — a salvaged marine diesel, not a thruster.
+ *
+ * Synthesised rather than sampled because the character that makes a diesel a
+ * diesel is the *chug*: the amplitude pulsing at the cylinder firing rate. A
+ * looped sample locks that rate to one engine speed, and then opening the
+ * throttle just makes the same loop louder. Driving an LFO from the throttle
+ * gives revs that actually rise and fall.
+ *
+ * Four layers:
+ *   - `block`  low sawtooth, the fundamental of the firing order
+ *   - `growl`  an octave up through a filter that opens under load
+ *   - `stack`  filtered noise: exhaust out of the stack, turbo when pushed
+ *   - `chug`   an LFO at the firing rate gating all of the above
+ */
+let engine = null
+/** Where the mode/revs sit, so a re-arm after a context resume matches. */
+let thrustMode = null
+let engineRevs = 0
 
-const THRUST_SAMPLE = {
-  accel: { file: 'thrust.ogg', volume: 0.32, rate: 1 },
-  brake: { file: 'thrust_brake.ogg', volume: 0.26, rate: 0.92 }
-}
+/** Cylinder firing rate, Hz, at idle and at full ahead. */
+const DIESEL_IDLE_HZ = 22
+const DIESEL_MAX_HZ = 58
 
 function stopThrustAudio() {
-  if (thrustNodes) {
-    stopSampleNodes(thrustNodes, 0.18)
-    thrustNodes = null
+  if (!engine) return
+  const audio = getContext()
+  const now = audio.currentTime
+  engine.gain.gain.cancelScheduledValues(now)
+  engine.gain.gain.setValueAtTime(Math.max(engine.gain.gain.value, 0.0001), now)
+  engine.gain.gain.linearRampToValueAtTime(0.0001, now + 0.35)
+  for (const node of engine.sources) {
+    try { node.stop(now + 0.4) } catch { /* already stopped */ }
   }
-  if (thrustOsc) {
-    const audio = getContext()
-    thrustGain.gain.linearRampToValueAtTime(0.0001, audio.currentTime + 0.15)
-    try { thrustOsc.stop(audio.currentTime + 0.2) } catch { /* already stopped */ }
-    thrustOsc = null
-    thrustGain = null
-  }
+  engine = null
 }
 
+function startEngine() {
+  const audio = getContext()
+  const now = audio.currentTime
+  const gain = audio.createGain()
+  gain.gain.setValueAtTime(0, now)
+  gain.gain.linearRampToValueAtTime(0.16, now + 0.6)
+  gain.connect(getMasterDestination())
+
+  // The chug: a slow triangle whose depth is most of the signal. This is the
+  // whole trick — without it the layers below are just a synth pad.
+  const chugDepth = audio.createGain()
+  chugDepth.gain.value = 0.55
+  const chug = audio.createOscillator()
+  chug.type = 'triangle'
+  chug.frequency.value = DIESEL_IDLE_HZ
+  const chugGain = audio.createGain()
+  chugGain.gain.value = 0.45 // the floor the chug modulates around
+  chug.connect(chugDepth).connect(chugGain.gain)
+  chugGain.connect(gain)
+
+  const block = audio.createOscillator()
+  block.type = 'sawtooth'
+  block.frequency.value = DIESEL_IDLE_HZ
+  const blockFilter = audio.createBiquadFilter()
+  blockFilter.type = 'lowpass'
+  blockFilter.frequency.value = 240
+  const blockGain = audio.createGain()
+  blockGain.gain.value = 0.85
+  block.connect(blockFilter).connect(blockGain).connect(chugGain)
+
+  const growl = audio.createOscillator()
+  growl.type = 'square'
+  growl.frequency.value = DIESEL_IDLE_HZ * 2
+  const growlFilter = audio.createBiquadFilter()
+  growlFilter.type = 'lowpass'
+  growlFilter.frequency.value = 420
+  growlFilter.Q.value = 3
+  const growlGain = audio.createGain()
+  growlGain.gain.value = 0.25
+  growl.connect(growlFilter).connect(growlGain).connect(chugGain)
+
+  // Exhaust: looping noise, band-limited, level rising with load.
+  const noiseBuf = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate)
+  const data = noiseBuf.getChannelData(0)
+  let brown = 0
+  for (let i = 0; i < data.length; i++) {
+    // Brown-ish rather than white — an exhaust stack is all low end.
+    brown = (brown + (Math.random() * 2 - 1) * 0.06) * 0.985
+    data[i] = brown * 3
+  }
+  const stack = audio.createBufferSource()
+  stack.buffer = noiseBuf
+  stack.loop = true
+  const stackFilter = audio.createBiquadFilter()
+  stackFilter.type = 'lowpass'
+  stackFilter.frequency.value = 700
+  const stackGain = audio.createGain()
+  stackGain.gain.value = 0.2
+  stack.connect(stackFilter).connect(stackGain).connect(chugGain)
+
+  for (const node of [chug, block, growl, stack]) node.start(now)
+  engine = {
+    gain,
+    sources: [chug, block, growl, stack],
+    chug,
+    block,
+    growl,
+    blockFilter,
+    growlFilter,
+    stackGain,
+    stackFilter
+  }
+  applyEngineRevs()
+}
+
+/** Push the current rev fraction into the running engine's nodes. */
+function applyEngineRevs() {
+  if (!engine) return
+  const audio = getContext()
+  const now = audio.currentTime
+  // Ramp rather than set: a diesel has a flywheel, it does not step.
+  const at = (param, value) => {
+    param.cancelScheduledValues(now)
+    param.setTargetAtTime(value, now, 0.25)
+  }
+  const rev = Math.min(1, Math.max(0, engineRevs))
+  const hz = DIESEL_IDLE_HZ + (DIESEL_MAX_HZ - DIESEL_IDLE_HZ) * rev
+  at(engine.chug.frequency, hz)
+  at(engine.block.frequency, hz)
+  at(engine.growl.frequency, hz * 2)
+  // Under load the note opens up and the stack gets loud — that is "working".
+  at(engine.blockFilter.frequency, 240 + 460 * rev)
+  at(engine.growlFilter.frequency, 420 + 900 * rev)
+  at(engine.stackFilter.frequency, 700 + 1500 * rev)
+  at(engine.stackGain.gain, 0.2 + 0.42 * rev)
+  at(engine.gain.gain, 0.13 + 0.16 * rev)
+}
+
+/**
+ * Engine state.
+ *
+ * @param {'accel'|'brake'|'idle'|null} mode  null shuts the engine down
+ *   entirely (docked, dead, paused). Anything else keeps it turning over —
+ *   a diesel does not stop because you eased the throttle.
+ */
 export function setThrustState(mode) {
   ensureSfx()
   if (mode === thrustMode) return
-  stopThrustAudio()
   thrustMode = mode
-  if (!mode) return
-
-  const profile = THRUST_SAMPLE[mode]
-  const nodes = playSample(profile.file, {
-    volume: profile.volume,
-    rate: profile.rate,
-    loop: true,
-    fadeIn: 0.18
-  })
-  if (nodes) {
-    thrustNodes = nodes
+  if (!mode) {
+    stopThrustAudio()
+    engineRevs = 0
     return
   }
+  if (!engine) startEngine()
+  // Fallback revs for callers that only know the three old states. Anything
+  // driving the throttle properly calls setEngineRevs every frame after this.
+  if (mode === 'accel') engineRevs = 0.85
+  else if (mode === 'brake') engineRevs = 0.4
+  else engineRevs = 0
+  applyEngineRevs()
+}
 
-  // Fallback: filtered saw/square hum until samples load.
-  const audio = getContext()
-  thrustOsc = audio.createOscillator()
-  thrustGain = audio.createGain()
-  const filter = audio.createBiquadFilter()
-  filter.type = 'lowpass'
-  filter.frequency.value = mode === 'brake' ? 280 : 420
-  thrustOsc.type = mode === 'brake' ? 'square' : 'sawtooth'
-  thrustOsc.frequency.value = mode === 'brake' ? 48 : 70
-  thrustGain.gain.setValueAtTime(0, audio.currentTime)
-  thrustGain.gain.linearRampToValueAtTime(0.05, audio.currentTime + 0.2)
-  thrustOsc.connect(filter).connect(thrustGain).connect(getMasterDestination())
-  thrustOsc.start()
+/**
+ * Continuous revs, 0 (idle) to 1 (full ahead). Called every frame from the
+ * flight loop so the note tracks the actual throttle instead of snapping
+ * between three fixed settings.
+ */
+export function setEngineRevs(fraction) {
+  const next = Math.min(1, Math.max(0, fraction))
+  // Web Audio params are not free to reschedule at 60 Hz.
+  if (Math.abs(next - engineRevs) < 0.02) return
+  engineRevs = next
+  applyEngineRevs()
 }
 
 // Continuous "stretched thunder crack" bed while supercruise is engaged.

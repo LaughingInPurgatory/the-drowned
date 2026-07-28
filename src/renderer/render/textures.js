@@ -354,6 +354,9 @@ const STATION_ROLE = {
   solar: { prefix: 'solar', repeatU: 8, repeatV: 5 },
   radiator: { prefix: 'darkmetal', repeatU: 12, repeatV: 10 },
   settlementHull: { prefix: 'armor', repeatU: 12, repeatV: 10 },
+  // Tipped rock: breakwaters and shoals. Coarse repeat — these are boulders,
+  // not gravel, and a tight tile makes them read as sandpaper.
+  rubble: { prefix: 'rock', repeatU: 2.2, repeatV: 2.2 },
   settlementPanel: { prefix: 'plates', repeatU: 14, repeatV: 12 },
   // Ship-specific CC0 maps (ambientCG PaintedMetal001 / Metal021 / MetalPlates013 / Metal009).
   // Tint with MeshStandardMaterial.color — painted hull takes class color best.

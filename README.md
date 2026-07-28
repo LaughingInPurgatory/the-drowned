@@ -38,7 +38,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 
 - **One seamless sea** — a fixed canonical seed builds the same 80 km world for every player: archipelagos, coastal harbours, floating rigs, sea forts, and sunken wreck fields. No regions, no jumps, no loading seam. Home is always **Haven Reach**.
 - **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on the steep faces; the sun lays a track across it.
-- **Boat handling** — rudder and throttle, not a flight stick. Steering authority scales with way through the water, so a stopped hull will not pivot on the spot. Hulls heel into a turn, trim bow-up under power, and carry way when you come off the throttle.
+- **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them.
 - **Autopilot (C)** — hand the helm over and it comes round onto your waypoint, holds the course, **steers around islands**, and eases off as it closes. About 1.5× a hand-steered passage: enough that you are not holding W across an ocean, not so much that the sea stops mattering.
 - **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars come out. Harbour lamps and mast lights carry the night.
 - **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does.
@@ -104,14 +104,14 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | Input | Action |
 | --- | --- |
 | **Space** | Take / leave the helm |
-| **Mouse movement** | Rudder, while you have the helm |
+| **Mouse movement** | Rudder — steers even at a standstill |
 | **Alt + mouse** | Free-look around the boat (release Alt to restore the chase seat) |
 | **Alt + Enter** | Toggle fullscreen |
 | **Left click** | Fire all deck guns (can hold with RMB) |
 | **Right click** | Fire all torpedo tubes (can hold with LMB) |
 | **W / S** | Ahead / astern (coasts down when released; astern capped at 25% of ahead) |
 | **S** | While alongside: open/close **Harbour Services** |
-| **A / D** | Rudder to port / starboard |
+| **A / D** | Crab sideways to port / starboard — works stopped, for coming alongside |
 | **Tab** | Target under crosshair, or cycle nearby contacts |
 | **Shift+Tab** | Clear target lock |
 | **Backspace** | Clear target lock |
@@ -130,7 +130,7 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **F5** | Hail locked target (flavour dialogue) |
 | **Free mouse** | Click the contacts list (right) to set waypoints |
 
-There is no roll, no pitch and no vertical thrust — a boat has a rudder and a throttle.
+There is no roll, no pitch and no vertical thrust — a boat has a rudder, a throttle, and thrusters to shove it sideways onto a berth.
 
 Main menu and pause menu both open **Settings**: **Sound Effects**, **Music**, **UI Colour** (accent + panel background), and **Controls**. Preferences are saved for the next launch.
 

@@ -32,7 +32,7 @@ import {
   formatDuration,
   formatOreCost
 } from '../data/blueprints.js'
-import { purchasableShipClasses, getShipClass } from '../data/shipClasses.js'
+import { purchasableShipClasses, getShipClass, shipRoleLabel } from '../data/shipClasses.js'
 import { WEAPONS, BASE_WEAPON_ID, ALIEN_BASE_WEAPON_ID, getWeapon, weaponsForCategory, allWeaponsForCategory } from '../data/weapons.js'
 import {
   ACCESSORIES,
@@ -54,18 +54,6 @@ import { escapeHtml } from './escapeHtml.js'
 import { gameNotice, gamePrompt, gameConfirm } from './gameDialog.js'
 import { goodIcon, itemIcon, itemNameCell, ITEM_ICON_CSS } from './itemIcons.js'
 import { createShipyardPreview } from './shipyardPreview.js'
-import {
-  cloneListForUi,
-  createClone,
-  jumpToClone,
-  discardClone,
-  maxCloneCapacity,
-  canCloneJump,
-  ensureClones,
-  ensureStationCloneBayFlag,
-  CLONE_CREATE_COST,
-  CLONE_JUMP_COST
-} from '../game/clones.js'
 import { getPlayerSkillLevel } from '../game/skills.js'
 
 const STYLE = `
@@ -560,7 +548,7 @@ ${ITEM_ICON_CSS}
 `
 
 export function createDockingUI(container, gameState, rng, hooks = {}) {
-  const { onCraftStarted, onPlayerShipChanged, onStorageChanged, onCloneTravel } = hooks
+  const { onCraftStarted, onPlayerShipChanged, onStorageChanged } = hooks
   const style = document.createElement('style')
   style.textContent = STYLE
   document.head.appendChild(style)
@@ -585,7 +573,6 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
           <button data-tab="missions" class="tab">Missions</button>
           <button data-tab="storage" class="tab">Storage</button>
           <button data-tab="industry" class="tab">Industry</button>
-          <button data-tab="clones" class="tab tab-clones" style="display:none">Clones</button>
         </div>
         <div class="tab-content"></div>
       </div>
@@ -808,110 +795,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     else if (currentTab === 'industry') renderIndustry()
     else if (currentTab === 'shipyard') renderShipyard()
     else if (currentTab === 'trade') renderTrade()
-    else if (currentTab === 'clones') renderClones()
     if (notify) onStorageChanged?.()
-  }
-
-  function updateCloneTabVisibility() {
-    const tab = root.querySelector('.tab-clones')
-    if (!tab) return
-    const show =
-      currentBody?.kind === 'port' && ensureStationCloneBayFlag(currentBody)
-    tab.style.display = show ? '' : 'none'
-    if (!show && currentTab === 'clones') {
-      currentTab = 'trade'
-      tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === 'trade'))
-    }
-  }
-
-  function renderClones() {
-    ensureClones(gameState)
-    updateHeaderCredits()
-    const clones = cloneListForUi(gameState)
-    const max = maxCloneCapacity(gameState)
-    const used = clones.length
-    const cloningLv = getPlayerSkillLevel(gameState, 'cloning')
-    const jumpOk = canCloneJump(gameState)
-    const credits = gameState.player.credits ?? 0
-
-    contentEl.innerHTML = `
-      <div class="credits">Clone Bay · Capacity ${used}/${max} · Cloning skill L${cloningLv} · Credits: ${credits.toLocaleString()} cr</div>
-      <p style="opacity:0.7;font-size:12px;margin:0 0 12px;line-height:1.4">
-        Create a clone here for <strong>${CLONE_CREATE_COST.toLocaleString()} cr</strong> (uses a capacity slot).
-        Jumping to a clone costs <strong>${CLONE_JUMP_COST.toLocaleString()} cr</strong>, leaves a clone where you are now,
-        and clears the destination clone (place a new one there later). Jump requires <strong>Cloning ≥ 1</strong>.
-      </p>
-      <button type="button" class="clone-create" ${used >= max || credits < CLONE_CREATE_COST ? 'disabled' : ''}>
-        Create clone here (${CLONE_CREATE_COST.toLocaleString()} cr)
-      </button>
-      <h3 style="margin-top:16px">Your clones</h3>
-      ${clones.length
-        ? `<table>
-            <thead><tr><th>Location</th><th></th></tr></thead>
-            <tbody>
-              ${clones.map((c) => `
-                <tr>
-                  <td>
-                    ${escapeHtml(c.label || c.systemId)}
-                    ${c.isCurrentSystem ? ' <span style="opacity:0.55">(this system)</span>' : ''}
-                  </td>
-                  <td style="white-space:nowrap">
-                    <button type="button" class="clone-jump" data-id="${escapeHtml(c.id)}"
-                      ${!jumpOk || credits < CLONE_JUMP_COST ? 'disabled' : ''}
-                      title="${!jumpOk ? 'Requires Cloning skill level 1+' : 'Jump to this clone'}">
-                      Jump (${CLONE_JUMP_COST.toLocaleString()} cr)
-                    </button>
-                    <button type="button" class="clone-discard" data-id="${escapeHtml(c.id)}">Discard</button>
-                  </td>
-                </tr>`).join('')}
-            </tbody>
-          </table>`
-        : '<p class="empty" style="opacity:0.55">No clones placed yet.</p>'}
-      ${!jumpOk ? '<p style="opacity:0.55;font-size:11px;margin-top:10px">Train Cloning (skillbooks) to unlock multi-clone jumps.</p>' : ''}
-    `
-
-    contentEl.querySelector('.clone-create')?.addEventListener('click', async () => {
-      try {
-        const { clone } = createClone(gameState)
-        await showNotice('Clone created', `Body backup at ${clone.label}. Capacity ${gameState.player.clones.length}/${maxCloneCapacity(gameState)}.`)
-      } catch (err) {
-        await showNotice('Clone bay', err.message)
-      }
-      renderClones()
-    })
-
-    contentEl.querySelectorAll('.clone-jump').forEach((btn) =>
-      btn.addEventListener('click', async () => {
-        const id = btn.dataset.id
-        const ok = await gameConfirm(
-          'Clone jump',
-          `Spend ${CLONE_JUMP_COST.toLocaleString()} cr?\nA clone is left where you are now; the destination clone is consumed.`,
-          { okLabel: 'Jump', cancelLabel: 'Cancel' }
-        )
-        if (!ok) return
-        try {
-          const result = jumpToClone(gameState, id)
-          setServicesOpen(false)
-          root.style.display = 'none'
-          onUndock = null
-          onCloneTravel?.(result)
-        } catch (err) {
-          await showNotice('Clone jump failed', err.message)
-          renderClones()
-        }
-      })
-    )
-
-    contentEl.querySelectorAll('.clone-discard').forEach((btn) =>
-      btn.addEventListener('click', async () => {
-        try {
-          discardClone(gameState, btn.dataset.id)
-        } catch (err) {
-          await showNotice('Discard failed', err.message)
-        }
-        renderClones()
-      })
-    )
   }
 
   function liveAvailable(payload, direction) {
@@ -1387,7 +1271,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     if (shipClass?.role === 'miner') {
       const ore = Math.floor(Number(shipClass.stats?.miningCapacity) || 0)
       const cargo = Math.floor(Number(shipClass.stats?.cargoCapacity) || 0)
-      lines.push(`Mining specialist — ore hold ${ore} (cargo max ${cargo})`)
+      lines.push(`Salvager — salvage hold ${ore} (cargo max ${cargo})`)
       lines.push('Low defences & speed — not built for combat')
     }
     return lines
@@ -1464,7 +1348,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     const droneBays = effectiveDroneBayCount(ship, activeClass)
     const shipDrones = ship.drones ?? []
 
-    const roleLabel = selectedClass.role ? capitalizeLabel(selectedClass.role) : '—'
+    const roleLabel = shipRoleLabel(selectedClass.role)
     const bonusLines = shipRoleBonusLines(selectedClass)
     const selectedHps = Array.isArray(selectedClass.hardpoints) ? selectedClass.hardpoints : []
     let turretCount = 0
@@ -1853,7 +1737,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
               const sellPrice = Math.round(c.price * 0.5)
               return `
               <tr data-class="${c.id}" class="${c.id === selectedShipClassId ? 'selected' : ''}">
-                <td>${itemNameCell(itemIcon('ship', { alien: !!c.alien }), capitalizeLabel(c.name))}</td><td>${escapeHtml(capitalizeLabel(c.role))}</td><td>${accessorySlotCount(c)}</td><td>${c.price}cr</td>
+                <td>${itemNameCell(itemIcon('ship', { alien: !!c.alien }), capitalizeLabel(c.name))}</td><td>${escapeHtml(shipRoleLabel(c.role))}</td><td>${accessorySlotCount(c)}</td><td>${c.price}cr</td>
                 <td>${stored}</td>
                 <td><button class="buy-ship" data-class="${c.id}">Buy</button></td>
                 <td>${stored > 0
@@ -1939,7 +1823,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
         catalogHtml = `
           <p style="opacity:0.7;font-size:12px;margin:0 0 10px">Buy into station storage. Sell from storage (or salvage). Equip from Loadout (left).</p>
           <h3 class="armoury-section-title">Turrets</h3>
-          <p style="opacity:0.55;font-size:11px;margin:0 0 8px">Laser hardpoints</p>
+          <p style="opacity:0.55;font-size:11px;margin:0 0 8px">Gun hardpoints</p>
           ${weaponTable(turrets)}
           <h3 class="armoury-section-title">Launchers</h3>
           <p style="opacity:0.55;font-size:11px;margin:0 0 8px">Missile hardpoints</p>
@@ -2647,13 +2531,11 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     shipyard: renderShipyard,
     missions: renderMissions,
     storage: renderStorage,
-    industry: renderIndustry,
-    clones: renderClones
+    industry: renderIndustry
   }
 
   function renderCurrentTab() {
     updateHeaderCredits()
-    updateCloneTabVisibility()
     if (currentTab !== 'shipyard' && currentTab !== 'industry') hideLeftSideBoxes()
     else if (currentTab !== 'shipyard') hideShipyardSideBoxes()
     const fn = renderers[currentTab]
@@ -2715,7 +2597,6 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       storageSubTab = 'local'
       currentTab = 'trade'
       tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === 'trade'))
-      updateCloneTabVisibility()
       // Menu closed by default — only Harbour Services + Undock until opened.
       setServicesOpen(false)
       root.style.display = 'flex'

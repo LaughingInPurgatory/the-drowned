@@ -1315,6 +1315,25 @@ function fallbackShipClass(id) {
   )
 }
 
+/**
+ * What each hull role is *called*. The ids stay as they are — they are baked
+ * into saves, the generated roster and a hundred `role === '…'` checks — so
+ * only the display name changes here.
+ */
+const ROLE_LABEL = {
+  trader: 'Trader',
+  fighter: 'Corsair',
+  explorer: 'Explorer',
+  miner: 'Salvager',
+  police: 'Coast Guard'
+}
+
+/** Display name for a hull role. */
+export function shipRoleLabel(role) {
+  if (!role) return '—'
+  return ROLE_LABEL[role] ?? String(role).charAt(0).toUpperCase() + String(role).slice(1)
+}
+
 export function getShipClass(id) {
   const resolved = resolveShipClassId(id)
   let cls = SHIP_CLASSES.find((c) => c.id === resolved)

@@ -185,3 +185,40 @@ test('autopilot still arrives with something on the track (it runs through)', ()
   }
   assert.equal(arrived, true, 'should arrive even with an island on the track')
 })
+
+test('the decel ramp does not scale with the arrival ring', () => {
+  // A big island has an arrival ring kilometres across. Sizing the ramp off it
+  // made the autopilot crawl from 6 km out and feel slower than steering by
+  // hand — the ring says *where* to stop, not how long stopping takes.
+  const topSpeed = 51
+  for (const arrivalRange of [60, 350, 900, 3000]) {
+    // Measured from the ring, not the centre.
+    assert.equal(autopilotApproachFactor(arrivalRange + 800, arrivalRange, topSpeed), 1,
+      `should still be at full speed 800m outside a ${arrivalRange}m ring`)
+  }
+})
+
+test('the autopilot is never slower than steering by hand', () => {
+  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
+
+  const manual = afloat()
+  for (let i = 0; i < 900; i++) {
+    updateFlight(manual, shipClass, new Set(['KeyW']), { dx: 0, dy: 0 }, DT)
+  }
+  const handSteered = Math.hypot(...manual.velocity)
+
+  // Long enough to reach terminal speed, short enough to be an ordinary hop.
+  for (const [dist, arrivalRange] of [[1500, 350], [4000, 900], [9000, 3000]]) {
+    const s = afloat()
+    let peak = 0
+    for (let i = 0; i < 40000; i++) {
+      if (updateAutopilot(s, shipClass, [0, 0, dist], DT, arrivalRange)) break
+      peak = Math.max(peak, Math.hypot(...s.velocity))
+    }
+    assert.ok(
+      peak > handSteered,
+      `${dist}m leg into a ${arrivalRange}m ring peaked at ${peak.toFixed(1)}, ` +
+        `below the ${handSteered.toFixed(1)} a helmsman gets`
+    )
+  }
+})

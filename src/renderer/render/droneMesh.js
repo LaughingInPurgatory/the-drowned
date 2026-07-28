@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { getDrone, DEFAULT_DRONE_ID } from '../data/drones.js'
-import { buildGlowTexture, createPuffEmitter } from './thrusterParticles.js'
+import { buildGlowTexture, createPuffEmitter } from './particles.js'
 import { getSurfaceTextures } from './textures.js'
 
 /**

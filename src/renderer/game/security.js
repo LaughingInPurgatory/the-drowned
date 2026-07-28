@@ -1,8 +1,13 @@
 /**
- * Player law standing + local security helpers.
+ * Player notoriety + local security helpers.
  *
  * securityRating 0–6: patrol response speed (0 = none).
- * Player lawStanding 0–10: reputation with authorities (start 10).
+ *
+ * `lawStanding` 0–10 is the internal value — 10 is clean, 0 is an outlaw — and
+ * stays that way because saves and every comparison in the game are written
+ * against it. The player is shown **Notoriety**, which is its inverse: 0 means
+ * nobody is looking for you, 10 means everybody is. Use `notorietyOf()` for
+ * anything the player reads.
  *
  * Security is a property of *places*, not the world: each port and outpost
  * carries its own rating, and "how policed is it here" is whichever of them the
@@ -21,6 +26,11 @@ export const LAW_POLICE_SOS = 2
 export const LAW_TOTAL_SOS = 0
 /** Below this, ports in Sec 3–6 waters refuse a berth (outposts still take you). */
 export const LAW_STATION_DOCK_MIN = 5
+
+/** What the player is shown: 0 = unknown to the authorities, 10 = wanted. */
+export function notorietyOf(gameState) {
+  return MAX_LAW_STANDING - ensureLawStanding(gameState)
+}
 
 export function ensureLawStanding(gameState) {
   if (gameState.player.lawStanding == null || !Number.isFinite(gameState.player.lawStanding)) {
@@ -173,17 +183,19 @@ export function applyLawBonusForPirateKill(gameState) {
 
 /** One-shot toast strings for main.js (flushed each frame). */
 function queueLawToast(gameState, delta) {
-  const s = gameState.player.lawStanding
+  const standing = gameState.player.lawStanding
+  const notoriety = MAX_LAW_STANDING - standing
+  // delta is the change in *standing*, so it reads inverted to the player.
   let msg =
     delta < 0
-      ? `Security standing −1 → ${s}/${MAX_LAW_STANDING}`
-      : `Security standing +1 → ${s}/${MAX_LAW_STANDING}`
-  if (delta < 0 && s <= LAW_TOTAL_SOS) {
-    msg += ' · OUTLAW (shoot-on-sight in Sec 3–6)'
-  } else if (delta < 0 && s <= LAW_POLICE_SOS) {
-    msg += ' · police will engage on sight'
-  } else if (delta < 0 && s < LAW_STATION_DOCK_MIN) {
-    msg += ' · stations in Sec 3–6 will refuse docking'
+      ? `Notoriety +1 → ${notoriety}/${MAX_LAW_STANDING}`
+      : `Notoriety −1 → ${notoriety}/${MAX_LAW_STANDING}`
+  if (delta < 0 && standing <= LAW_TOTAL_SOS) {
+    msg += ' · OUTLAW — shot on sight in policed water'
+  } else if (delta < 0 && standing <= LAW_POLICE_SOS) {
+    msg += ' · the Coast Guard will engage on sight'
+  } else if (delta < 0 && standing < LAW_STATION_DOCK_MIN) {
+    msg += ' · policed harbours will refuse you a berth'
   }
   gameState._pendingToasts = gameState._pendingToasts ?? []
   gameState._pendingToasts.push(msg)

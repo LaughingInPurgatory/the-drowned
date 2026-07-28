@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { createScene } from './render/scene.js'
-import { buildShipMesh, updatePoliceLights, getEngineNozzleLocals } from './render/shipMesh.js'
+import { buildShipMesh, updatePoliceLights } from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
-import { buildIslandMesh } from './render/islandMesh.js'
+import { buildIslandMesh, islandMaxShoreline } from './render/islandMesh.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
 import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from './render/projectileMesh.js'
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
@@ -22,7 +22,7 @@ import {
   isChaseFreeLook,
   setChaseIdleOrbit
 } from './render/sceneSync.js'
-import { createThrusterEffects, createLiteThrusterEffects } from './render/thrusterParticles.js'
+import { createWake } from './render/wake.js'
 import { createDamageEffects } from './render/damageEffects.js'
 import { createOreScoopEffects } from './render/oreScoopParticles.js'
 import {
@@ -397,7 +397,7 @@ const SONAR_PING_COUNT = 3
 const SONAR_PING_INTERVAL_S = 0.85
 
 const appEl = document.getElementById('app')
-const { scene, camera, renderer, render, updateEnvironment, setPostOverlay } = createScene(appEl)
+const { scene, camera, renderer, render, updateEnvironment, setPostOverlay, ocean } = createScene(appEl)
 // Sonar rings — the boat sounds from where it is; there is nothing to launch.
 const sonarPulse = createSonarPulse()
 scene.add(sonarPulse.group)
@@ -1128,9 +1128,8 @@ window.addEventListener('wheel', (e) => {
 let gameState = null
 let playerShipClass = null
 let playerMesh = null
-let thrusterEffects = null
+let playerWake = null
 /** Ship-local engine nozzle points for multi-thruster exhaust (from hull layout). */
-let playerEngineNozzles = null
 let damageEffects = null
 let oreScoopEffects = null
 let missileTrail = null
@@ -1200,10 +1199,6 @@ const npcMeshes = new Map()
 const bodyMeshes = new Map()
 const wreckMeshes = new Map()
 // Scratch for NPC thruster world pose (reused each frame).
-const _npcThrustPos = new THREE.Vector3()
-const _npcThrustQuat = new THREE.Quaternion()
-const _npcThrustFwd = new THREE.Vector3()
-const _npcThrustVel = new THREE.Vector3()
 
 /** Build NPC hull + lite thruster FX (world-space exhaust, multi-nozzle). */
 function addNpcMesh(npc) {
@@ -1226,13 +1221,13 @@ function addNpcMesh(npc) {
   }
   mesh = buildShipMesh(shipClass, { lite: true })
   try {
-    const thrusters = createLiteThrusterEffects()
-    mesh.userData.thrusters = thrusters
-    mesh.userData.engineNozzles = getEngineNozzleLocals(shipClass.hull)
+    const wake = createWake()
+    mesh.userData.wake = wake
     mesh.userData.hullLength = shipClass.hull?.length ?? 20
-    scene.add(thrusters.group)
+    mesh.userData.topSpeed = shipClass.stats?.speed ?? 40
+    scene.add(wake.group)
   } catch {
-    /* thrusters optional */
+    /* a wake is decoration — never block a spawn on it */
   }
   npcMeshes.set(npc.id, mesh)
   scene.add(mesh)
@@ -1243,15 +1238,15 @@ function removeNpcMesh(npcId) {
   const mesh = npcMeshes.get(npcId)
   if (!mesh) return
   scene.remove(mesh)
-  const thr = mesh.userData?.thrusters
-  if (thr) {
-    scene.remove(thr.group)
+  const wake = mesh.userData?.wake
+  if (wake) {
+    scene.remove(wake.group)
     try {
-      thr.dispose?.()
+      wake.dispose?.()
     } catch {
       /* */
     }
-    mesh.userData.thrusters = null
+    mesh.userData.wake = null
   }
   npcMeshes.delete(npcId)
 }
@@ -1260,25 +1255,19 @@ function clearNpcMeshes() {
   for (const id of [...npcMeshes.keys()]) removeNpcMesh(id)
 }
 
-/** Update lite thruster trail for an on-screen NPC (forward thrust only). */
+/** Water displaced by an on-screen NPC. Same wake the player leaves. */
 function updateNpcThrusters(mesh, npc, dt) {
-  const thr = mesh?.userData?.thrusters
-  if (!thr) return
-  _npcThrustPos.fromArray(npc.position)
-  _npcThrustQuat.fromArray(npc.quaternion).normalize()
-  _npcThrustVel.fromArray(npc.velocity ?? [0, 0, 0])
-  _npcThrustFwd.set(0, 0, 1).applyQuaternion(_npcThrustQuat)
-  // Trail when nose-aligned motion is meaningful (patrol / attack / flee).
-  const forwardSpeed = _npcThrustVel.dot(_npcThrustFwd)
-  const speed = _npcThrustVel.length()
-  const accelActive = forwardSpeed > 6 || (speed > 12 && forwardSpeed > 2)
-  thr.update(dt, {
-    accelActive,
-    shipPos: _npcThrustPos,
-    shipQuat: _npcThrustQuat,
-    hullLength: mesh.userData.hullLength ?? 20,
-    nozzles: mesh.userData.engineNozzles
-  })
+  const wake = mesh?.userData?.wake
+  if (!wake) return
+  const speed = Math.hypot(npc.velocity?.[0] ?? 0, npc.velocity?.[2] ?? 0)
+  wake.update(
+    npc.position,
+    headingOf(npc),
+    speed / Math.max(1e-3, mesh.userData.topSpeed ?? 40),
+    mesh.userData.hullLength ?? 20,
+    gameState.simTime,
+    dt
+  )
 }
 // Coastal harbours ride a fixed offset from their island.
 const surfaceSettlements = new Map()
@@ -1351,6 +1340,7 @@ function loadBodiesForCurrentSystem() {
       orientSettlementOnSurface(mesh, body.surfaceOffset)
     }
   }
+  rebuildSurfObstacles()
   refreshStationPolicePatrols()
 }
 
@@ -1371,6 +1361,42 @@ function updateBodyVisibility() {
     mesh.visible = d < BODY_CULL_DISTANCE + (body.radius ?? 0) * 1.5
   }
 }
+
+/**
+ * Everything in the world the sea breaks against, as flat circles.
+ *
+ * Built once when the world's meshes are (nothing moves), then handed to the
+ * ocean shader each frame so it can pick the nearest few — see
+ * oceanMesh.setSurfObstacles. Islands use their traced coastline rather than
+ * `body.radius`, which is the whole disc including the shelf and would put the
+ * surf line well out to sea.
+ */
+let surfObstacles = []
+function rebuildSurfObstacles() {
+  const world = getWorld(gameState.galaxy)
+  surfObstacles = []
+  for (const body of world?.bodies ?? []) {
+    let radius = 0
+    if (body.kind === 'island') radius = islandMaxShoreline(body)
+    // Harbours and shoals have no radius of their own; size them off the mesh
+    // that actually got built, so the surf hugs the quay it is breaking on.
+    else if (body.kind === 'port' || body.kind === 'outpost') {
+      const mesh = bodyMeshes.get(body.id)
+      if (!mesh) continue
+      _surfBounds.setFromObject(mesh)
+      _surfBounds.getSize(_surfSize)
+      radius = Math.max(_surfSize.x, _surfSize.z) * 0.5
+    } else if (body.kind === 'wreckField') {
+      // A shoal breaks water across the whole scatter, not just at its middle.
+      radius = (body.radius ?? 0) * 0.75
+    }
+    if (radius > 0) {
+      surfObstacles.push({ x: body.position[0], z: body.position[2], radius })
+    }
+  }
+}
+const _surfBounds = new THREE.Box3()
+const _surfSize = new THREE.Vector3()
 
 /** Spawn / top-up police patrols (stations Sec 3–6, warp gates Sec 4–6). */
 function refreshStationPolicePatrols() {
@@ -2278,9 +2304,11 @@ function clearSession() {
   clearDroneMeshes()
   probeScanCache = null
   probeScanActiveBodyId = null
-  if (thrusterEffects) scene.remove(thrusterEffects.group)
-  thrusterEffects = null
-  playerEngineNozzles = null
+  if (playerWake) {
+    scene.remove(playerWake.group)
+    playerWake.dispose()
+  }
+  playerWake = null
   if (damageEffects) scene.remove(damageEffects.group)
   damageEffects = null
   if (oreScoopEffects) scene.remove(oreScoopEffects.group)
@@ -2528,12 +2556,9 @@ function rebuildPlayerShipMesh() {
   playerMesh = buildShipMesh(playerShipClass)
   scene.add(playerMesh)
   syncMeshToEntity(playerMesh, gameState.player.ship)
-  // Match thruster FX to this hull's engine nacelles (single/twin/triple/quad).
-  try {
-    playerEngineNozzles = getEngineNozzleLocals(playerShipClass.hull)
-  } catch {
-    playerEngineNozzles = null
-  }
+  // A different hull leaves a different wake — drop the old trail rather than
+  // dragging it across from the boat that was just sold.
+  playerWake?.reset()
 }
 
 /** Open/toggle System Scan (HUD button + B). */
@@ -2576,8 +2601,8 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   rebuildPlayerShipMesh()
   ensureDrones(gameState.player.ship)
   clearDroneMeshes()
-  thrusterEffects = createThrusterEffects()
-  scene.add(thrusterEffects.group)
+  playerWake = createWake()
+  scene.add(playerWake.group)
   damageEffects = createDamageEffects()
   scene.add(damageEffects.group)
   oreScoopEffects = createOreScoopEffects()
@@ -2625,31 +2650,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
     // visual hull so a class swap doesn't keep looking like the previous ship.
     onPlayerShipChanged: () => rebuildPlayerShipMesh(),
     onStorageChanged: () => inventoryUI?.refresh?.(),
-    onCloneTravel: (result) => {
-      // Slip the mooring if we jumped while berthed.
-      if (docked || dockEffect) {
-        dockEffect = null
-        docked = false
-        dockedApproach = null
-        clearDockedSaveFields()
-      }
-      if (result?.systemChanged) {
-        loadBodiesForCurrentSystem()
-        // Re-seed ambient traffic / missions for the destination system.
-        try {
-          ensureBountyNpcsForSystem(gameState, gameState.player.currentSystemId, Math.random)
-        } catch {
-          /* */
-        }
-      }
-      if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
-      snapChaseCamera(camera, gameState.player.ship)
-      hud?.setDocked(false)
-      systemOverview?.show()
-      flashToast('Clone jump complete', 3.5)
-      reenterFlightMode()
-    }
-  })
+})
   pauseMenu = createPauseMenu(appEl, {
     onResume: () => {
       // Called from Resume pointerdown — still in a user-activation gesture.
@@ -4053,7 +4054,6 @@ function beginDocking(body) {
     hideHudGlitch(cruiseIndicatorEl)
     gameState.player.ship.velocity = [0, 0, 0]
     gameState.player.ship.throttle = 0
-    thrusterEffects?.stopCruiseStreaks()
     audio.setSupercruiseActive(false)
     // HUD already shows AUTOPILOT DISENGAGED.
     audio.announce('Autopilot disengaged')
@@ -5424,6 +5424,7 @@ function animate() {
     syncMeshToEntity(playerMesh, gameState.player.ship)
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
     updateBodyVisibility()
+  ocean.setSurfObstacles(surfObstacles, camera)
     applyDockOrbitCamera()
     updateEnvironment(gameState.simTime)
     render()
@@ -5503,7 +5504,10 @@ function animate() {
         toastIfDepletedField(wp.bodyId)
       }
     }
-    audio.setThrustState(null)
+    // Under autopilot the engine is wide open — the cruise bed sits on top of
+    // it, it does not replace it.
+    audio.setThrustState('accel')
+    audio.setEngineRevs(1)
   } else {
     {
       const skillB = playerSkillBonuses(gameState)
@@ -5521,8 +5525,11 @@ function animate() {
         gameState.simTime
       )
     }
-    thrustState = !flightMode ? null : keys.has('KeyW') ? 'accel' : keys.has('KeyS') ? 'brake' : null
+    // The engine idles whenever the helm is manned — a diesel does not cut out
+    // because you eased the throttle. `null` only when nobody is driving.
+    thrustState = !flightMode ? null : keys.has('KeyW') ? 'accel' : keys.has('KeyS') ? 'brake' : 'idle'
     audio.setThrustState(thrustState)
+    if (thrustState) audio.setEngineRevs(Math.abs(gameState.player.ship.throttle ?? 0))
     // Drop laser bolts from the last turn so a stationary burst isn't buried
     // under ~1s of off-boresight trail (ttl 1.2s otherwise).
     prunePlayerLasersOffBoresight(gameState)
@@ -5553,7 +5560,6 @@ function animate() {
       gameState.player.ship.throttle = 0
       gameState.player.ship.supercruiseElapsed = 0
       // Kill the wake immediately rather than waiting a frame.
-      thrusterEffects?.stopCruiseStreaks()
     }
     // TTS says "supercrews" so speech synthesis hits the right phonetics;
     audio.announce(cruising ? 'Autopilot engaged' : 'Autopilot disengaged')
@@ -5579,8 +5585,10 @@ function animate() {
   })
 
   const shipSpeed = Math.hypot(...gameState.player.ship.velocity)
-  // Water over the bow, scaled by how hard you are driving her.
-  spray.update(dt, shipSpeed / Math.max(1e-3, playerShipClass.stats.speed))
+  // Water over the bow and speed streaks, scaled by how hard you are driving
+  // her. Autopilot boosts both: it runs above the hull's own top speed, so
+  // speedFraction alone would understate it.
+  spray.update(dt, shipSpeed / Math.max(1e-3, playerShipClass.stats.speed), cruising ? 1 : 0)
   // Speed FOV: widens a little as the boat comes up onto the plane, fixed under
   // cruise. Snap when close or nearly stopped so the settle can't smear aim.
   const speedFovBoost =
@@ -5602,17 +5610,15 @@ function animate() {
   const strafeX = cruising ? 0 : (gameState.player.ship.strafeX ?? 0)
   const strafeY = cruising ? 0 : (gameState.player.ship.strafeY ?? 0)
   audio.setStrafeActive(!cruising && flightMode && (strafeX !== 0 || strafeY !== 0))
-  thrusterEffects.update(dt, {
-    accelActive: thrustState === 'accel',
-    brakeActive: thrustState === 'brake',
-    cruiseActive: cruising,
-    strafeX,
-    strafeY,
-    shipPos: new THREE.Vector3().fromArray(gameState.player.ship.position),
-    shipQuat: new THREE.Quaternion().fromArray(gameState.player.ship.quaternion),
-    hullLength: playerShipClass.hull.length,
-    nozzles: playerEngineNozzles
-  })
+  // Water displaced by the hull, not exhaust. Grows with speed.
+  playerWake.update(
+    gameState.player.ship.position,
+    headingOf(gameState.player.ship),
+    shipSpeed / Math.max(1e-3, playerShipClass.stats.speed),
+    playerShipClass.hull.length,
+    gameState.simTime,
+    dt
+  )
   damageEffects.update(dt, {
     armorFraction: gameState.player.ship.armor / Math.max(1, effectiveMaxArmor(gameState.player.ship, playerShipClass)),
     hullFraction: gameState.player.ship.hull / playerShipClass.stats.hull,
@@ -5706,7 +5712,7 @@ function animate() {
   for (const npc of gameState.npcs) {
     let mesh = npcMeshes.get(npc.id)
     if (!mesh && !npc.destroyed) {
-      // lite hull + thrusters (EdgesGeometry skipped — hitch when meshing mid-fight)
+      // lite hull + wake (EdgesGeometry skipped — hitch when meshing mid-fight)
       mesh = addNpcMesh(npc)
     }
     if (!mesh) continue
@@ -5879,6 +5885,7 @@ function animate() {
   // Harbour beacons pulse. Land does not animate.
   for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
   updateBodyVisibility()
+  ocean.setSurfObstacles(surfObstacles, camera)
   // Depleted rocks "explode" (see onProjectileHit) and stay hidden until
   // their own respawn delay passes — isRockAlive is the single source of
   // truth for that, shared with targeting (getTargetableEntities/resolveTarget).

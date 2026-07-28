@@ -2,6 +2,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createGameState } from './state.js'
 import { TEST_WORLD_OPTS } from '../procgen/world.js'
+import { getIslandProfile } from '../render/islandMesh.js'
+import { getAsteroidRocks } from '../render/asteroidFieldMesh.js'
 import { serializeGameState, deserializeGameState } from './save.js'
 import { STARTER_SHIP_CLASS_ID } from '../data/shipClasses.js'
 import { acceptMission } from './missions.js'
@@ -142,4 +144,24 @@ test('an active, incomplete bounty mission respawns its target npc on load', () 
   const restoredMission = restored.missions.active.find((m) => m.id === bounty.id)
   assert.ok(restoredMission.target.npcId, 'bounty should have a fresh npcId after reload')
   assert.ok(restored.npcs.some((n) => n.id === restoredMission.target.npcId))
+})
+
+test('a save survives structuredClone — it crosses an IPC boundary', () => {
+  // saveGame hands the serialized state to the main process, which structured-
+  // clones it. Anything non-cloneable in there (a function, a THREE object, a
+  // closure cached on a body) fails the whole save with "object could not be
+  // cloned" and the player silently loses their game. This is the check that
+  // catches it, and it must run *after* the render layer has had a chance to
+  // hang its caches on the world.
+  const gameState = createGameState({
+    characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
+    galaxyOpts: TEST_WORLD_OPTS
+  })
+  const world = gameState.galaxy.systems[0]
+  for (const body of world.bodies) {
+    if (body.kind === 'island') getIslandProfile(body)
+    if (body.kind === 'wreckField') getAsteroidRocks(body)
+  }
+
+  assert.doesNotThrow(() => structuredClone(serializeGameState(gameState)))
 })

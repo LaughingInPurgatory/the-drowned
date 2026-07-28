@@ -4,11 +4,11 @@
  */
 export const CONTROLS = [
   ['Space', 'Take / leave the helm'],
-  ['Mouse', 'Rudder (steer) while at the helm'],
+  ['Mouse', 'Rudder — steer (works at a standstill too)'],
   ['Alt + Mouse', 'Free-look — swing the camera around the boat'],
   ['Alt + Enter', 'Toggle fullscreen'],
   ['W / S', 'Ahead / astern'],
-  ['A / D', 'Rudder to port / starboard'],
+  ['A / D', 'Crab sideways to port / starboard (works stopped — use it to come alongside)'],
   ['LMB', 'Fire deck guns'],
   ['RMB', 'Fire torpedoes'],
   ['Tab', 'Acquire / cycle target under crosshair'],

@@ -14,6 +14,13 @@ const SEGMENTS = 200
 // point each frame, which shimmers. Snapping the centre to a quantum holds the
 // sample points still between steps.
 const CENTER_SNAP = 4
+// How many obstacles the surf pass can consider at once. Only what is in sight
+// matters, and the disc is refreshed every frame, so a small window is plenty —
+// this is a fixed-size uniform array, and every slot costs the fragment shader
+// a distance test per pixel.
+const SURF_SLOTS = 12
+// Past this there is nothing to see through the fog anyway.
+const SURF_RANGE = 5000
 
 /**
  * Camera-centred radial disc: a ring of vertices every `RINGS` steps out from
@@ -86,15 +93,140 @@ void main() {
 const FRAGMENT = `
 uniform float uTime;
 uniform vec3 uSunDir;
+uniform vec3 uSunColor;
 uniform vec3 uDeepColor;
 uniform vec3 uCrestColor;
 uniform vec3 uSkyColor;
 uniform vec3 uFoamColor;
+uniform vec3 uAlgaeColor;
+// Nearby things the sea breaks against, packed as (x, z, radius). Count is
+// capped at SURF_SLOTS; unused slots carry radius 0 and are skipped.
+uniform vec3 uSurf[${SURF_SLOTS}];
+uniform int uSurfCount;
 varying vec3 vWorldPos;
 varying float vDetail;
 #include <fog_pars_fragment>
 
 ${seaShaderChunk()}
+
+// --- Ripple detail ------------------------------------------------------
+// The wave field carries four terms, which is right for the swell the boat has
+// to float on but leaves the surface glassy between crests. Everything below
+// exists only as a *normal* — it is never displaced, never touches buoyancy,
+// and costs nothing but arithmetic. This is the single biggest difference
+// between "a shaded height field" and "water".
+
+vec2 hash22(vec2 p) {
+  p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+  return fract(sin(p) * 43758.5453) * 2.0 - 1.0;
+}
+
+/** Gradient noise, returning value in .x and its 2D gradient in .yz. */
+vec3 noised(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  vec2 du = 6.0 * f * (1.0 - f);
+
+  vec2 ga = hash22(i + vec2(0.0, 0.0));
+  vec2 gb = hash22(i + vec2(1.0, 0.0));
+  vec2 gc = hash22(i + vec2(0.0, 1.0));
+  vec2 gd = hash22(i + vec2(1.0, 1.0));
+
+  float va = dot(ga, f - vec2(0.0, 0.0));
+  float vb = dot(gb, f - vec2(1.0, 0.0));
+  float vc = dot(gc, f - vec2(0.0, 1.0));
+  float vd = dot(gd, f - vec2(1.0, 1.0));
+
+  float v = va + u.x * (vb - va) + u.y * (vc - va) + u.x * u.y * (va - vb - vc + vd);
+  vec2 g = ga
+    + u.x * (gb - ga)
+    + u.y * (gc - ga)
+    + u.x * u.y * (ga - gb - gc + gd)
+    + du * (u.yx * (va - vb - vc + vd) + vec2(vb, vc) - va);
+  return vec3(v, g);
+}
+
+/**
+ * Chop and ripple: four octaves of gradient noise drifting at different speeds
+ * and angles. Returns the slope only.
+ *
+ * The fade argument kills the finest octaves with distance — at 2 km a centimetre ripple
+ * is far below a pixel, and keeping it just makes the horizon crawl.
+ */
+vec2 rippleSlope(vec2 p, float t, float fade) {
+  vec2 slope = vec2(0.0);
+  float amp = 0.055;
+  float freq = 0.09;
+  // Each octave drifts on its own bearing so the pattern never tiles visibly.
+  vec2 drift[4];
+  drift[0] = vec2(0.31, 0.14);
+  drift[1] = vec2(-0.21, 0.27);
+  drift[2] = vec2(0.17, -0.33);
+  drift[3] = vec2(-0.29, -0.11);
+  for (int i = 0; i < 4; i++) {
+    float oct = 1.0 - smoothstep(0.0, 1.0, float(i) / 3.0) * (1.0 - fade);
+    if (oct > 0.002) {
+      vec3 n = noised(p * freq + drift[i] * t);
+      slope += n.yz * amp * freq * oct;
+    }
+    amp *= 0.62;
+    freq *= 2.35;
+  }
+  return slope;
+}
+
+/**
+ * Algae bloom mask, 0 outside a bloom and up to 1 in the thick of one.
+ *
+ * Two scales of noise multiplied together: a big slow one that decides *where*
+ * a bloom is at all — they want to be rare and hundreds of metres across — and
+ * a finer one that gives the patch a ragged, streaky edge instead of a blob.
+ * The whole field drifts, very slowly, because a bloom moves with the water.
+ *
+ * Purely cosmetic. Nothing in the game logic knows these exist.
+ */
+float algaeMask(vec2 p, float t) {
+  vec2 drift = vec2(t * 0.06, t * -0.035);
+  // Where. Threshold high so most of the sea is clear water.
+  float region = noised(p * 0.0016 + drift * 0.1).x;
+  // ('patch' is a GLSL reserved word — hence 'slick'.)
+  float slick = smoothstep(0.10, 0.42, region);
+  if (slick <= 0.001) return 0.0;
+  // Shape. Streaks pulled out along the drift, the way a slick actually lies.
+  float streak = noised(p * vec2(0.006, 0.018) + drift).x;
+  streak += noised(p * vec2(0.021, 0.058) - drift * 1.7).x * 0.5;
+  return slick * smoothstep(-0.18, 0.34, streak);
+}
+
+/**
+ * Surf: how hard the sea is breaking at this point.
+ *
+ * Water piling against something solid is the one visual cue that says a thing
+ * is *in* the sea rather than pasted on top of it — a shoreline with no white
+ * water at its foot always reads as a decal. There is no depth buffer to work
+ * from here, so obstacles are fed in as circles: island coastlines, harbour
+ * footprints and wreck-field shoals all reduce to a centre and a radius.
+ *
+ * Returns 0 in open water, rising to 1 right at the obstacle's edge.
+ */
+float surfAt(vec2 p) {
+  float surf = 0.0;
+  for (int i = 0; i < ${SURF_SLOTS}; i++) {
+    if (i >= uSurfCount) break;
+    vec3 o = uSurf[i];
+    if (o.z <= 0.0) continue;
+    float d = length(p - o.xy) - o.z;
+    if (d > 90.0) continue;
+    // Widest band on the biggest obstacles: a shoal makes a thin line of broken
+    // water, a headland makes a surf zone you can see from miles off.
+    float band = clamp(o.z * 0.14, 9.0, 80.0);
+    // Squared falloff — heaped right at the edge, thinning fast going out.
+    float k = 1.0 - clamp(d / band, 0.0, 1.0);
+    surf = max(surf, k * k);
+  }
+  return surf;
+}
 
 void main() {
   // Shading detail runs much further out than the geometry does. Displacement
@@ -104,25 +236,91 @@ void main() {
   float dist = length(vWorldPos.xz - cameraPosition.xz);
   float shadeDetail = 1.0 - smoothstep(2500.0, 9000.0, dist);
   vec3 N = seaNormal(vWorldPos.xz, uTime);
+
+  // Lay the ripple slope on top of the swell normal. Perturbing the normal is
+  // exactly equivalent to having displaced by that height field, at none of
+  // the vertex cost, and it is what gives the surface texture at close range.
+  float rippleFade = 1.0 - smoothstep(120.0, 2000.0, dist);
+  vec2 rs = rippleSlope(vWorldPos.xz, uTime, rippleFade);
+  N = normalize(vec3(N.x - rs.x, N.y, N.z - rs.y));
   N = normalize(mix(vec3(0.0, 1.0, 0.0), N, shadeDetail));
 
   vec3 V = normalize(cameraPosition - vWorldPos);
-  // Steep exponent: only genuinely grazing water mirrors the sky. A softer
-  // falloff turns the whole surface into a sheet of pale haze, because from a
-  // low chase seat almost all visible water is near-grazing.
-  float fresnel = pow(1.0 - clamp(dot(N, V), 0.0, 1.0), 6.0);
+  float NdV = clamp(dot(N, V), 0.0, 1.0);
 
-  // Face-on water is the dark column beneath; tilted faces catch more sky.
-  vec3 col = mix(uCrestColor, uDeepColor, smoothstep(0.90, 1.0, N.y));
-  col = mix(col, uSkyColor, fresnel * 0.45);
+  // Schlick, with water's real F0 of about 0.02. The old fixed exponent made
+  // every surface either mirror or matte; this gives the proper gradient of
+  // dark water underfoot to bright sky at the horizon.
+  float fresnel = 0.02 + 0.98 * pow(1.0 - NdV, 5.0);
+  // From a low seat almost everything visible is near-grazing, so clamp how
+  // much sky the far water is allowed to take or the sea turns into haze.
+  fresnel = mix(fresnel, min(fresnel, 0.55), smoothstep(400.0, 3000.0, dist));
 
+  // Body colour: the dark column beneath, opening toward the crest tint on the
+  // faces that are tilted enough to be looking through less water.
+  vec3 body = mix(uCrestColor, uDeepColor, smoothstep(0.86, 1.0, N.y));
+
+  // Subsurface scattering. A wave lit from behind glows through its own crest —
+  // this is most of why real water looks alive and a shaded height field does
+  // not. Strongest where the surface is steep, facing away from us, and the sun
+  // is low and behind it.
+  float backlight = pow(clamp(dot(V, -normalize(vec3(uSunDir.x, 0.0, uSunDir.z))), 0.0, 1.0), 3.0);
+  float steep = smoothstep(0.02, 0.20, 1.0 - N.y);
+  float sss = backlight * steep * clamp(1.0 - uSunDir.y, 0.0, 1.0);
+  vec3 scatter = uCrestColor * 1.9 + vec3(0.02, 0.10, 0.06) + uSunColor * 0.22;
+
+  vec3 col = mix(body, uSkyColor, fresnel);
+  col += scatter * sss * 0.5 * shadeDetail;
+
+  // Specular. Two lobes: a tight sun track, and a broad sheen off the ripple
+  // field that reads as glitter when the surface is busy.
   vec3 H = normalize(uSunDir + V);
   float ndh = max(dot(N, H), 0.0);
-  col += vec3(1.0, 0.94, 0.80) * pow(ndh, 300.0) * 3.0;   // sun track
-  col += vec3(1.0, 0.90, 0.74) * pow(ndh, 20.0) * 0.14;   // broad glitter
+  float sunUp = smoothstep(-0.08, 0.12, uSunDir.y);
+  col += uSunColor * pow(ndh, 300.0) * 3.0 * sunUp;
+  col += uSunColor * pow(ndh, 24.0) * 0.16 * sunUp;
 
-  // Whitecaps where the surface pitches hardest.
-  col = mix(col, uFoamColor, smoothstep(0.05, 0.13, 1.0 - N.y) * 0.5 * shadeDetail);
+  // Water breaking against land, quays and shoals. Sampled before the algae
+  // because a slick gets torn apart in the surf line, not painted over it.
+  float surf = surfAt(vWorldPos.xz) * shadeDetail;
+  // Ragged, and moving: a static band of white reads as a painted outline.
+  if (surf > 0.001) {
+    float churn = noised(vWorldPos.xz * 0.09 + vec2(uTime * 0.5, uTime * -0.34)).x;
+    churn += noised(vWorldPos.xz * 0.32 - vec2(uTime * 0.9, uTime * 0.6)).x * 0.55;
+    // Breathe the whole band in and out, so the surf surges rather than sits.
+    float surge = 0.72 + 0.28 * sin(uTime * 0.55 + noised(vWorldPos.xz * 0.004).x * 6.0);
+    surf = clamp(surf * surge * smoothstep(-0.45, 0.35, churn) * 1.6, 0.0, 1.0);
+  }
+
+  // Algae. Ash and run-off feed it, so the drowned world is thick with the
+  // stuff — scattered slicks of green sitting on top of the water rather than
+  // in it, which is why this tints the surface *after* the fresnel and
+  // scattering and before the foam breaks over it.
+  float algae = algaeMask(vWorldPos.xz, uTime) * shadeDetail * (1.0 - surf);
+  if (algae > 0.001) {
+    // Thicker in the middle of a slick: it stops looking like water at all and
+    // starts looking like a skin on it.
+    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.35 + vec3(0.04, 0.07, 0.0), algae);
+    col = mix(col, bloom, algae * 0.82);
+    // A slick damps the chop and kills the sun track — that flat, dead patch
+    // is most of how you spot one from a distance.
+    col += uSunColor * pow(ndh, 60.0) * 0.06 * sunUp * (1.0 - algae);
+  }
+
+  // Whitecaps. Steepness picks where they can form; a noise field decides
+  // whether one actually has, so the foam breaks up instead of painting a
+  // smooth band along every wave back.
+  float steepness = 1.0 - N.y;
+  float foamMask = smoothstep(0.055, 0.16, steepness);
+  float breakup = noised(vWorldPos.xz * 0.55 + vec2(uTime * 0.22, uTime * -0.16)).x;
+  breakup += noised(vWorldPos.xz * 1.9 - vec2(uTime * 0.4)).x * 0.5;
+  // Algae holds the surface together, so a slick foams far less than clear
+  // water at the same steepness.
+  float foam = foamMask * smoothstep(-0.12, 0.30, breakup) * shadeDetail * (1.0 - algae * 0.75);
+  col = mix(col, uFoamColor, clamp(foam, 0.0, 0.75));
+  // Surf goes on last and goes on hardest — it is opaque white water, not a
+  // tint, and it must win over both the algae and the open-sea whitecaps.
+  col = mix(col, uFoamColor * 1.06, surf * 0.92);
 
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
@@ -143,11 +341,18 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
       {
         uTime: { value: 0 },
         uSunDir: { value: new THREE.Vector3().copy(sunDirection).normalize() },
+        // Tinted by the clock — the sun track has to go red at dusk with
+        // everything else, or the water reads as lit from a second sky.
+        uSunColor: { value: new THREE.Color(0xfff0d8) },
         // Drowned-world water: silt and ash, not holiday blue.
-        uDeepColor: { value: new THREE.Color(0x0d1a1c) },
-        uCrestColor: { value: new THREE.Color(0x27453f) },
+        uDeepColor: { value: new THREE.Color(0x0a2136) },
+        uCrestColor: { value: new THREE.Color(0x216580) },
         uSkyColor: { value: new THREE.Color(skyColor ?? 0x8a9499) },
-        uFoamColor: { value: new THREE.Color(0xc9d2cf) }
+        uFoamColor: { value: new THREE.Color(0xccd8de) },
+        // Sickly, not tropical — this is a bloom fed by fallout and run-off.
+        uAlgaeColor: { value: new THREE.Color(0x3f5c2a) },
+        uSurf: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector3()) },
+        uSurfCount: { value: 0 }
       }
     ]),
     vertexShader: VERTEX,
@@ -169,6 +374,33 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
       0,
       Math.round(camera.position.z / CENTER_SNAP) * CENTER_SNAP
     )
+  }
+
+  /**
+   * Tell the water what it is breaking against.
+   *
+   * @param {Array<{x:number,z:number,radius:number}>} obstacles everything the
+   *   sea should surf against — island coastlines, harbour footprints, shoals.
+   *   Anything may be passed; the nearest SURF_SLOTS in range are kept.
+   * @param {THREE.Camera} camera picks which of them those are.
+   */
+  mesh.setSurfObstacles = (obstacles, camera) => {
+    const cx = camera.position.x
+    const cz = camera.position.z
+    const near = []
+    for (const o of obstacles) {
+      if (!(o.radius > 0)) continue
+      const d = Math.hypot(o.x - cx, o.z - cz) - o.radius
+      if (d > SURF_RANGE) continue
+      near.push({ o, d })
+    }
+    near.sort((a, b) => a.d - b.d)
+    const slots = material.uniforms.uSurf.value
+    const n = Math.min(SURF_SLOTS, near.length)
+    for (let i = 0; i < n; i++) slots[i].set(near[i].o.x, near[i].o.z, near[i].o.radius)
+    // Zero the tail so a stale obstacle cannot keep foaming after we sail away.
+    for (let i = n; i < SURF_SLOTS; i++) slots[i].set(0, 0, 0)
+    material.uniforms.uSurfCount.value = n
   }
 
   return mesh

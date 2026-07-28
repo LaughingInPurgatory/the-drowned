@@ -45,7 +45,7 @@ const PLACE_ATTEMPTS = 60
 /** Fraction of ports that float free (rigs, moored hulks) rather than hug a coast. */
 const FLOATING_PORT_CHANCE = 0.28
 const FLOATING_OUTPOST_CHANCE = 0.45
-/** Ports with a berth you can respawn at. Keep in sync with game/clones.js. */
+/** Ports that keep a crew berth — where you wake up after being sunk. */
 const BERTH_CHANCE = 0.3
 
 /**
@@ -185,7 +185,7 @@ function hash01(str) {
   return ((h >>> 0) % 100000) / 100000
 }
 
-/** Keep in sync with game/clones.js portHasBerth (avoids an import cycle). */
+/** Deterministic from the id, so a harbour's berth survives a reload. */
 export function portHasBerth(portId) {
   return hash01(`berth:${portId}`) < BERTH_CHANCE
 }

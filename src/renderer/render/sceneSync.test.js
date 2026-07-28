@@ -12,9 +12,14 @@ import {
 
 test('getReticleAimPoint matches ship boresight when chase cam is synced', () => {
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.5, 2e6)
+  // Yaw only. The seat now follows heading rather than the full hull pose, so
+  // the two agree exactly for a hull sitting level — which is the case the
+  // reticle contract is actually about.
   const ship = {
-    position: [10, 20, -30],
-    quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(0.2, -0.5, 0.1)).toArray()
+    position: [10, 0, -30],
+    quaternion: new THREE.Quaternion()
+      .setFromAxisAngle(new THREE.Vector3(0, 1, 0), -0.5)
+      .toArray()
   }
   resetChaseCameraState()
   syncChaseCamera(camera, ship, { forceSnap: true })
@@ -54,17 +59,35 @@ test('orientCameraToward keeps aim on screen center even when up ≈ view axis',
   assert.ok(Math.abs(ndc.y) < 1e-4, `expected center Y, got ${ndc.y}`)
 })
 
-test('chase cam after pitch loop still projects boresight to center', () => {
+test('wave tilt moves the boresight off centre, but never far', () => {
+  // A hull riding a sea is pitched and heeled every frame. The seat follows
+  // heading only, deliberately — chasing the full pose would shake the camera
+  // with the swell. So the boresight does wander off the reticle a little, and
+  // the thing worth pinning is that it stays a *little*: aim must not be
+  // thrown across the screen every time the bow lifts.
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.5, 2e6)
-  // Nose nearly straight up — ship up nearly parallel to cam→aim.
-  const ship = {
-    position: [0, 0, 0],
-    quaternion: new THREE.Quaternion().setFromEuler(new THREE.Euler(1.4, 0.3, 0.5, 'YXZ')).toArray()
+  const worst = { x: 0, y: 0 }
+  // Realistic hull attitudes: trim under power is capped at 0.09 rad and the
+  // wave tilt on top of it is small; heel into a hard turn is the big one, and
+  // heel does not move the bow off the reticle at all.
+  for (const pitch of [-0.14, 0, 0.14]) {
+    for (const roll of [-0.42, 0, 0.42]) {
+      const ship = {
+        position: [0, 0, 0],
+        quaternion: new THREE.Quaternion()
+          .setFromEuler(new THREE.Euler(pitch, 0.3, roll, 'YXZ'))
+          .toArray()
+      }
+      resetChaseCameraState()
+      syncChaseCamera(camera, ship, { forceSnap: true })
+      const ndc = getShipAimPoint(ship, new THREE.Vector3(), AIM_LOOK_AHEAD).project(camera)
+      worst.x = Math.max(worst.x, Math.abs(ndc.x))
+      worst.y = Math.max(worst.y, Math.abs(ndc.y))
+    }
   }
-  resetChaseCameraState()
-  syncChaseCamera(camera, ship, { forceSnap: true })
-  const aim = getShipAimPoint(ship, new THREE.Vector3(), AIM_LOOK_AHEAD)
-  const ndc = aim.project(camera)
-  assert.ok(Math.abs(ndc.x) < 1e-3, `boresight X after pitch: ${ndc.x}`)
-  assert.ok(Math.abs(ndc.y) < 1e-3, `boresight Y after pitch: ${ndc.y}`)
+  assert.ok(worst.x < 0.25, `boresight wandered ${worst.x} across screen`)
+  assert.ok(worst.y < 0.25, `boresight wandered ${worst.y} up screen`)
+  // And it does not matter much anyway: the player fires at the reticle point,
+  // not down the bow. This test is a guard on the camera staying sane, not on
+  // where the shells go.
 })

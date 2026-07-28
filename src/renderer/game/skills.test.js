@@ -35,10 +35,8 @@ test('skill constants and catalog', () => {
   assert.equal(MAX_SKILL_LEVEL, 20)
   assert.equal(WRECK_SKILLBOOK_CHANCE, 0.005)
   assert.equal(PROBE_SKILLBOOK_CHANCE, 0.0005)
-  // 9, not 8: cloning (clone bay capacity + jumps) is a real, wired-up skill
-  // (game/clones.js, ui/dockingUI.js) — this count just hadn't been bumped
-  // when it was added to the catalog.
-  assert.equal(SKILLS.length, 9)
+  // 8, since cloning was removed along with the clone-bay system.
+  assert.equal(SKILLS.length, 8)
 })
 
 test('alien wrecks use base + 1% skillbook chance', async () => {

@@ -66,6 +66,15 @@ function materials(rng, weathered) {
       roughness: 0.95,
       metalness: 0.3
     }),
+    // Breakwater rock. Real stone maps rather than flat colour — an untextured
+    // boulder at this size reads as an origami crystal however well it is lit.
+    rubble: new THREE.MeshStandardMaterial({
+      ...maps('rubble'),
+      color: new THREE.Color(0x7d7469).lerp(rust, weathered * 0.35),
+      roughness: 1,
+      metalness: 0.05,
+      normalScale: new THREE.Vector2(1.4, 1.4)
+    }),
     accent: new THREE.MeshStandardMaterial({
       // The one bit of maintained paint anywhere on the sea.
       color: pick(rng, [0xc4531c, 0xc9a227, 0x2f6f8f, 0xb03a2e]),
@@ -242,22 +251,60 @@ function addBreakwater(group, mats, rng, radius) {
   const arc = range(rng, 1.4, 2.4)
   const start = rng() * Math.PI * 2
   const segs = Math.max(18, Math.round(arc * 22))
-  const geo = new THREE.IcosahedronGeometry(1, 0)
+  // One subdivision plus a per-vertex wobble. A bare icosahedron has twenty
+  // identical faces and reads as a cut gem; this gives the lumpy, weathered
+  // silhouette of tipped stone for a handful more triangles. Built once and
+  // shared — the per-block scale and rotation do the variety.
+  const geo = new THREE.IcosahedronGeometry(1, 1)
+  {
+    const pos = geo.getAttribute('position')
+    const v = new THREE.Vector3()
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i)
+      // Hash off the direction so shared vertices always agree and the surface
+      // stays closed.
+      const h = Math.sin(v.x * 91.17 + v.y * 47.31 + v.z * 63.73) * 43758.5453
+      v.multiplyScalar(0.86 + (h - Math.floor(h)) * 0.26)
+      pos.setXYZ(i, v.x, v.y, v.z)
+    }
+    geo.computeVertexNormals()
+    // Triplanar UVs so the rock map wraps a lump instead of smearing off a
+    // sphere projection.
+    retileUVsTriplanar(geo, 0.5)
+  }
   for (let i = 0; i < segs; i++) {
     const a = start + (i / (segs - 1)) * arc
     // Two staggered rows so it reads as a tipped bank with width, not a line.
     for (const lane of [-1, 1]) {
       if (lane > 0 && rng() < 0.35) continue
-      const block = new THREE.Mesh(geo, mats.rust)
+      const block = new THREE.Mesh(geo, mats.rubble)
       const r = radius * range(rng, 0.97, 1.03) + lane * radius * 0.035
-      const s = range(rng, radius * 0.035, radius * 0.07)
+      let s = range(rng, radius * 0.035, radius * 0.07)
+      let sy = s * range(rng, 0.5, 0.95)
+      // Position by the block's *underside*, not its centre. Placing the centre
+      // near the waterline left the smaller blocks hanging clear of the water
+      // with daylight under them — a mole is tipped rock resting on the bottom,
+      // so every block has to run well below the surface whatever its size.
+      const crest = range(rng, -1.2, 1.6) + SEA_MAX_AMPLITUDE * 0.5
+      // Guarantee the bottom clears the deepest trough. Positioning by the
+      // underside is not enough on its own — a small block with a high crest
+      // still ends up hanging in the air.
+      const needDepth = SEA_MAX_AMPLITUDE + 2
+      const minSy = (crest + needDepth) * 0.5
+      if (sy < minSy) {
+        // Growing only the vertical axis turned the small blocks into shark
+        // fins. Boulders are roughly as wide as they are tall, so take the
+        // footprint up with the height.
+        s = Math.max(s, minSy * 0.85)
+        sy = minSy
+      }
       block.position.set(
         Math.cos(a) * r + range(rng, -s, s) * 0.4,
-        // Crest just above the swell, troughs awash.
-        range(rng, -1.2, 1.6) + SEA_MAX_AMPLITUDE * 0.5,
+        // Top of the block lands at the crest height; the rest of it goes down.
+        crest - sy,
         Math.sin(a) * r + range(rng, -s, s) * 0.4
       )
-      block.scale.set(s, s * range(rng, 0.5, 0.95), s * range(rng, 0.8, 1.25))
+      block.scale.set(s, sy, s * range(rng, 0.8, 1.25))
       block.rotation.set(rng() * Math.PI, rng() * Math.PI, rng() * Math.PI)
       block.castShadow = true
       block.receiveShadow = true

@@ -1,7 +1,7 @@
-import { getShipClass } from '../data/shipClasses.js'
+import { getShipClass, shipRoleLabel } from '../data/shipClasses.js'
 import { accessorySlotCount, effectiveMiningCapacity, getAccessory } from '../data/accessories.js'
 import { getWeapon, BASE_WEAPON_ID, ALIEN_BASE_WEAPON_ID } from '../data/weapons.js'
-import { ensureLawStanding, MAX_LAW_STANDING } from '../game/security.js'
+import { ensureLawStanding, notorietyOf, MAX_LAW_STANDING } from '../game/security.js'
 import { SKILLS, MAX_SKILL_LEVEL, ensureSkills, skillLevel } from '../game/skills.js'
 import { escapeHtml } from './escapeHtml.js'
 import { isPortraitImageFile, resizeImageToDataUrl } from './portrait.js'
@@ -307,7 +307,7 @@ export function createCharacterUI(container, gameState) {
               <span class="value credits">0 cr</span>
             </div>
             <div class="stat-row inline">
-              <span class="label">Security standing</span>
+              <span class="label">Notoriety</span>
               <span class="value law-value">10 / 10</span>
             </div>
             <div class="stat-row inline law-hint-row" style="display:none">
@@ -420,15 +420,15 @@ export function createCharacterUI(container, gameState) {
         `${Math.floor(gameState.player.credits || 0).toLocaleString()} cr`
     }
     if (lawValueEl) {
-      lawValueEl.textContent = `${law} / ${MAX_LAW_STANDING}`
+      lawValueEl.textContent = `${notorietyOf(gameState)} / ${MAX_LAW_STANDING}`
       lawValueEl.classList.remove('law-good', 'law-mid', 'law-bad')
       lawValueEl.classList.add(lawClass(law))
     }
 
     let status = ''
-    if (law <= 0) status = 'Outlaw — shoot-on-sight (Sec 3–6) + all police'
-    else if (law <= 2) status = 'Wanted — police engage on sight (Sec 1–6)'
-    else if (law < 5) status = 'Stations in Sec 3–6 refuse docking'
+    if (law <= 0) status = 'Outlaw — shot on sight in policed water, by anyone'
+    else if (law <= 2) status = 'Wanted — the Coast Guard engages on sight'
+    else if (law < 5) status = 'Policed harbours will refuse you a berth'
     if (status && lawHintRow && lawStatusEl) {
       lawHintRow.style.display = 'flex'
       lawStatusEl.textContent = status
@@ -453,7 +453,7 @@ export function createCharacterUI(container, gameState) {
       const hps = Array.isArray(shipClass.hardpoints) ? shipClass.hardpoints : []
       const accSlots = accessorySlotCount(shipClass)
       const role = shipClass.role
-        ? String(shipClass.role).charAt(0).toUpperCase() + String(shipClass.role).slice(1)
+        ? shipRoleLabel(shipClass.role)
         : '—'
       const statLines = SHIP_STAT_ROWS.map(([key, label]) => {
         let val = shipClass.stats[key]
