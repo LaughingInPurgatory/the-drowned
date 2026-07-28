@@ -22,5 +22,5 @@ test('lowest purchasable ship costs at least 8500 credits', () => {
   assert.equal(MIN_SHIP_BUY_PRICE, 8500)
   const prices = purchasableShipClasses().map((c) => c.price)
   assert.ok(Math.min(...prices) >= MIN_SHIP_BUY_PRICE)
-  assert.equal(Math.min(...prices), 8500, 'Starter Light Runner should set the 8500 floor')
+  assert.equal(Math.min(...prices), 8500, 'Starter Mudlark should set the 8500 floor')
 })

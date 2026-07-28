@@ -331,7 +331,7 @@ export function buyMinedOre(gameState, bodyId, goodId, quantity) {
 // Nothing repairs itself out here — hull and armour both stay damaged, so
 // repairing just tops those back up. Cost scales with both how damaged the
 // ship is (missing points) and how big it is (hull.length relative to the
-// starter ship, so a Hold Runner costs meaningfully more per point than a Light Runner)
+// starter ship, so a Hold Runner costs meaningfully more per point than a Mudlark)
 // — a flat per-point rate treated every ship class alike, which didn't
 // hold up once ship sizes started to vary a lot. Settlements charge a surcharge
 // on top since their parts supply is more limited than a full station's.

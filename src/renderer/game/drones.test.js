@@ -70,7 +70,7 @@ test('zero or bogus shot speed falls back to the raw target position', () => {
 
 import { updateDrones, DRONE_PROACTIVE_RANGE, makeDroneState } from './drones.js'
 import { getDrone, DEFAULT_DRONE_ID } from '../data/drones.js'
-// NOT the starter hull: Light Runner has 0 drone bays, and ensureDrones trims
+// NOT the starter hull: Mudlark has 0 drone bays, and ensureDrones trims
 // the drone list to bay capacity — a drone on it is deleted before the update
 // loop ever sees it.
 const DRONE_HULL_ID = 'wayfarer'

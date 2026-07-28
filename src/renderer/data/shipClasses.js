@@ -201,7 +201,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'light_runner',
-    name: 'Light Runner',
+    name: 'Mudlark',
     role: 'explorer',
     price: 8500,
     stats: { hull: 50, armor: 45, cargoCapacity: 15, speed: 180, turnRate: 2.5, accel: 45 },

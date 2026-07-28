@@ -1,5 +1,5 @@
 // Buyable ship accessories — fitted into optional accessory slots (not
-// hardpoints). Starter Light Runner has one slot; other hulls may have up to 4.
+// hardpoints). Starter Mudlark has one slot; other hulls may have up to 4.
 
 export const MAX_ACCESSORY_SLOTS = 4
 

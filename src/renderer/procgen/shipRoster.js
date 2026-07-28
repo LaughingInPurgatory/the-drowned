@@ -88,7 +88,7 @@ const ROLE_HARDPOINT_COUNTS = {
   explorer: [1, 2]
 }
 
-// Accessory bays (0–4). Starter Light Runner has 1; generated hulls
+// Accessory bays (0–4). The starter Mudlark has 1; generated hulls
 // usually have at least one bay so Autopilot and later modules can fit.
 const ROLE_ACCESSORY_SLOT_COUNTS = {
   trader: [1, 2, 2, 3, 4],
@@ -576,7 +576,7 @@ function generateHardpoints(rng, role, hull, forcedCount = null) {
   return hardpoints
 }
 
-// Shop floor for buyable hulls (hand-crafted Light Runner sits here; generated scale up).
+// Shop floor for buyable hulls (the hand-crafted Mudlark sits here; generated scale up).
 export const MIN_SHIP_BUY_PRICE = 8500
 
 function lerp(a, b, t) {

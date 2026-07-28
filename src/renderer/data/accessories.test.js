@@ -79,7 +79,7 @@ test('extra hardpoints and drone bay appear while fitted', () => {
 })
 
 test('Extra Launcher Hardpoint adds a missile mount on a laser-only hull', () => {
-  // Light Runner is laser-only; accessory must still grant a launcher mount.
+  // The Mudlark carries a gun mount only; the accessory must still grant a launcher.
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   assert.ok(
     shipClass.hardpoints.every((h) => h.type !== 'missile'),
@@ -97,7 +97,7 @@ test('Extra Launcher Hardpoint adds a missile mount on a laser-only hull', () =>
   )
 })
 
-test('starter Light Runner has one accessory slot', () => {
+test('starter Mudlark has one accessory slot', () => {
   assert.equal(accessorySlotCount(getShipClass(STARTER_SHIP_CLASS_ID)), 1)
   assert.equal(defaultAccessoriesFor(getShipClass(STARTER_SHIP_CLASS_ID)).length, 1)
   for (const id of ['hold_runner', 'needle_dart', 'gun_barge', 'bravia_mk2', 'raider_mk1', 'swift_keel']) {

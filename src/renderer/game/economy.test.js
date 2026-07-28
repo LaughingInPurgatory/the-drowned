@@ -221,7 +221,7 @@ test('storeCargo/retrieveCargo round-trip cargo through per-station storage', ()
 test('renameActiveShip and renameStoredShip rename ships (and reject blank names)', () => {
   const gameState = makeGameState()
   gameState.player.credits = 50000
-  purchaseShip(gameState, 'agri-world', 'light_runner', 'Light Runner')
+  purchaseShip(gameState, 'agri-world', 'light_runner', 'Mudlark')
 
   renameActiveShip(gameState, '  Nova Runner  ')
   assert.equal(gameState.player.ship.instanceName, 'Nova Runner', 'should trim whitespace')
@@ -355,7 +355,7 @@ test('storageHasAssets is true only when something of value is parked', () => {
 test('buyAccessory / equipAccessory / unequip an upgrade on a hull with slots', () => {
   const gameState = makeGameState()
   gameState.player.credits = 50000
-  // Starter Light Runner has 1 slot — equip from storage works.
+  // The starter Mudlark has 1 slot — equip from storage works.
   buyAccessory(gameState, 'agri-world', 'cargo_upgrade')
   assert.equal(gameState.stationStorage['agri-world'].accessories.cargo_upgrade, 1)
   equipAccessory(gameState, 'agri-world', 0, 'cargo_upgrade')
