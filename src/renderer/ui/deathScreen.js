@@ -17,7 +17,7 @@ const STYLE = `
 
 #death-screen h1 {
   position: relative; color: #ff5050; font-size: 40px; letter-spacing: 6px; margin: 0 0 24px 0;
-  animation: glitchShadow 2.4s infinite steps(1);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.85);
 }
 ${wreckedTypeCSS('#death-screen h1')}
 #death-screen.shake .panel { animation: shake 0.5s ease-in-out; }
@@ -27,13 +27,6 @@ ${wreckedTypeCSS('#death-screen h1')}
   40% { transform: translate(5px, -3px); }
   60% { transform: translate(-4px, 3px); }
   80% { transform: translate(3px, -2px); }
-}
-@keyframes glitchShadow {
-  0%, 18% { text-shadow: 2px 0 var(--ui-accent), -2px 0 #ff4d4d; }
-  20% { text-shadow: -4px 1px var(--ui-accent), 4px -1px #ff4d4d; }
-  22%, 48% { text-shadow: 2px 0 var(--ui-accent), -2px 0 #ff4d4d; }
-  50% { text-shadow: 4px -2px var(--ui-accent), -4px 2px #ff4d4d; }
-  52%, 100% { text-shadow: 2px 0 var(--ui-accent), -2px 0 #ff4d4d; }
 }
 
 #death-screen .killer {

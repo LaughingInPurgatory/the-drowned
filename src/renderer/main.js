@@ -220,134 +220,102 @@ const SETTLEMENT_SCALE = 1.5
 const PROBE_RANGE = 900
 const MINING_TOAST_DURATION_S = 1.6
 const FACTION_TOAST_DURATION_S = 4
-// Title-screen-style chromatic glitch for floating HUD text (no soft fades).
-const HUD_GLITCH_EXIT_MS = 420
-const HUD_GLITCH_STYLE = `
-.hud-glitch-text {
+// Floating HUD text: a clean fade in and out.
+//
+// This used to be a chromatic-aberration glitch — split colour layers jittering
+// on a timer. It read as a broken display rather than a piece of information,
+// and on a boat there is no screen between you and the sea for it to be
+// breaking. The API is unchanged so every call site still works; only the
+// presentation is different.
+const HUD_TOAST_EXIT_MS = 300
+const HUD_TOAST_STYLE = `
+.hud-toast-text {
   position: relative; display: inline-block; max-width: 100%;
 }
-.hud-glitch-text::before,
-.hud-glitch-text::after {
-  content: attr(data-text);
-  position: absolute; left: 0; top: 0; width: 100%;
-  color: inherit; font: inherit; letter-spacing: inherit;
-  white-space: inherit; text-align: inherit; text-shadow: inherit;
-  opacity: 0; pointer-events: none; overflow: hidden;
+.hud-toast-enter {
+  animation: hudToastEnter 0.24s ease-out both;
 }
-.hud-glitch-text::before {
-  clip-path: polygon(0 0, 100% 0, 100% 42%, 0 42%);
-  filter: hue-rotate(-55deg);
-  animation: hudGlitchTop 5.8s steps(1) infinite;
+@keyframes hudToastEnter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
-.hud-glitch-text::after {
-  clip-path: polygon(0 58%, 100% 58%, 100% 100%, 0 100%);
-  filter: hue-rotate(160deg);
-  animation: hudGlitchBottom 5.8s steps(1) infinite;
+.hud-toast-exit {
+  animation: hudToastExit 0.28s ease-in both;
 }
-@keyframes hudGlitchTop {
-  0%, 90%, 100% { opacity: 0; transform: translate(0, 0); }
-  91% { opacity: 0.9; transform: translate(-4px, -1px); }
-  92% { opacity: 0.85; transform: translate(5px, 1px); }
-  93% { opacity: 0; transform: translate(0, 0); }
-  96% { opacity: 0.7; transform: translate(3px, 0); }
-  97% { opacity: 0; transform: translate(0, 0); }
+@keyframes hudToastExit {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translateY(-3px); }
 }
-@keyframes hudGlitchBottom {
-  0%, 90%, 100% { opacity: 0; transform: translate(0, 0); }
-  91% { opacity: 0.9; transform: translate(5px, 1px); }
-  92% { opacity: 0.85; transform: translate(-4px, -1px); }
-  93% { opacity: 0; transform: translate(0, 0); }
-  96% { opacity: 0.7; transform: translate(-3px, 0); }
-  97% { opacity: 0; transform: translate(0, 0); }
-}
-.hud-glitch-enter {
-  animation: hudGlitchEnter 0.42s steps(2) both;
-}
-@keyframes hudGlitchEnter {
-  0% { opacity: 0; transform: skewX(12deg) translateX(-7px); filter: blur(1px); }
-  18% { opacity: 1; transform: skewX(-9deg) translateX(5px); filter: blur(0); }
-  36% { opacity: 0.25; transform: skewX(6deg) translateX(-4px); }
-  52% { opacity: 1; transform: skewX(-3deg) translateX(2px); }
-  68% { opacity: 0.55; transform: skewX(2deg) translateX(-1px); }
-  100% { opacity: 1; transform: none; filter: none; }
-}
-.hud-glitch-exit {
-  animation: hudGlitchExit 0.4s steps(2) both;
-}
-@keyframes hudGlitchExit {
-  0% { opacity: 1; transform: none; }
-  22% { opacity: 1; transform: skewX(-11deg) translateX(6px); }
-  44% { opacity: 0.15; transform: skewX(9deg) translateX(-9px); }
-  62% { opacity: 0.8; transform: skewX(-5deg) translateX(3px); }
-  100% { opacity: 0; transform: skewX(7deg) translateX(12px); filter: blur(1px); }
+@media (prefers-reduced-motion: reduce) {
+  .hud-toast-enter, .hud-toast-exit { animation-duration: 0.01s; }
 }
 `
-let hudGlitchStyleInjected = false
-function ensureHudGlitchStyle() {
-  if (hudGlitchStyleInjected) return
+let hudToastStyleInjected = false
+function ensureHudToastStyle() {
+  if (hudToastStyleInjected) return
   const style = document.createElement('style')
-  style.textContent = HUD_GLITCH_STYLE
+  style.textContent = HUD_TOAST_STYLE
   document.head.appendChild(style)
-  hudGlitchStyleInjected = true
+  hudToastStyleInjected = true
 }
 
-const hudGlitchHideTimers = new WeakMap()
+const hudToastHideTimers = new WeakMap()
 
-function ensureHudGlitchSpan(el) {
+function ensureHudToastSpan(el) {
   if (!el) return null
-  ensureHudGlitchStyle()
-  let span = el.querySelector(':scope > .hud-glitch-text')
+  ensureHudToastStyle()
+  let span = el.querySelector(':scope > .hud-toast-text')
   if (!span) {
     span = document.createElement('span')
-    span.className = 'hud-glitch-text'
+    span.className = 'hud-toast-text'
     while (el.firstChild) span.appendChild(el.firstChild)
     el.appendChild(span)
   }
   return span
 }
 
-function setHudGlitchText(el, text) {
-  const span = ensureHudGlitchSpan(el)
+function setHudToastText(el, text) {
+  const span = ensureHudToastSpan(el)
   if (!span) return
   span.textContent = text
   span.dataset.text = text
 }
 
-function showHudGlitch(el) {
+function showHudToast(el) {
   if (!el) return
-  ensureHudGlitchStyle()
-  clearTimeout(hudGlitchHideTimers.get(el))
+  ensureHudToastStyle()
+  clearTimeout(hudToastHideTimers.get(el))
   el.style.display = 'block'
   // Keep probe-info opacity from .float-info-text (don't force full opacity).
   el.style.removeProperty('opacity')
-  const span = ensureHudGlitchSpan(el)
+  const span = ensureHudToastSpan(el)
   if (!span) return
-  span.classList.remove('hud-glitch-exit', 'hud-glitch-enter')
+  span.classList.remove('hud-toast-exit', 'hud-toast-enter')
   // Restart enter animation next frame — never force layout (offsetWidth) mid-combat.
   requestAnimationFrame(() => {
     if (!span.isConnected || el.style.display === 'none') return
-    span.classList.add('hud-glitch-enter')
+    span.classList.add('hud-toast-enter')
   })
 }
 
-function hideHudGlitch(el) {
+function hideHudToast(el) {
   if (!el || el.style.display === 'none') return
-  const span = ensureHudGlitchSpan(el)
+  const span = ensureHudToastSpan(el)
   if (!span) {
     el.style.display = 'none'
     return
   }
-  span.classList.remove('hud-glitch-enter', 'hud-glitch-exit')
+  span.classList.remove('hud-toast-enter', 'hud-toast-exit')
   requestAnimationFrame(() => {
     if (!span.isConnected) return
-    span.classList.add('hud-glitch-exit')
+    span.classList.add('hud-toast-exit')
   })
-  clearTimeout(hudGlitchHideTimers.get(el))
+  clearTimeout(hudToastHideTimers.get(el))
   const t = setTimeout(() => {
     el.style.display = 'none'
-    span.classList.remove('hud-glitch-exit')
-  }, HUD_GLITCH_EXIT_MS)
-  hudGlitchHideTimers.set(el, t)
+    span.classList.remove('hud-toast-exit')
+  }, HUD_TOAST_EXIT_MS)
+  hudToastHideTimers.set(el, t)
 }
 
 const AMBIENT_SPAWN_INTERVAL_S = 90
@@ -1748,11 +1716,11 @@ function updateMenuBackground(dt) {
 
 function showGameSavedToast(durationMs = 2200) {
   if (!saveToastEl) return
-  setHudGlitchText(saveToastEl, 'GAME SAVED')
-  showHudGlitch(saveToastEl)
+  setHudToastText(saveToastEl, 'GAME SAVED')
+  showHudToast(saveToastEl)
   clearTimeout(saveToastHideTimer)
   saveToastHideTimer = setTimeout(() => {
-    hideHudGlitch(saveToastEl)
+    hideHudToast(saveToastEl)
   }, durationMs)
 }
 
@@ -1991,8 +1959,8 @@ function onProjectileHit({
       scene.add(fx.group)
       rockExplosions.push(fx)
       audio.playRockExplosion()
-      setHudGlitchText(miningToastEl, `${getGood(mined.goodId).name} deposit destroyed!`)
-      showHudGlitch(miningToastEl)
+      setHudToastText(miningToastEl, `${getGood(mined.goodId).name} deposit destroyed!`)
+      showHudToast(miningToastEl)
       miningToastUntil = gameState.simTime + MINING_TOAST_DURATION_S * 1.4
       // If the whole belt is empty, show when it comes back.
       maybeToastFieldDepleted(fieldId)
@@ -2005,8 +1973,8 @@ function onProjectileHit({
       oreScoopEffects?.burst(new THREE.Vector3(...from), 5 + Math.floor(Math.random() * 4))
       if (!mined.destroyed) {
         const n = mined.scoopedAmount ?? mined.amount ?? 1
-        setHudGlitchText(miningToastEl, `Mined ${n} ${getGood(mined.goodId).name}`)
-        showHudGlitch(miningToastEl)
+        setHudToastText(miningToastEl, `Mined ${n} ${getGood(mined.goodId).name}`)
+        showHudToast(miningToastEl)
         miningToastUntil = gameState.simTime + MINING_TOAST_DURATION_S
       }
     } else if (!mined.destroyed) {
@@ -2411,8 +2379,8 @@ function maybeSpawnMiningPirateAmbush() {
   )
   gameState.npcs.push(npc)
   if (factionToastEl) {
-    setHudGlitchText(factionToastEl, 'Pirates attracted by your mining!')
-    showHudGlitch(factionToastEl)
+    setHudToastText(factionToastEl, 'Pirates attracted by your mining!')
+    showHudToast(factionToastEl)
     factionToastUntil = gameState.simTime + FACTION_TOAST_DURATION_S
   }
 }
@@ -2925,7 +2893,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
     drop-shadow(0 2px 5px rgba(0,0,0,0.95))
     drop-shadow(0 0 8px rgba(0,0,0,0.75));
 }
-.float-info-text .hud-glitch-text {
+.float-info-text .hud-toast-text {
   color: inherit;
   text-shadow: inherit;
   font: inherit;
@@ -3049,7 +3017,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   saveToastEl.id = 'save-toast'
   saveToastEl.className = 'float-info-text'
   // Bigger + glowing — inline style overrides .float-info-text's font-size/
-  // text-shadow on this element only (the child .hud-glitch-text span inherits
+  // text-shadow on this element only (the child .hud-toast-text span inherits
   // whatever is set here, per its own `font: inherit; text-shadow: inherit`).
   saveToastEl.style.cssText =
     `${belowStatusCss}pointer-events:none;z-index:65;` +
@@ -3157,12 +3125,12 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   appEl.appendChild(targetDirEl)
 
   // Autopilot status — under the boat status panel.
-  // Glitch enter/exit + chromatic slices.
+  // Fade in and out.
   cruiseIndicatorEl = document.createElement('div')
   cruiseIndicatorEl.id = 'cruise-indicator'
   cruiseIndicatorEl.className = 'float-info-text'
   cruiseIndicatorEl.style.cssText = belowStatusCss
-  setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
+  setHudToastText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
   appEl.appendChild(cruiseIndicatorEl)
 
   // Reused for both the hyperspace punch and the dock/undock transition —
@@ -3349,8 +3317,8 @@ function lootNearbyWreck(wreck) {
   try {
     const loot = lootWreck(gameState, playerShipClass, wreck.id)
     audio.playClick()
-    setHudGlitchText(miningToastEl, `Salvaged ${formatLootSummary(loot)} from the wreck`)
-    showHudGlitch(miningToastEl)
+    setHudToastText(miningToastEl, `Salvaged ${formatLootSummary(loot)} from the wreck`)
+    showHudToast(miningToastEl)
     miningToastUntil = gameState.simTime + MINING_TOAST_DURATION_S
   } catch {
     flashToast('Wreck no longer there', 1.4)
@@ -3374,8 +3342,8 @@ function flashToast(text, durationS = MINING_TOAST_DURATION_S) {
   el.style.cssText =
     'position:fixed;left:50%;transform:translateX(-50%);display:none;z-index:20;text-align:center;max-width:min(640px,92vw);white-space:normal;pointer-events:none;'
   appEl.appendChild(el)
-  setHudGlitchText(el, text)
-  showHudGlitch(el)
+  setHudToastText(el, text)
+  showHudToast(el)
   toastQueue.push({ el, until: gameState.simTime + durationS })
   while (toastQueue.length > MAX_STACKED_TOASTS) {
     const oldest = toastQueue.shift()
@@ -3384,8 +3352,8 @@ function flashToast(text, durationS = MINING_TOAST_DURATION_S) {
 }
 
 function expireToast(item) {
-  hideHudGlitch(item.el)
-  setTimeout(() => item.el.remove(), HUD_GLITCH_EXIT_MS)
+  hideHudToast(item.el)
+  setTimeout(() => item.el.remove(), HUD_TOAST_EXIT_MS)
 }
 
 /** Drop toasts past their timer — called once per frame from updateBelowRadarPrompts. */
@@ -3416,10 +3384,10 @@ function hailCurrentTarget() {
   }
   const { speaker, line } = buildHailResponse(npc)
   if (!hailResultsEl) return
-  setHudGlitchText(hailResultsEl, `${speaker}:\n"${line}"`)
-  const span = hailResultsEl.querySelector('.hud-glitch-text')
+  setHudToastText(hailResultsEl, `${speaker}:\n"${line}"`)
+  const span = hailResultsEl.querySelector('.hud-toast-text')
   if (span) span.style.whiteSpace = 'pre-line'
-  showHudGlitch(hailResultsEl)
+  showHudToast(hailResultsEl)
   hailResultsUntil = gameState.simTime + 6
   audio.playClick()
 }
@@ -3439,11 +3407,11 @@ setMissionCompletedHandler((info) => {
 
 function showCraftToast(text, durationMs = 5500) {
   if (!craftToastEl) return
-  setHudGlitchText(craftToastEl, text)
-  showHudGlitch(craftToastEl)
+  setHudToastText(craftToastEl, text)
+  showHudToast(craftToastEl)
   clearTimeout(craftToastHideTimer)
   craftToastHideTimer = setTimeout(() => {
-    hideHudGlitch(craftToastEl)
+    hideHudToast(craftToastEl)
   }, durationMs)
 }
 
@@ -3555,12 +3523,12 @@ function probeBody(body) {
 
 function showFloatingProbeResults(messages) {
   if (!probeResultsEl || !messages.length) return
-  // Single glitch line (joined) so enter/exit + chromatic slices match other HUD text.
-  setHudGlitchText(probeResultsEl, messages.join('\n'))
-  const span = probeResultsEl.querySelector('.hud-glitch-text')
+  // Single line (joined) so the fade matches every other floating HUD toast.
+  setHudToastText(probeResultsEl, messages.join('\n'))
+  const span = probeResultsEl.querySelector('.hud-toast-text')
   if (span) span.style.whiteSpace = 'pre-line'
-  showHudGlitch(probeResultsEl)
-  // Stay long enough to read multi-line mission results; dismiss with glitch (no fade).
+  showHudToast(probeResultsEl)
+  // Stay long enough to read multi-line mission results, then fade out.
   const hold = Math.min(14, 5.5 + messages.length * 1.4)
   probeResultsUntil = (gameState?.simTime ?? 0) + hold
 }
@@ -4205,9 +4173,9 @@ function beginDocking(body) {
   if (cruising || wasCruising) {
     cruising = false
     wasCruising = false
-    setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
-    showHudGlitch(cruiseIndicatorEl)
-    hideHudGlitch(cruiseIndicatorEl)
+    setHudToastText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
+    showHudToast(cruiseIndicatorEl)
+    hideHudToast(cruiseIndicatorEl)
     gameState.player.ship.velocity = [0, 0, 0]
     gameState.player.ship.throttle = 0
     audio.setSupercruiseActive(false)
@@ -5724,13 +5692,13 @@ function animate() {
     // TTS says "supercrews" so speech synthesis hits the right phonetics;
     audio.announce(cruising ? 'Autopilot engaged' : 'Autopilot disengaged')
     if (cruising) {
-      setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
-      showHudGlitch(cruiseIndicatorEl)
+      setHudToastText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
+      showHudToast(cruiseIndicatorEl)
     } else {
-      // Brief yellow callout (same style as engage), then glitch-out.
-      setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
-      showHudGlitch(cruiseIndicatorEl)
-      hideHudGlitch(cruiseIndicatorEl)
+      // Brief yellow callout (same style as engage), then fade out.
+      setHudToastText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
+      showHudToast(cruiseIndicatorEl)
+      hideHudToast(cruiseIndicatorEl)
     }
     wasCruising = cruising
   }
@@ -5779,7 +5747,7 @@ function animate() {
     camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 6)
     camera.updateProjectionMatrix()
   }
-  // AUTOPILOT ENGAGED: shown/hidden with glitch enter/exit on the wasCruising edge.
+  // AUTOPILOT ENGAGED: faded in and out on the wasCruising edge.
   // Player mesh + chase cam are re-synced after orbital carry (see below).
   syncMeshToEntity(playerMesh, gameState.player.ship)
   const strafeX = cruising ? 0 : (gameState.player.ship.strafeX ?? 0)
@@ -5824,8 +5792,8 @@ function animate() {
     // flag just guards against re-showing it every subsequent frame.
     if (npc.aiState === 'ram' && !npc.ramAnnounced) {
       npc.ramAnnounced = true
-      setHudGlitchText(factionToastEl, npc.ramQuote)
-      showHudGlitch(factionToastEl)
+      setHudToastText(factionToastEl, npc.ramQuote)
+      showHudToast(factionToastEl)
       factionToastUntil = gameState.simTime + FACTION_TOAST_DURATION_S
     }
   }
@@ -5847,8 +5815,8 @@ function animate() {
         removeNpcMesh(id)
       }
       gameState.npcs = gameState.npcs.filter((n) => !departingIds.includes(n.id))
-      setHudGlitchText(factionToastEl, 'The pirates thank you for the assist, and hyperspace away.')
-      showHudGlitch(factionToastEl)
+      setHudToastText(factionToastEl, 'The pirates thank you for the assist, and hyperspace away.')
+      showHudToast(factionToastEl)
       factionToastUntil = gameState.simTime + FACTION_TOAST_DURATION_S
     }
   }
@@ -6221,32 +6189,32 @@ function animate() {
   if (
     miningToastEl.style.display === 'block' &&
     gameState.simTime > miningToastUntil &&
-    !miningToastEl.querySelector('.hud-glitch-exit')
+    !miningToastEl.querySelector('.hud-toast-exit')
   ) {
-    hideHudGlitch(miningToastEl)
+    hideHudToast(miningToastEl)
   }
   if (
     factionToastEl.style.display === 'block' &&
     gameState.simTime > factionToastUntil &&
-    !factionToastEl.querySelector('.hud-glitch-exit')
+    !factionToastEl.querySelector('.hud-toast-exit')
   ) {
-    hideHudGlitch(factionToastEl)
+    hideHudToast(factionToastEl)
   }
   if (
     probeResultsEl &&
     probeResultsEl.style.display === 'block' &&
     gameState.simTime > probeResultsUntil &&
-    !probeResultsEl.querySelector('.hud-glitch-exit')
+    !probeResultsEl.querySelector('.hud-toast-exit')
   ) {
-    hideHudGlitch(probeResultsEl)
+    hideHudToast(probeResultsEl)
   }
   if (
     hailResultsEl &&
     hailResultsEl.style.display === 'block' &&
     gameState.simTime > hailResultsUntil &&
-    !hailResultsEl.querySelector('.hud-glitch-exit')
+    !hailResultsEl.querySelector('.hud-toast-exit')
   ) {
-    hideHudGlitch(hailResultsEl)
+    hideHudToast(hailResultsEl)
   }
 
   // Dock / probe / wreck / faction / cruise / craft lines sit under ship status.

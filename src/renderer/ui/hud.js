@@ -288,7 +288,7 @@ const STYLE = `
   border-radius: 0;
   box-shadow: none;
 }
-/* Shared soft ground shadow — kept in glitch rest frames so animation doesn't wipe it. */
+/* Shared soft ground shadow, so HUD chrome reads against a bright sea. */
 `
 
 export function createHud(container) {
@@ -300,7 +300,6 @@ export function createHud(container) {
   hud.id = 'hud'
   hud.innerHTML = `
     <div class="scanlines"></div>
-    <div class="static-noise" aria-hidden="true"></div>
     <div class="system-label" role="button" tabindex="0" title="Sounding (B)" aria-label="Sounding">
       <span class="sys-name">—</span>
       <span class="nearest-body"><span class="nb-name"></span></span>
@@ -770,7 +769,6 @@ export function createHud(container) {
       radarCtx.shadowOffsetY = 0
       radarCtx.globalAlpha = 1
     },
-    /** Sparse chromatic glitch on all HUD chrome while supercruising. */
     /**
      * System-name chip opens System Scan (replaces the old dedicated button).
      * @param {() => void} fn

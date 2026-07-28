@@ -11,6 +11,49 @@ import { controlsListHTML } from './controlsList.js'
 import { escapeHtml } from './escapeHtml.js'
 import { isPortraitImageFile, resizeImageToDataUrl } from './portrait.js'
 
+
+
+
+/**
+ * The filter that turns text into smoke.
+ *
+ * `feTurbulence` drives `feDisplacementMap`, which pushes the glyph outlines
+ * around by the noise field — that is what tears them into wisps while keeping
+ * their shape. A blur afterwards softens what is left, and the alpha is pulled
+ * down so the result reads as semi-opaque smoke rather than a black stamp.
+ *
+ * The turbulence animates via SMIL rather than CSS, because `baseFrequency` is
+ * not a CSS-animatable property; without it the smoke would be a fixed shape
+ * merely sliding around, which reads as a decal.
+ *
+ * Lives in its own detached SVG so it can be referenced by `filter: url(#…)`
+ * from the stylesheet. Sized 0×0 and hidden — it renders nothing itself.
+ */
+const SMOKE_FILTER_SVG = `
+<svg class="smoke-defs" width="0" height="0" aria-hidden="true" focusable="false">
+  <filter id="drowned-smoke" x="-60%" y="-80%" width="220%" height="260%"
+          color-interpolation-filters="sRGB">
+    <feTurbulence type="fractalNoise" baseFrequency="0.02 0.045" numOctaves="5"
+                  seed="5" result="noise">
+      <animate attributeName="baseFrequency"
+               dur="16s" repeatCount="indefinite"
+               values="0.02 0.045; 0.034 0.062; 0.02 0.045"/>
+    </feTurbulence>
+    <!-- A large displacement and only a light blur: the tearing is what makes
+         it smoke. Blur it hard instead and the glyphs merge into one soft slab
+         the shape of the line's bounding box. -->
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="52"
+                       xChannelSelector="R" yChannelSelector="G" result="torn"/>
+    <feGaussianBlur in="torn" stdDeviation="1.8" result="soft"/>
+    <feColorMatrix in="soft" type="matrix" values="
+      0 0 0 0 0
+      0 0 0 0 0
+      0 0 0 0 0
+      0 0 0 0.58 0"/>
+  </filter>
+</svg>
+`
+
 const STYLE = `
 /* Light dark halo for legibility over the sun — keep it modest so type stays bright. */
 #main-menu {
@@ -87,6 +130,57 @@ const STYLE = `
   text-shadow: 0 1px 2px rgba(0,0,0,0.8), 0 2px 6px rgba(0,0,0,0.5);
 }
 
+
+/* --- Smoke ---------------------------------------------------------------
+   Smoke rising off the letters and drifting off the top of the screen.
+
+   The copies live *outside* the h1 rather than as pseudo-elements on the
+   lines, and that is not cosmetic: the line elements carry the erosion mask, and a
+   mask applies to the whole subtree — so smoke parented to a line was being
+   clipped to the erosion pattern and cut off at the mask's tile edge. These
+   are siblings laid over the h1 instead, sharing its metrics so the glyphs
+   land in the same places.
+
+   Each copy is filled solid black and run through an SVG filter that displaces
+   it with turbulence, so the letterforms tear into wisps that still carry
+   their own shape. As it rises the CSS adds progressively more blur on top of
+   that filter, which is what turns a recognisable word into general smoke by
+   the time it leaves frame. #main-menu is overflow:hidden, so the top of the
+   viewport is where it goes.
+
+   Two copies half a cycle apart, so as one wisp thins the next is forming. */
+#main-menu .title-smoke {
+  position: absolute; left: 0; right: 0; top: 0;
+  text-align: center;
+  pointer-events: none;
+  z-index: -1;
+  will-change: transform, opacity, filter;
+  animation: titleSmokeRise 13s ease-out infinite;
+}
+#main-menu .title-smoke.b { animation-delay: 6.5s; }
+#main-menu .title-smoke .smoke-line {
+  /* Mirrors #main-menu h1 .line — same face, size and tracking, so the smoke
+     starts exactly on top of the word it is coming off. */
+  display: block;
+  font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", "Helvetica Neue", sans-serif;
+  font-weight: 900;
+  font-size: 69px; letter-spacing: 6px; text-transform: uppercase;
+  color: #000;
+  filter: url(#drowned-smoke);
+}
+#main-menu .title-smoke .smoke-line.sub {
+  font-size: 30px; letter-spacing: 14px; margin-bottom: 2px;
+}
+@keyframes titleSmokeRise {
+  0%   { opacity: 0; transform: translate(0, 0) scale(1); filter: blur(0px); }
+  12%  { opacity: 0.7; }
+  55%  { opacity: 0.42; }
+  100% { opacity: 0; transform: translate(38px, -62vh) scale(1.9); filter: blur(16px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #main-menu .title-smoke { animation: none; opacity: 0.3; transform: none; }
+}
+
 #main-menu h1 { margin: 0 0 8px 0; }
 :root { --title-glow: 255, 70, 40; }
 /* One-shot cinematic entrance — the title resolves out of a blur — replayed
@@ -95,11 +189,10 @@ const STYLE = `
   from { opacity: 0; transform: translateX(-50%) scale(1.08); filter: blur(14px); }
   to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0); }
 }
-/* Each line of the (now two-line) title is its own box with the gradient/
-   glitch applied per-line, rather than once across the whole h1 — the
-   glitch clip-path bands below are percentages of a single line's height,
-   so splitting them over a taller multi-line block would slice across the
-   gap between lines instead of through each line's own glyphs. */
+/* Each line of the two-line title is its own box, so the gradient wash and
+   the erosion mask are applied per line rather than once across the whole h1
+   — a mask sized to the block would run across the gap between the lines
+   instead of through each line's own glyphs. */
 /* Bright gradient fill — avoid stacking opaque black drop-shadows on
    background-clip:text (they eat the fill and leave a dark outline). */
 #main-menu h1 .line {
@@ -154,34 +247,6 @@ ${wreckedTypeCSS('#main-menu h1 .line')}
     drop-shadow(0 0 72px rgba(var(--title-glow), 0.1)); }
 }
 
-/* Brief chromatic-aberration glitch slices, sparse (~93-97% of the loop is
-   quiet) so it reads as an occasional signal hiccup rather than constant
-   noise. content: attr(data-text) mirrors whatever's in each .line's
-   data-text attribute, so the glitch layer can never drift out of sync with
-   the line's real text. */
-#main-menu h1 .line::before, #main-menu h1 .line::after {
-  content: attr(data-text); position: absolute; inset: 0;
-  background: inherit; -webkit-background-clip: text; background-clip: text; color: transparent;
-  opacity: 0; mix-blend-mode: screen;
-}
-#main-menu h1 .line::before { clip-path: polygon(0 0, 100% 0, 100% 45%, 0 45%); filter: hue-rotate(-50deg); animation: glitchTop 6.5s steps(1) infinite; }
-#main-menu h1 .line::after { clip-path: polygon(0 55%, 100% 55%, 100% 100%, 0 100%); filter: hue-rotate(170deg); animation: glitchBottom 6.5s steps(1) infinite; }
-@keyframes glitchTop {
-  0%, 91%, 100% { opacity: 0; transform: translate(0, 0); }
-  92% { opacity: 0.85; transform: translate(-5px, -1px); }
-  93% { opacity: 0.85; transform: translate(4px, 1px); }
-  94% { opacity: 0; transform: translate(0, 0); }
-  96% { opacity: 0.7; transform: translate(3px, 0); }
-  97% { opacity: 0; transform: translate(0, 0); }
-}
-@keyframes glitchBottom {
-  0%, 91%, 100% { opacity: 0; transform: translate(0, 0); }
-  92% { opacity: 0.85; transform: translate(5px, 1px); }
-  93% { opacity: 0.85; transform: translate(-4px, -1px); }
-  94% { opacity: 0; transform: translate(0, 0); }
-  96% { opacity: 0.7; transform: translate(-3px, 0); }
-  97% { opacity: 0; transform: translate(0, 0); }
-}
 
 /* Thin glowing rule lines flanking the subtitle — cheap cinematic framing. */
 @keyframes flicker {
@@ -334,7 +399,7 @@ ${wreckedTypeCSS('#main-menu h1 .line')}
   box-shadow: none !important;
   transform: translateY(8px); /* no scale — keeps hit area from looking boxed */
 }
-#main-menu button.menu-link .glitch-text {
+#main-menu button.menu-link .menu-link-text {
   position: relative; display: inline-block; padding-bottom: 3px;
   filter: drop-shadow(0 1px 2px rgba(0,0,0,0.7));
 }
@@ -346,45 +411,19 @@ ${wreckedTypeCSS('#main-menu h1 .line')}
 }
 #main-menu button.menu-link:hover:not(:disabled)::after,
 #main-menu button.menu-link:focus-visible:not(:disabled)::after { width: 60%; }
-#main-menu button.menu-link:hover:not(:disabled) .glitch-text,
-#main-menu button.menu-link:focus-visible:not(:disabled) .glitch-text {
+#main-menu button.menu-link:hover:not(:disabled) .menu-link-text,
+#main-menu button.menu-link:focus-visible:not(:disabled) .menu-link-text {
   filter:
     drop-shadow(0 1px 2px rgba(0,0,0,0.7))
     drop-shadow(0 2px 4px rgba(0,0,0,0.9))
     drop-shadow(0 6px 12px rgba(0,0,0,0.55));
 }
-#main-menu button.menu-link.quit:hover:not(:disabled) .glitch-text,
-#main-menu button.menu-link.quit:focus-visible:not(:disabled) .glitch-text {
+#main-menu button.menu-link.quit:hover:not(:disabled) .menu-link-text,
+#main-menu button.menu-link.quit:focus-visible:not(:disabled) .menu-link-text {
   filter:
     drop-shadow(0 1px 2px rgba(0,0,0,0.7))
     drop-shadow(0 2px 4px rgba(0,0,0,0.9))
     drop-shadow(0 6px 12px rgba(0,0,0,0.55));
-}
-#main-menu button.menu-link .glitch-text::before, #main-menu button.menu-link .glitch-text::after {
-  content: attr(data-text); position: absolute; inset: 0; color: inherit;
-  opacity: 0; mix-blend-mode: screen;
-}
-#main-menu button.menu-link .glitch-text::before { clip-path: polygon(0 0, 100% 0, 100% 45%, 0 45%); filter: hue-rotate(-50deg); animation: menuGlitchTop 7s steps(1) infinite; }
-#main-menu button.menu-link .glitch-text::after { clip-path: polygon(0 55%, 100% 55%, 100% 100%, 0 100%); filter: hue-rotate(170deg); animation: menuGlitchBottom 7s steps(1) infinite; }
-/* Staggered per item (nth-of-type) so menu links don't glitch in sync. */
-#main-menu button.menu-link:nth-of-type(2) .glitch-text::before, #main-menu button.menu-link:nth-of-type(2) .glitch-text::after { animation-delay: 1.4s; }
-#main-menu button.menu-link:nth-of-type(3) .glitch-text::before, #main-menu button.menu-link:nth-of-type(3) .glitch-text::after { animation-delay: 2.8s; }
-#main-menu button.menu-link:nth-of-type(4) .glitch-text::before, #main-menu button.menu-link:nth-of-type(4) .glitch-text::after { animation-delay: 4.2s; }
-@keyframes menuGlitchTop {
-  0%, 91%, 100% { opacity: 0; transform: translate(0, 0); }
-  92% { opacity: 0.85; transform: translate(-4px, -1px); }
-  93% { opacity: 0.85; transform: translate(3px, 1px); }
-  94% { opacity: 0; transform: translate(0, 0); }
-  96% { opacity: 0.7; transform: translate(2px, 0); }
-  97% { opacity: 0; transform: translate(0, 0); }
-}
-@keyframes menuGlitchBottom {
-  0%, 91%, 100% { opacity: 0; transform: translate(0, 0); }
-  92% { opacity: 0.85; transform: translate(4px, 1px); }
-  93% { opacity: 0.85; transform: translate(-3px, -1px); }
-  94% { opacity: 0; transform: translate(0, 0); }
-  96% { opacity: 0.7; transform: translate(-2px, 0); }
-  97% { opacity: 0; transform: translate(0, 0); }
 }
 
 #main-menu.reveal .title-block { animation: titleEntrance 1.1s ease-out; }
@@ -466,16 +505,24 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
   const root = document.createElement('div')
   root.id = 'main-menu'
   root.innerHTML = `
+    ${SMOKE_FILTER_SVG}
     <div class="copyright">© Laughing In Purgatory 2026</div>
     <div class="panel main-view">
       <div class="title-block">
+        ${['a', 'b']
+          .map(
+            (k) => `<div class="title-smoke ${k}" aria-hidden="true">
+          <span class="smoke-line sub">THE</span><span class="smoke-line">DROWNED</span>
+        </div>`
+          )
+          .join('')}
         <h1><span class="line line-sub" data-text="THE">THE</span><span class="line" data-text="DROWNED">DROWNED</span></h1>
       </div>
       <div class="menu-links">
-        <button class="new-game menu-link"><span class="glitch-text" data-text="New Game">New Game</span></button>
-        <button class="load-game menu-link"><span class="glitch-text" data-text="Load Game">Load Game</span></button>
-        <button class="settings menu-link"><span class="glitch-text" data-text="Settings">Settings</span></button>
-        <button class="quit menu-link"><span class="glitch-text" data-text="Quit">Quit</span></button>
+        <button class="new-game menu-link"><span class="menu-link-text">New Game</span></button>
+        <button class="load-game menu-link"><span class="menu-link-text">Load Game</span></button>
+        <button class="settings menu-link"><span class="menu-link-text">Settings</span></button>
+        <button class="quit menu-link"><span class="menu-link-text">Quit</span></button>
       </div>
     </div>
     <div class="panel new-game-view" style="display:none">
