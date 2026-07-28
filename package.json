@@ -12,8 +12,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-vite build && electron-builder --dir",
-    "make": "electron-vite build && electron-builder",
-    "make:all": "electron-vite build && electron-builder --mac --linux -c.mac.identity=null && electron-builder --win --x64 && electron-builder --win --arm64"
+    "make": "electron-vite build && electron-builder --mac --arm64 -c.mac.identity=null"
   },
   "dependencies": {
     "three": "^0.169.0"
@@ -41,7 +40,6 @@
         {
           "target": "dmg",
           "arch": [
-            "x64",
             "arm64"
           ]
         }
@@ -50,51 +48,6 @@
       "identity": null,
       "hardenedRuntime": false,
       "gatekeeperAssess": false
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "nsis",
-          "arch": [
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "build/icon.png",
-      "publisherName": "Laughing In Purgatory"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Whispers In The Void",
-      "uninstallDisplayName": "Whispers In The Void",
-      "artifactName": "${productName}-${version}-${arch}-setup.${ext}"
-    },
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
-        }
-      ],
-      "icon": "build/icon.png",
-      "category": "Game",
-      "synopsis": "Whispers In The Void",
-      "description": "Whispers In The Void \u2014 a procedurally generated 3D space trading, combat, and exploration game. \u00a9 Laughing In Purgatory 2026",
-      "desktop": {
-        "Name": "Whispers In The Void",
-        "Comment": "\u00a9 Laughing In Purgatory 2026",
-        "Categories": "Game;AdventureGame;"
-      }
     },
     "afterSign": "scripts/afterSignAdHoc.cjs"
   },

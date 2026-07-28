@@ -1,5 +1,8 @@
-# Build installers on GitHub-hosted runners and attach them to a release.
-# Trigger: push a version tag (v3.0.0) or manual workflow_dispatch.
+# Build the installer on a GitHub-hosted runner and attach it to a release.
+# Trigger: push a version tag (v0.1.0) or manual workflow_dispatch.
+#
+# macOS arm64 only for now. Adding linux/windows back is a matter of restoring
+# the matrix — see the commented block at the bottom.
 name: Release
 
 on:
@@ -9,30 +12,16 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing release tag to upload to (e.g. v3.0.0)'
+        description: 'Existing release tag to upload to (e.g. v0.1.0)'
         required: true
-        default: 'v3.0.0'
+        default: 'v0.1.0'
 
 permissions:
   contents: write
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            args: --mac --arm64 --x64 -c.mac.identity=null
-            artifacts: 'release/*.dmg'
-          - os: ubuntu-latest
-            args: --linux --x64 --arm64
-            artifacts: 'release/*.AppImage'
-          - os: windows-latest
-            args: --win --x64 --arm64
-            artifacts: 'release/*setup.exe'
-
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -47,12 +36,24 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Test
+        run: >-
+          node --test
+          src/renderer/game/*.test.js
+          src/renderer/procgen/*.test.js
+          src/renderer/data/*.test.js
+          src/renderer/world/*.test.js
+
       - name: Build + package
         # --publish never: electron-builder auto-publishes (and uploads its own
         # latest*.yml / .blockmap update-metadata) whenever it sees a GH token —
         # we only want the explicit "Upload to release" step below to touch the
-        # release, with just the installer files matched by `artifacts`.
-        run: npx electron-vite build && npx electron-builder ${{ matrix.args }} --publish never
+        # release, with just the .dmg matched by `files`.
+        #
+        # identity=null + CSC_IDENTITY_AUTO_DISCOVERY=false: the build is
+        # unsigned, so macOS will quarantine it on first open. That is expected
+        # until there is a Developer ID to sign with.
+        run: npx electron-vite build && npx electron-builder --mac --arm64 -c.mac.identity=null --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
@@ -60,8 +61,26 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          files: ${{ matrix.artifacts }}
-          fail_on_unmatched_files: false
+          files: 'release/*.dmg'
+          fail_on_unmatched_files: true
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+# To build more platforms later, put the job back on a matrix:
+#
+#   strategy:
+#     fail-fast: false
+#     matrix:
+#       include:
+#         - os: macos-latest
+#           args: --mac --arm64 --x64 -c.mac.identity=null
+#           artifacts: 'release/*.dmg'
+#         - os: ubuntu-latest
+#           args: --linux --x64 --arm64
+#           artifacts: 'release/*.AppImage'
+#         - os: windows-latest
+#           args: --win --x64 --arm64
+#           artifacts: 'release/*setup.exe'
+#   runs-on: ${{ matrix.os }}
+#
+# ...then use matrix.args / matrix.artifacts in the two steps above.

@@ -91,7 +91,7 @@ npm run build && npx electron-builder --mac --arm64 -c.mac.identity=null
 
 Artifacts land in `release/` (e.g. `release/mac-arm64/Drowned World.app`). `.blockmap` files are for remote auto-update deltas and can be deleted for local testing.
 
-Prebuilt installers (macOS arm64/x64, Linux AppImage arm64/x64, Windows arm64/x64) are on the [Releases](https://github.com/LaughingInPurgatory/drowned-world/releases) page. Pushing a `v*` tag (or running the **Release** workflow) builds installers on GitHub Actions and attaches them to that release (`.github/workflows/release.yml`).
+Prebuilt installers (macOS arm64, unsigned) are on the [Releases](https://github.com/LaughingInPurgatory/drowned-world/releases) page. Pushing a `v*` tag (or running the **Release** workflow) builds installers on GitHub Actions and attaches them to that release (`.github/workflows/release.yml`).
 
 ### Testing
 
