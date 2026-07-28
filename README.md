@@ -79,19 +79,14 @@ Launches the app with hot module reloading. Editing `src/renderer/main.js` while
 ```
 npm run build     # electron-vite build
 npm run package   # build + electron-builder --dir (unpacked)
-npm run make      # build + electron-builder (installer for the current platform)
-npm run make:all  # mac + linux + windows installers
-```
-
-macOS arm64 only (local test):
-
-```
-npm run build && npx electron-builder --mac --arm64 -c.mac.identity=null
+npm run make      # build + electron-builder (macOS arm64 DMG, unsigned)
 ```
 
 Artifacts land in `release/` (e.g. `release/mac-arm64/Drowned World.app`). `.blockmap` files are for remote auto-update deltas and can be deleted for local testing.
 
-Prebuilt installers (macOS arm64, unsigned) are on the [Releases](https://github.com/LaughingInPurgatory/drowned-world/releases) page. Pushing a `v*` tag (or running the **Release** workflow) builds installers on GitHub Actions and attaches them to that release (`.github/workflows/release.yml`).
+Prebuilt builds (macOS arm64, unsigned) are on the [Releases](https://github.com/LaughingInPurgatory/drowned-world/releases) page. Pushing a `v*` tag — or running the **Release** workflow — runs the tests, builds the DMG on GitHub Actions and attaches it (`.github/workflows/release.yml`). Other platforms are a commented matrix at the bottom of that file.
+
+The build is unsigned, so macOS quarantines it on first open: right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/Drowned World.app"`.
 
 ### Testing
 
