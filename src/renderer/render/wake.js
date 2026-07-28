@@ -7,14 +7,15 @@ import { waveHeight } from '../world/sea.js'
  * A boat does not leave a plume of hot gas — it leaves disturbed water. Two
  * parts, because that is what you actually see from astern:
  *
- *   - the **bow wave**, a pair of foam arms spreading off the stem at a fixed
- *     angle, growing with speed
- *   - the **wake trail**, a widening band of churned water behind the transom
+ *   - the **Kelvin arms**, a pair of foam arms off the leading end (stem ahead,
+ *     transom when going astern), growing with fore/aft speed
+ *   - the **wake trail**, a widening band of churned water behind the motion
  *     that fades as it settles
  *
- * Both are built from a strip of quads laid on the sea surface, using the same
- * `waveHeight` everything else does, so they sit *on* the swell rather than
- * slicing through it.
+ * Driven by **travel direction + way speed** (not hull max speed). Reverse is
+ * free: pass the velocity heading and the leading end is the end going first.
+ * Callers suppress pure strafe if they want. Both strips use the same
+ * `waveHeight` everything else does, so they sit *on* the swell.
  */
 
 /** Segments along the trail. More is a longer-lived, smoother wake. */
@@ -31,8 +32,13 @@ const TRAIL_MAX_HALF_WIDTH = 9
  * samples `waveHeight` at every vertex, it already follows the swell.
  */
 const WAKE_LIFT = 0.06
-/** Below this fraction of top speed, a hull barely disturbs anything. */
-const WAKE_THRESHOLD = 0.06
+/** Below this intensity (0–1), a hull barely disturbs anything. */
+const WAKE_THRESHOLD = 0.04
+/**
+ * Absolute horizontal speed that reads as a full wake. AI hulls cruise far
+ * below stats.speed (heavy drag), so scaling by top speed made patrols silent.
+ */
+export const WAKE_FULL_SPEED = 28
 /** How far apart trail samples are dropped, in world units. */
 const SAMPLE_SPACING = 3.5
 
@@ -206,13 +212,14 @@ export function createWake() {
 
   /**
    * @param {number[]} position boat position
-   * @param {number} heading radians
-   * @param {number} speedFraction 0–1 of top speed
-   * @param {number} hullLength for scaling the bow wave
+   * @param {number} travelHeading radians — direction of travel (not necessarily bow)
+   * @param {number} speedFraction 0–1 intensity (see WAKE_FULL_SPEED). 0 = no wake.
+   * @param {number} hullLength for scaling the Kelvin arms
    * @param {number} t sim time, shared with the sea
    */
-  function update(position, heading, speedFraction, hullLength, t, dt) {
-    const active = speedFraction > WAKE_THRESHOLD
+  function update(position, travelHeading, speedFraction, hullLength, t, dt) {
+    const speed = Math.max(0, speedFraction)
+    const active = speed > WAKE_THRESHOLD
     // The foam now animates in the shader, so both materials need the clock.
     trail.material.uniforms.uTime.value = t
     bowMat.uniforms.uTime.value = t
@@ -225,7 +232,13 @@ export function createWake() {
         !lastSample ||
         Math.hypot(position[0] - lastSample.x, position[2] - lastSample.z) >= SAMPLE_SPACING
       if (moved) {
-        samples.push({ x: position[0], z: position[2], heading, speed: speedFraction, age: 0 })
+        samples.push({
+          x: position[0],
+          z: position[2],
+          heading: travelHeading,
+          speed,
+          age: 0
+        })
         lastSample = samples[samples.length - 1]
         if (samples.length > TRAIL_SEGMENTS + 1) samples.shift()
       }
@@ -235,12 +248,14 @@ export function createWake() {
     while (samples.length && samples[0].age > TRAIL_LIFETIME) samples.shift()
 
     // --- Trail ---
+    // Ribbon follows position history (behind the motion). Width is across the
+    // travel direction so reverse/orbit still leave a coherent band.
     const pos = trailGeo.getAttribute('position')
     const uv = trailGeo.getAttribute('uv')
     const fade = trailGeo.getAttribute('aFade')
     const count = TRAIL_SEGMENTS + 1
     for (let i = 0; i < count; i++) {
-      // Newest sample at the transom end; run backwards through history.
+      // Newest sample at the hull end; run backwards through history.
       const s = samples[samples.length - 1 - i]
       const vi = i * 2
       if (!s) {
@@ -252,20 +267,19 @@ export function createWake() {
         continue
       }
       const k = s.age / TRAIL_LIFETIME
-      // Widens as it spreads out behind, then the edges lose definition.
-      // Widens as it spreads out astern, but not without limit — a wake fans
-      // out over its first few boat-lengths and then just fades.
+      // Widens as it spreads out behind the motion, then the edges lose definition.
       const half = TRAIL_MAX_HALF_WIDTH * s.speed * (0.45 + Math.min(0.75, k * 1.3))
       const nx = Math.cos(s.heading)
       const nz = -Math.sin(s.heading)
-      for (const [k2, sign] of [[vi, -1], [vi + 1, 1]]) {
+      for (const [k2, sign] of [
+        [vi, -1],
+        [vi + 1, 1]
+      ]) {
         const x = s.x + nx * half * sign
         const z = s.z + nz * half * sign
         pos.setXYZ(k2, x, waveHeight(x, z, t) + WAKE_LIFT, z)
         uv.setXY(k2, sign > 0 ? 1 : 0, i / count)
-        // Bright at the transom, gone by the time the water has settled.
-        // Brightest right at the transom, and gone well before the ribbon
-        // runs out — a linear fade leaves a visible cut-off at the tail.
+        // Brightest at the hull, gone well before the ribbon runs out.
         fade.setX(k2, Math.pow(1 - k, 2.1) * Math.min(1, s.speed * 2.2))
       }
     }
@@ -273,41 +287,42 @@ export function createWake() {
     uv.needsUpdate = true
     fade.needsUpdate = true
 
-    // --- Bow wave ---
-    // Two arms off the stem at the classic ~19° Kelvin angle, thrown wider and
-    // brighter the harder she is driven.
-    const bowX = position[0] + Math.sin(heading) * hullLength * 0.45
-    const bowZ = position[2] + Math.cos(heading) * hullLength * 0.45
-    // The Kelvin angle proper. The arms were far too long and far too wide,
-    // which put a pair of solid grey ramps out ahead of the boat.
+    // --- Kelvin arms ---
+    // Off the *leading* end of the motion (bow ahead, stern when going astern,
+    // beam when orbiting). Arms trail opposite travel.
+    const tipX = position[0] + Math.sin(travelHeading) * hullLength * 0.45
+    const tipZ = position[2] + Math.cos(travelHeading) * hullLength * 0.45
+    const armBase = travelHeading + Math.PI
     const spread = 0.33
-    const armLen = hullLength * (0.45 + speedFraction * 0.85)
-    const armWidth = 0.35 + speedFraction * 1.1
+    const armLen = hullLength * (0.45 + speed * 0.85)
+    const armWidth = 0.35 + speed * 1.1
     for (let b = 0; b < 2; b++) {
       const sign = b === 0 ? -1 : 1
-      const a = heading + Math.PI + sign * spread
+      const a = armBase + sign * spread
       const g = bowGeos[b]
       const p = g.getAttribute('position')
       const u = g.getAttribute('uv')
       const f = g.getAttribute('aFade')
       const segs = 10
       for (let i = 0; i <= segs; i++) {
-        const along = (i / segs) * armLen
-        const cx = bowX + Math.sin(a) * along
-        const cz = bowZ + Math.cos(a) * along
+        const alongDist = (i / segs) * armLen
+        const cx = tipX + Math.sin(a) * alongDist
+        const cz = tipZ + Math.cos(a) * alongDist
         const w = armWidth * (0.3 + (i / segs) * 1.5)
         const nx = Math.cos(a)
         const nz = -Math.sin(a)
-        for (const [vi2, s2] of [[i * 2, -1], [i * 2 + 1, 1]]) {
+        for (const [vi2, s2] of [
+          [i * 2, -1],
+          [i * 2 + 1, 1]
+        ]) {
           const x = cx + nx * w * s2
           const z = cz + nz * w * s2
           p.setXYZ(vi2, x, waveHeight(x, z, t) + WAKE_LIFT, z)
           u.setXY(vi2, s2 > 0 ? 1 : 0, i / segs)
-          // Fade in off the stem as well as out along the arm, so it does not
-        // begin with a hard bright line at the bow.
-        const along = i / segs
-        const shape = Math.min(1, along * 4) * Math.pow(1 - along, 1.6)
-        f.setX(vi2, active ? shape * Math.min(1, speedFraction * 2.6) : 0)
+          // Fade in off the tip as well as out along the arm.
+          const along = i / segs
+          const shape = Math.min(1, along * 4) * Math.pow(1 - along, 1.6)
+          f.setX(vi2, active ? shape * Math.min(1, speed * 2.6) : 0)
         }
       }
       p.needsUpdate = true

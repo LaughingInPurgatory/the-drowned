@@ -126,8 +126,9 @@ You take the helm with **Space** or **middle mouse**. While you have the helm th
 | **B** | Region sonar scan — lock Anomalous Signals (or click the region chip) |
 | **F** | Use targeted contact: salvage wreck · come alongside · crack a datacore nodule |
 | **P** | Launch / recover the sonar drone (body sounding) |
-| **G** | Launch support drones (requires drones in the bays) |
-| **H** | Recall support drones |
+| **G** | Launch combat drones (airborne escorts; requires drones in the bays) |
+| **H** | Recall combat drones |
+| **L** | Bow searchlight on / off (fixed dead ahead) |
 | **I** | Hold |
 | **J** | Contracts |
 | **F1** | Character sheet |

@@ -485,9 +485,122 @@ export function setStrafeActive(active) {
   source.frequency.value = 110
   gain.gain.setValueAtTime(0, audioCtx.currentTime)
   gain.gain.linearRampToValueAtTime(0.04, audioCtx.currentTime + 0.05)
-  source.connect(gain).connect(audioCtx.destination)
+  source.connect(gain).connect(getMasterDestination())
   source.start()
   strafeNodes = { source, gain, volume: 0.04 }
+}
+
+// Continuous faint propeller buzz while combat drones are airborne.
+let droneBuzzNodes = null
+let droneBuzzCount = -1
+
+/**
+ * Prop buzz for deployed escort drones. Pass how many are in the air (0 = off).
+ * Layered band-limited noise + blade-rate hum; deliberately quiet under engines.
+ */
+export function setDroneBuzz(count) {
+  ensureSfx()
+  const n = Math.max(0, Math.floor(Number(count) || 0))
+  // Peak for one drone; extra drones only nudge a little (not linear).
+  // Kept soft under engines — bump carefully if it starts to dominate.
+  const peak = n <= 0 ? 0 : 0.02 + Math.min(2, n - 1) * 0.006
+
+  const audio = getContext()
+  const now = audio.currentTime
+
+  if (n <= 0) {
+    if (droneBuzzCount === 0 && !droneBuzzNodes) return
+    droneBuzzCount = 0
+    if (droneBuzzNodes) {
+      const { gain, sources } = droneBuzzNodes
+      try {
+        gain.gain.cancelScheduledValues(now)
+        gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), now)
+        gain.gain.linearRampToValueAtTime(0.0001, now + 0.28)
+      } catch {
+        /* */
+      }
+      const stopAt = now + 0.32
+      for (const s of sources) {
+        try {
+          s.stop(stopAt)
+        } catch {
+          /* */
+        }
+      }
+      droneBuzzNodes = null
+    }
+    return
+  }
+
+  droneBuzzCount = n
+  if (droneBuzzNodes) {
+    // Already running — retarget volume (count change or live level tweak).
+    if (Math.abs((droneBuzzNodes.volume ?? 0) - peak) < 0.0005) return
+    try {
+      const g = droneBuzzNodes.gain
+      g.gain.cancelScheduledValues(now)
+      g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), now)
+      g.gain.linearRampToValueAtTime(peak, now + 0.2)
+      droneBuzzNodes.volume = peak
+    } catch {
+      /* */
+    }
+    return
+  }
+
+  // Soft multi-layer prop bed — start once, hold open until all drones bay.
+  const master = audio.createGain()
+  master.gain.setValueAtTime(0.0001, now)
+  master.gain.linearRampToValueAtTime(peak, now + 0.4)
+  master.connect(getMasterDestination())
+
+  const sources = []
+
+  // Air through rotors — mild brown noise, band-passed (not white static).
+  const noiseLen = Math.floor(audio.sampleRate * 1.25)
+  const noiseBuf = audio.createBuffer(1, noiseLen, audio.sampleRate)
+  const data = noiseBuf.getChannelData(0)
+  let brown = 0
+  for (let i = 0; i < noiseLen; i++) {
+    brown = (brown + (Math.random() * 2 - 1) * 0.02) * 0.985
+    data[i] = brown * 3.2
+  }
+  const noise = audio.createBufferSource()
+  noise.buffer = noiseBuf
+  noise.loop = true
+  const bp = audio.createBiquadFilter()
+  bp.type = 'bandpass'
+  bp.frequency.value = 900
+  bp.Q.value = 0.8
+  const airGain = audio.createGain()
+  airGain.gain.value = 0.58
+  noise.connect(bp).connect(airGain).connect(master)
+  noise.start()
+  sources.push(noise)
+
+  // Blade-rate hum — detuned saws, heavily low-passed so they read as motors.
+  for (const [freq, detune, level] of [
+    [55, -8, 0.24],
+    [59, 11, 0.18],
+    [112, 0, 0.09]
+  ]) {
+    const osc = audio.createOscillator()
+    osc.type = 'sawtooth'
+    osc.frequency.value = freq
+    osc.detune.value = detune
+    const lp = audio.createBiquadFilter()
+    lp.type = 'lowpass'
+    lp.frequency.value = 340
+    lp.Q.value = 0.35
+    const og = audio.createGain()
+    og.gain.value = level
+    osc.connect(lp).connect(og).connect(master)
+    osc.start()
+    sources.push(osc)
+  }
+
+  droneBuzzNodes = { gain: master, sources, volume: peak }
 }
 
 /**

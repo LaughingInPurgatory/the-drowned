@@ -99,6 +99,15 @@ uniform vec3 uSkyColor;
 uniform vec3 uZenithColor;
 uniform vec3 uFoamColor;
 uniform vec3 uAlgaeColor;
+// Player searchlight — custom ocean has no MeshStandard lighting path, so the
+// turret SpotLight never reaches the sea. These are driven each frame from L.
+uniform vec3 uSearchPos;
+uniform vec3 uSearchDir;
+uniform vec3 uSearchColor;
+uniform float uSearchIntensity;
+uniform float uSearchRange;
+uniform float uSearchCosOuter;
+uniform float uSearchCosInner;
 varying vec3 vWorldPos;
 varying float vDetail;
 #include <fog_pars_fragment>
@@ -340,6 +349,35 @@ void main() {
   float foam = foamMask * smoothstep(-0.05, 0.35, breakup) * shadeDetail * (1.0 - algae * 0.75);
   col = mix(col, uFoamColor, clamp(foam, 0.0, 0.38));
 
+  // Searchlight *reflection* on the water — same two-lobe treatment as the
+  // sun/moon track, not a diffuse pool. You see the lamp mirrored in the chop.
+  if (uSearchIntensity > 0.001) {
+    vec3 toLight = uSearchPos - vWorldPos;
+    float sDist = length(toLight);
+    if (sDist < uSearchRange && sDist > 0.05) {
+      vec3 L = toLight / sDist;
+      // Only facets that sit in the beam cone (lamp faces this patch of sea).
+      float cosFromLamp = dot(-L, uSearchDir);
+      float cone = smoothstep(uSearchCosOuter, uSearchCosInner, cosFromLamp);
+      float rangeFade = 1.0 - smoothstep(uSearchRange * 0.4, uSearchRange, sDist);
+      // Closer = hotter reflection; fall off gently with distance to the lamp.
+      float nearBoost = 1.0 / (1.0 + sDist * 0.012);
+      float mask = cone * rangeFade * nearBoost * uSearchIntensity;
+      // Fresnel: reflections on water are strongest at a shallow view angle.
+      float reflBoost = mix(0.55, 1.35, fresnel);
+      // Half-vector toward the lamp — identical math to the sun path.
+      vec3 SH = normalize(L + V);
+      float ndsh = max(dot(Ndetail, SH), 0.0);
+      // Tight glittering trail (the path you actually notice).
+      col += uSearchColor * pow(ndsh, 420.0) * mask * reflBoost * 4.2;
+      // Softer elongated sheen under the trail.
+      col += uSearchColor * pow(ndsh, 36.0) * mask * reflBoost * 0.22;
+      // Ripple sparkle — breaks the track into water, not a solid stripe.
+      float glint = pow(ndsh, 110.0) * rippleFade;
+      col += uSearchColor * glint * mask * reflBoost * 0.55;
+    }
+  }
+
   gl_FragColor = vec4(col, 1.0);
   #include <fog_fragment>
 }
@@ -371,7 +409,15 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uZenithColor: { value: new THREE.Color(0x3a6e96) },
         uFoamColor: { value: new THREE.Color(0xd8e6ec) },
         // Thin coastal slicks — kept muted so they don't muddy the whole sea.
-        uAlgaeColor: { value: new THREE.Color(0x2c4a32) }
+        uAlgaeColor: { value: new THREE.Color(0x2c4a32) },
+        // Searchlight off until the player hits L.
+        uSearchPos: { value: new THREE.Vector3(0, 0, 0) },
+        uSearchDir: { value: new THREE.Vector3(0, -1, 0) },
+        uSearchColor: { value: new THREE.Color(0xfff0d0) },
+        uSearchIntensity: { value: 0 },
+        uSearchRange: { value: 140 },
+        uSearchCosOuter: { value: Math.cos(0.22) },
+        uSearchCosInner: { value: Math.cos(0.1) }
       }
     ]),
     vertexShader: VERTEX,
@@ -393,6 +439,41 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
       0,
       Math.round(camera.position.z / CENTER_SNAP) * CENTER_SNAP
     )
+  }
+
+  /**
+   * Drive the water-surface searchlight pool. Pass null/falsy or intensity 0 to off.
+   * @param {{
+   *   position: THREE.Vector3,
+   *   direction: THREE.Vector3,
+   *   intensity?: number,
+   *   range?: number,
+   *   angle?: number,
+   *   penumbra?: number,
+   *   color?: THREE.Color | number
+   * } | null} state
+   */
+  mesh.setSearchlight = (state) => {
+    const u = material.uniforms
+    if (!state || !(state.intensity > 0)) {
+      u.uSearchIntensity.value = 0
+      return
+    }
+    u.uSearchPos.value.copy(state.position)
+    u.uSearchDir.value.copy(state.direction).normalize()
+    u.uSearchIntensity.value = state.intensity
+    if (state.range != null) u.uSearchRange.value = state.range
+    // angle = half-angle of the cone; penumbra softens the rim (0 = hard, 1 = full fade).
+    const angle = state.angle ?? 0.14
+    const penumbra = state.penumbra ?? 0.55
+    const outer = angle
+    const inner = angle * (1 - penumbra)
+    u.uSearchCosOuter.value = Math.cos(outer)
+    u.uSearchCosInner.value = Math.cos(Math.max(0.02, inner))
+    if (state.color != null) {
+      if (state.color.isColor) u.uSearchColor.value.copy(state.color)
+      else u.uSearchColor.value.set(state.color)
+    }
   }
 
   return mesh

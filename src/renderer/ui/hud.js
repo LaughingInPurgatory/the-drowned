@@ -497,8 +497,10 @@ export function createHud(container) {
             .map((d, i) => {
               const h = pct(d.hull, d.maxHull || d.hull || 1)
               const a = pct(d.armor, d.maxArmor || d.armor || 1)
+              // Armour + hull only (no shields on escorts).
               return `<div class="row" style="margin-bottom:6px">
-                <div class="row-label"><span>Drone ${i + 1}</span><span class="value">S${s.toFixed(0)} A${a.toFixed(0)} H${h.toFixed(0)}</span></div>
+                <div class="row-label"><span>Drone ${i + 1}</span><span class="value">A${a.toFixed(0)} H${h.toFixed(0)}</span></div>
+                <div class="bar armor" style="height:4px;margin-bottom:2px"><div class="fill" style="width:${a}%"></div></div>
                 <div class="bar hull" style="height:5px"><div class="fill" style="width:${h}%"></div></div>
               </div>`
             })

@@ -1,15 +1,17 @@
-// Player support drones only — small unmanned craft run off the parent hull's
-// drone bays (max 2). NPCs never receive, summon, or operate drones (even on
-// hulls that list droneBays). Hulls with drone bays do NOT include drones —
-// buy from the Boatyard Armoury.
+// Player airborne combat drones only — small hover gunships that orbit above
+// the parent hull and fire projectile guns from altitude. Run off drone bays
+// (max 2). NPCs never receive, summon, or operate drones (even on hulls that
+// list droneBays). Hulls with drone bays do NOT include drones — buy from the
+// Boatyard Armoury.
 
 export const DEFAULT_DRONE_ID = 'stinger_light'
 
 export const DRONES = [
   {
     id: 'stinger_light',
-    name: 'Light Support Drone',
-    // Fast, thin-skinned, one gun. It fights alongside you, not for you.
+    name: 'Light Combat Drone',
+    // Airborne escort: ducted fans, twin chin guns, thin-skinned and fast.
+    // Fights above the waterline alongside you — not a second boat.
     armor: 100,
     hull: 40,
     weaponId: 'pulse_laser',

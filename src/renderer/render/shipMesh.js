@@ -1360,18 +1360,64 @@ function navLightMaterials() {
     white: mk(0xfff5e0),
     whiteGlow: mkGlow(0xffe8b0),
     search: mk(0xfff8e8, 1),
-    searchGlow: mkGlow(0xffe0a0),
-    beam: new THREE.MeshBasicMaterial({
-      color: 0xfff0c8,
-      transparent: true,
-      opacity: 0.07,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      toneMapped: false
-    })
+    searchGlow: mkGlow(0xffe0a0)
   }
   return _navMats
+}
+
+/**
+ * Soft searchlight volume material. A flat-opacity cylinder reads as a solid
+ * cone; this fades along the beam and softens the silhouette so it glows.
+ */
+function makeSearchlightBeamMaterial(beamLen) {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Color(0xfff2cc) },
+      uOpacity: { value: 0 },
+      uLen: { value: beamLen }
+    },
+    vertexShader: /* glsl */ `
+      uniform float uLen;
+      varying float vAlong;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        // CylinderGeometry is Y-up; after mesh Rx(+π/2), +Y becomes +Z (forward).
+        // Bottom (y = −h/2) is the lamp; top is the far tip.
+        vAlong = clamp((position.y + uLen * 0.5) / uLen, 0.0, 1.0);
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vNormal = normalize(normalMatrix * normal);
+        vViewDir = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      varying float vAlong;
+      varying vec3 vNormal;
+      varying vec3 vViewDir;
+      void main() {
+        // Bright near the lamp, dies out toward the tip.
+        float along = pow(1.0 - vAlong, 1.55);
+        // Soften hard cone walls without killing the beam in chase cam
+        // (looking along +Z, walls are edge-on — keep a floor of haze).
+        float facing = abs(dot(normalize(vNormal), normalize(vViewDir)));
+        float soft = 0.4 + 0.6 * pow(facing, 0.7);
+        // Hot core near the source.
+        float core = mix(1.4, 0.7, vAlong);
+        float a = uOpacity * along * soft * core;
+        if (a < 0.003) discard;
+        gl_FragColor = vec4(uColor * (0.55 + 0.45 * along), a);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    toneMapped: false
+  })
 }
 
 /**
@@ -1414,53 +1460,103 @@ function addRunningLights(group, hull) {
 }
 
 /**
- * Searchlight on the gun mount — lamp + soft beam volume.
- * Optional SpotLight (player only): real water/ship illumination, one light total.
+ * Bow searchlight — fixed on the forecastle, always dead ahead (+Z / ship
+ * forward). Does not track the turret or crosshair; toggle with L.
+ * Optional SpotLight (player only) for hull/contact illumination.
+ *
+ * Cone orientation: CylinderGeometry is Y-up; radiusTop is +Y, radiusBottom −Y.
+ * Mesh Rx(+π/2) maps +Y → +Z (bow forward), so far/wide must be radiusTop and
+ * near/narrow radiusBottom — otherwise the beam is reversed.
  */
-function addSearchlight(turret, { withSpot = false } = {}) {
-  if (!turret?.pitchGroup) return
+function addSearchlight(group, hull, { withSpot = false } = {}) {
   const mats = navLightMaterials()
-  const pitchGroup = turret.pitchGroup
-  const housing = new THREE.Mesh(
-    new THREE.SphereGeometry(0.14, 10, 8),
-    mats.search
-  )
-  housing.position.set(0, 0.12, 0.18)
-  pitchGroup.add(housing)
-  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), mats.searchGlow)
+  const length = hull?.length ?? 18
+  const heights = hull?.stationHeights ?? [1.2]
+  const bowH = heights[heights.length - 1] ?? 1.2
+  const midH = heights[Math.floor(heights.length / 2)] ?? bowH
+
+  // Fixed mount on the centreline at the bow — rides the hull, never yaws/pitches with the gun.
+  const root = new THREE.Group()
+  root.position.set(0, bowH * 0.55 + midH * 0.06, length * 0.46)
+  group.add(root)
+
+  const housing = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), mats.search)
+  housing.position.set(0, 0.08, 0)
+  root.add(housing)
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), mats.searchGlow)
   glow.position.copy(housing.position)
-  pitchGroup.add(glow)
-  // Soft cone along +Z (barrel direction).
-  const beamLen = 55
+  root.add(glow)
+
+  // Soft cone along hull +Z (dead ahead).
+  const beamLen = 120
+  const nearR = 0.1
+  const farR = 12.5
   const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 6.5, beamLen, 12, 1, true),
-    mats.beam.clone()
+    new THREE.CylinderGeometry(farR, nearR, beamLen, 20, 1, true),
+    makeSearchlightBeamMaterial(beamLen)
   )
   beam.rotation.x = Math.PI / 2
-  beam.position.set(0, 0.08, beamLen * 0.48)
+  beam.position.set(0, 0.06, beamLen * 0.5)
   beam.renderOrder = 2
-  pitchGroup.add(beam)
+  beam.frustumCulled = false
+  root.add(beam)
 
   let spot = null
   if (withSpot) {
-    // One SpotLight on the player: intensity driven at night only.
-    spot = new THREE.SpotLight(0xfff0d0, 0, 320, 0.2, 0.55, 1.15)
+    // One SpotLight on the player, locked to the bow.
+    spot = new THREE.SpotLight(0xfff0d0, 0, 420, 0.12, 0.65, 1.1)
     spot.castShadow = false
-    spot.position.set(0, 0.1, 0.25)
-    pitchGroup.add(spot)
-    spot.target.position.set(0, 0, 80)
-    pitchGroup.add(spot.target)
+    spot.position.set(0, 0.06, 0)
+    root.add(spot)
+    spot.target.position.set(0, 0, 160)
+    root.add(spot.target)
   }
 
   housing.visible = false
   glow.visible = false
   beam.visible = false
 
-  turret.searchlight = { housing, glow, beam, spot, lastNight: -1 }
+  group.userData.searchlight = { housing, glow, beam, spot, root, enabled: false }
 }
 
 /**
- * Toggle nav lights + searchlight for night. Cheap: skips when factor unchanged.
+ * Player bow searchlight — manual on/off (L key). Fixed dead ahead.
+ * @param {THREE.Object3D} mesh ship root from buildShipMesh
+ * @param {boolean} on
+ * @returns {boolean} new state
+ */
+export function setSearchlightOn(mesh, on) {
+  const sl = mesh?.userData?.searchlight
+  if (!sl) return false
+  const enabled = !!on
+  sl.enabled = enabled
+  sl.housing.visible = enabled
+  sl.glow.visible = enabled
+  sl.beam.visible = enabled
+  if (sl.beam.material?.uniforms?.uOpacity) {
+    sl.beam.material.uniforms.uOpacity.value = enabled ? 0.38 : 0
+  }
+  if (sl.spot) {
+    sl.spot.intensity = enabled ? 42 : 0
+    sl.spot.distance = 380
+    sl.spot.visible = enabled
+  }
+  return enabled
+}
+
+/**
+ * @param {THREE.Object3D} mesh
+ * @returns {boolean} new state (false if no searchlight)
+ */
+export function toggleSearchlight(mesh) {
+  const sl = mesh?.userData?.searchlight
+  if (!sl) return false
+  return setSearchlightOn(mesh, !sl.enabled)
+}
+
+/**
+ * Toggle nav lights for night. Cheap: skips when factor unchanged.
+ * Searchlight is player-controlled (see setSearchlightOn / toggleSearchlight).
  * @param {THREE.Object3D} mesh ship root from buildShipMesh
  * @param {number} nightFactor 0 day … 1 full night
  */
@@ -1476,23 +1572,6 @@ export function updateShipNightLights(mesh, nightFactor) {
     // Shared materials — only toggle visibility, never per-mesh opacity.
     const on = key > 0
     for (const m of rl.meshes) m.visible = on
-  }
-
-  const sl = mesh.userData.turret?.searchlight
-  if (sl && sl.lastNight !== key) {
-    sl.lastNight = key
-    const on = key > 0
-    sl.housing.visible = on
-    sl.glow.visible = on
-    sl.beam.visible = on
-    // Beam mat is cloned per ship so opacity is safe.
-    if (sl.beam.material) sl.beam.material.opacity = on ? 0.045 + n * 0.1 : 0
-    if (sl.spot) {
-      // Bright enough to pick out water and contacts; zero by day.
-      sl.spot.intensity = on ? 12 + n * 28 : 0
-      sl.spot.distance = 200 + n * 180
-      sl.spot.visible = on
-    }
   }
 }
 
@@ -1689,9 +1768,9 @@ export function buildShipMesh(shipClass, opts = {}) {
   // and it is the thing the player is aiming at and being shot by.
   const turret = addTurret(group, shipClass, mats)
 
-  // Nav lights on every hull; player also gets a real SpotLight on the mount.
+  // Nav lights on every hull; player gets a fixed bow searchlight (L key).
   addRunningLights(group, shipClass.hull)
-  if (turret) addSearchlight(turret, { withSpot: !!opts.searchlight })
+  if (opts.searchlight) addSearchlight(group, shipClass.hull, { withSpot: true })
 
   // Police: bold black/white livery + red/blue emergency flashers.
   if (isPolice) {

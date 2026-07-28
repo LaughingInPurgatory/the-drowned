@@ -4,7 +4,8 @@ import {
   buildShipMesh,
   updatePoliceLights,
   updateShipNightLights,
-  nightLightFactorFromDay
+  nightLightFactorFromDay,
+  toggleSearchlight
 } from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
 import { buildIslandMesh, islandMaxShoreline } from './render/islandMesh.js'
@@ -32,7 +33,7 @@ import {
   resetChaseZoom,
   setChaseIdleOrbit
 } from './render/sceneSync.js'
-import { createWake } from './render/wake.js'
+import { createWake, WAKE_FULL_SPEED } from './render/wake.js'
 import { createDamageEffects } from './render/damageEffects.js'
 import { createOreScoopEffects } from './render/oreScoopParticles.js'
 import {
@@ -404,8 +405,12 @@ let weatherFrame = {
   flash: 0,
   thunder: null
 }
-/** 0 day … 1 night — drives running lights + player searchlight. */
+/** 0 day … 1 night — drives nav / running lights (searchlight is manual, L). */
 let _nightLightFactor = 0
+/** Scratch for feeding the ocean searchlight pool (custom water shader). */
+const _searchLightPos = new THREE.Vector3()
+const _searchLightDir = new THREE.Vector3()
+const _searchLightTarget = new THREE.Vector3()
 
 /** Fair-weather frame — title screen never rolls rain/storm. */
 const CLEAR_WEATHER_FRAME = Object.freeze({
@@ -463,6 +468,45 @@ function refreshEnvironment(t) {
     strength: sunStrength * Math.max(0, flareMul)
   })
   return day
+}
+
+/**
+ * Push the player's bow searchlight into the ocean shader (custom sea material
+ * ignores Three.js SpotLights). Fixed dead ahead — not turret aim.
+ * Call after the player mesh has been synced this frame.
+ */
+function syncOceanSearchlight() {
+  const sl = playerMesh?.userData?.searchlight
+  if (!sl?.enabled) {
+    ocean.setSearchlight(null)
+    return
+  }
+  // Live bow lamp transform: rides hull heading / swell, never the gun.
+  if (sl.spot) {
+    sl.spot.updateWorldMatrix(true, false)
+    sl.spot.target.updateWorldMatrix(true, false)
+    sl.spot.getWorldPosition(_searchLightPos)
+    sl.spot.target.getWorldPosition(_searchLightTarget)
+    _searchLightDir.subVectors(_searchLightTarget, _searchLightPos)
+    if (_searchLightDir.lengthSq() < 1e-6) _searchLightDir.set(0, 0, 1)
+    else _searchLightDir.normalize()
+  } else if (sl.root) {
+    sl.root.updateWorldMatrix(true, false)
+    sl.root.getWorldPosition(_searchLightPos)
+    _searchLightDir.set(0, 0, 1).transformDirection(sl.root.matrixWorld)
+  } else {
+    ocean.setSearchlight(null)
+    return
+  }
+  ocean.setSearchlight({
+    position: _searchLightPos,
+    direction: _searchLightDir,
+    intensity: 1.15,
+    range: 145,
+    angle: 0.15,
+    penumbra: 0.55,
+    color: 0xfff0d0
+  })
 }
 setPostOverlay((r) => {
   if (lensFlare.visible) r.render(lensFlare.scene, lensFlare.camera)
@@ -1383,15 +1427,44 @@ function clearNpcMeshes() {
   for (const id of [...npcMeshes.keys()]) removeNpcMesh(id)
 }
 
+/**
+ * Drive parameters for a hull wake.
+ * Intensity is absolute way (AI rarely hits stats.speed). Travel heading follows
+ * velocity so reverse/orbit still throw foam the right way.
+ * @param {{ position?: number[], velocity?: number[], heading?: number, quaternion?: number[] }} entity
+ * @param {{ noStrafe?: boolean }} [opts] noStrafe: suppress pure lateral way (player thrusters)
+ * @returns {{ travelHeading: number, fraction: number }}
+ */
+function wakeDrive(entity, opts = {}) {
+  const vx = entity.velocity?.[0] ?? 0
+  const vz = entity.velocity?.[2] ?? 0
+  const speed = Math.hypot(vx, vz)
+  const hullH = headingOf(entity)
+  if (speed < 0.15) return { travelHeading: hullH, fraction: 0 }
+
+  if (opts.noStrafe) {
+    const fx = Math.sin(hullH)
+    const fz = Math.cos(hullH)
+    const along = vx * fx + vz * fz
+    // Mostly crabbing — no wake (player Q/E). Fore/aft or reverse still counts.
+    if (Math.abs(along) < speed * 0.35) return { travelHeading: hullH, fraction: 0 }
+  }
+
+  return {
+    travelHeading: Math.atan2(vx, vz),
+    fraction: Math.min(1, speed / WAKE_FULL_SPEED)
+  }
+}
+
 /** Water displaced by an on-screen NPC. Same wake the player leaves. */
 function updateNpcThrusters(mesh, npc, dt) {
   const wake = mesh?.userData?.wake
   if (!wake) return
-  const speed = Math.hypot(npc.velocity?.[0] ?? 0, npc.velocity?.[2] ?? 0)
+  const { travelHeading, fraction } = wakeDrive(npc)
   wake.update(
     npc.position,
-    headingOf(npc),
-    speed / Math.max(1e-3, mesh.userData.topSpeed ?? 40),
+    travelHeading,
+    fraction,
     mesh.userData.hullLength ?? 20,
     gameState.simTime,
     dt
@@ -2524,7 +2597,6 @@ function clearProbeEffect() {
 function clearDroneMeshes() {
   for (const mesh of droneMeshes.values()) {
     scene.remove(mesh)
-    if (mesh.userData.trail?.mesh) scene.remove(mesh.userData.trail.mesh)
     disposeDroneMesh(mesh)
   }
   droneMeshes.clear()
@@ -2532,111 +2604,153 @@ function clearDroneMeshes() {
 
 function syncDroneMeshes() {
   if (!gameState) return
-  const ship = gameState.player.ship
-  ensureDrones(ship)
-  const live = new Set()
-  for (const d of ship.drones ?? []) {
-    if (!d.deployed || d.destroyed || d.hull <= 0 || d.mode === 'bay') continue
-    live.add(d.id)
-    let mesh = droneMeshes.get(d.id)
-    if (!mesh) {
-      mesh = buildDroneMesh(d.typeId)
-      droneMeshes.set(d.id, mesh)
-      scene.add(mesh)
-      if (mesh.userData.trail?.mesh) scene.add(mesh.userData.trail.mesh)
+  try {
+    const ship = gameState.player.ship
+    ensureDrones(ship)
+    const live = new Set()
+    for (const d of ship.drones ?? []) {
+      if (!d.deployed || d.destroyed || d.hull <= 0 || d.mode === 'bay') continue
+      live.add(d.id)
+      let mesh = droneMeshes.get(d.id)
+      if (!mesh) {
+        try {
+          mesh = buildDroneMesh(d.typeId)
+        } catch (err) {
+          console.warn('[drones] mesh build failed', err)
+          continue
+        }
+        droneMeshes.set(d.id, mesh)
+        scene.add(mesh)
+      }
+      mesh.visible = true
+      updateDroneMesh(mesh, d, 0)
     }
-    mesh.visible = true
-    updateDroneMesh(mesh, d, 0)
-  }
-  for (const [id, mesh] of [...droneMeshes.entries()]) {
-    if (live.has(id)) continue
-    scene.remove(mesh)
-    if (mesh.userData.trail?.mesh) scene.remove(mesh.userData.trail.mesh)
-    disposeDroneMesh(mesh)
-    droneMeshes.delete(id)
+    for (const [id, mesh] of [...droneMeshes.entries()]) {
+      if (live.has(id)) continue
+      scene.remove(mesh)
+      disposeDroneMesh(mesh)
+      droneMeshes.delete(id)
+    }
+  } catch (err) {
+    console.warn('[drones] sync failed', err)
   }
 }
 
 function updatePlayerDrones(dt) {
-  if (!gameState || docked || cruising) return
-  ensureDrones(gameState.player.ship)
-  // Drones only engage after shots exchanged (not Tab-lock alone).
-  pruneCombatEngagement(gameState)
-  const hostility = buildHostilityContext()
-  const targetNpcId =
-    currentTarget?.kind === 'npc' ? currentTarget.id : null
-  updateDrones(gameState, dt, {
-    isHostileNpc: (npc) => isHostileToPlayer(npc, hostility),
-    engagedNpcIds: gameState.player.combatEngagedNpcIds ?? {},
-    playerTargetNpcId: targetNpcId,
-    fireLaser: (drone, targetPos, weapon) => {
-      // Fire as player-owned projectile from drone position toward target.
-      const origin = drone.position
-      const to = [
-        targetPos[0] - origin[0],
-        targetPos[1] - origin[1],
-        targetPos[2] - origin[2]
-      ]
-      const len = Math.hypot(to[0], to[1], to[2]) || 1
-      const dir = [to[0] / len, to[1] / len, to[2] / len]
-      // Same fallback drones.js leads with — a mismatch here would aim the
-      // shot at a speed it is not actually fired at.
-      const speed = weapon.speed ?? DRONE_SHOT_SPEED_FALLBACK
-      let dmg = weapon.damage ?? 8
-      try {
-        dmg *= playerSkillBonuses(gameState).droneMult
-      } catch {
-        /* */
-      }
-      // Orientation is NOT optional: sceneSync's syncMeshToEntity does
-      // mesh.quaternion.fromArray(entity.quaternion) unconditionally, so a
-      // projectile without one threw in the middle of animate() and killed the
-      // rest of that frame (targeting, HUD, render) for as long as the shot was
-      // alive. Ships local +Z is forward, same convention combat.js uses when
-      // it builds its own projectiles.
-      _droneShotDir.set(dir[0], dir[1], dir[2])
-      _droneShotQuat.setFromUnitVectors(FORWARD_Z, _droneShotDir)
-      const proj = {
-        id: `drone-shot-${drone.id}-${Math.floor(gameState.simTime * 1000)}-${Math.random().toString(36).slice(2, 7)}`,
-        ownerId: 'player',
-        weaponId: weapon.id,
-        weaponType: 'laser',
-        position: [...origin],
-        quaternion: [_droneShotQuat.x, _droneShotQuat.y, _droneShotQuat.z, _droneShotQuat.w],
-        velocity: [dir[0] * speed, dir[1] * speed, dir[2] * speed],
-        damage: dmg,
-        ttl: weapon.ttl ?? 2.5,
-        spawnedAt: gameState.simTime,
-        fromDrone: true
-      }
-      gameState.projectiles.push(proj)
-      try {
-        audio.playWeaponFire(weapon.id)
-      } catch {
-        /* */
-      }
+  if (!gameState || docked || cruising) {
+    // Bay / SC: no airborne escorts, kill the prop bed.
+    try {
+      audio.setDroneBuzz(0)
+    } catch {
+      /* */
     }
-  })
-  // Sync meshes + thruster trails
-  for (const d of gameState.player.ship.drones ?? []) {
-    if (!d.deployed || d.destroyed || d.mode === 'bay') {
-      const m = droneMeshes.get(d.id)
-      if (m) {
-        scene.remove(m)
-        if (m.userData.trail?.mesh) scene.remove(m.userData.trail.mesh)
-        disposeDroneMesh(m)
-        droneMeshes.delete(d.id)
+    return
+  }
+  try {
+    ensureDrones(gameState.player.ship)
+    // Drones only engage after shots exchanged (not Tab-lock alone).
+    pruneCombatEngagement(gameState)
+    const hostility = buildHostilityContext()
+    const targetNpcId =
+      currentTarget?.kind === 'npc' ? currentTarget.id : null
+    updateDrones(gameState, dt, {
+      isHostileNpc: (npc) => isHostileToPlayer(npc, hostility),
+      engagedNpcIds: gameState.player.combatEngagedNpcIds ?? {},
+      playerTargetNpcId: targetNpcId,
+      fireLaser: (drone, targetPos, weapon) => {
+        // Fire as player-owned projectile from the chin gun toward the target.
+        // Prefer a world muzzle on the live mesh so rounds leave the barrels.
+        let origin = drone.position
+        const mesh = droneMeshes.get(drone.id)
+        if (mesh?.userData?.gunMuzzlesLocal?.length) {
+          const locals = mesh.userData.gunMuzzlesLocal
+          // Alternate barrels so dual guns chatter.
+          drone._muzzleFlip = drone._muzzleFlip ? 0 : 1
+          const local = locals[drone._muzzleFlip % locals.length]
+          // Mesh is uniformly scaled — local muzzle points are pre-scale authoring coords.
+          const s = mesh.scale.x || 1
+          _droneShotDir.copy(local).multiplyScalar(s).applyQuaternion(mesh.quaternion).add(mesh.position)
+          if (Number.isFinite(_droneShotDir.x)) {
+            origin = [_droneShotDir.x, _droneShotDir.y, _droneShotDir.z]
+          }
+        }
+        const to = [
+          targetPos[0] - origin[0],
+          targetPos[1] - origin[1],
+          targetPos[2] - origin[2]
+        ]
+        const len = Math.hypot(to[0], to[1], to[2]) || 1
+        const dir = [to[0] / len, to[1] / len, to[2] / len]
+        // Same fallback drones.js leads with — a mismatch here would aim the
+        // shot at a speed it is not actually fired at.
+        const speed = weapon.speed ?? DRONE_SHOT_SPEED_FALLBACK
+        let dmg = weapon.damage ?? 8
+        try {
+          dmg *= playerSkillBonuses(gameState).droneMult
+        } catch {
+          /* */
+        }
+        // Orientation is NOT optional: sceneSync's syncMeshToEntity does
+        // mesh.quaternion.fromArray(entity.quaternion) unconditionally, so a
+        // projectile without one threw in the middle of animate() and killed the
+        // rest of that frame (targeting, HUD, render) for as long as the shot was
+        // alive. Ships local +Z is forward, same convention combat.js uses when
+        // it builds its own projectiles.
+        _droneShotDir.set(dir[0], dir[1], dir[2])
+        if (_droneShotDir.lengthSq() < 1e-10) _droneShotDir.set(0, 0, 1)
+        else _droneShotDir.normalize()
+        _droneShotQuat.setFromUnitVectors(FORWARD_Z, _droneShotDir)
+        const proj = {
+          id: `drone-shot-${drone.id}-${Math.floor(gameState.simTime * 1000)}-${Math.random().toString(36).slice(2, 7)}`,
+          ownerId: 'player',
+          weaponId: weapon.id,
+          weaponType: 'laser',
+          position: [origin[0], origin[1], origin[2]],
+          quaternion: [_droneShotQuat.x, _droneShotQuat.y, _droneShotQuat.z, _droneShotQuat.w],
+          velocity: [dir[0] * speed, dir[1] * speed, dir[2] * speed],
+          damage: dmg,
+          ttl: weapon.ttl ?? 2.5,
+          spawnedAt: gameState.simTime,
+          fromDrone: true
+        }
+        gameState.projectiles.push(proj)
+        try {
+          audio.playWeaponFire(weapon.id)
+        } catch {
+          /* */
+        }
       }
-      continue
+    })
+    // Sync drone meshes (props spin; no exhaust trails)
+    let airborne = 0
+    for (const d of gameState.player.ship.drones ?? []) {
+      if (!d.deployed || d.destroyed || d.mode === 'bay') {
+        const m = droneMeshes.get(d.id)
+        if (m) {
+          scene.remove(m)
+          disposeDroneMesh(m)
+          droneMeshes.delete(d.id)
+        }
+        continue
+      }
+      airborne++
+      let mesh = droneMeshes.get(d.id)
+      if (!mesh) {
+        try {
+          mesh = buildDroneMesh(d.typeId)
+        } catch (err) {
+          console.warn('[drones] mesh build failed', err)
+          continue
+        }
+        droneMeshes.set(d.id, mesh)
+        scene.add(mesh)
+      }
+      updateDroneMesh(mesh, d, dt)
     }
-    let mesh = droneMeshes.get(d.id)
-    if (!mesh) {
-      mesh = buildDroneMesh(d.typeId)
-      droneMeshes.set(d.id, mesh)
-      scene.add(mesh)
-      if (mesh.userData.trail?.mesh) scene.add(mesh.userData.trail.mesh)
-    }
-    updateDroneMesh(mesh, d, dt)
+    // Faint propeller bed while any escort is out.
+    audio.setDroneBuzz(airborne)
+  } catch (err) {
+    console.warn('[drones] update failed', err)
   }
 }
 
@@ -2648,7 +2762,7 @@ function rebuildPlayerShipMesh() {
     scene.remove(playerMesh)
     playerMesh = null
   }
-  // searchlight: one SpotLight on the player turret (night only).
+  // Bow searchlight (fixed dead ahead, toggle with L).
   playerMesh = buildShipMesh(playerShipClass, { searchlight: true })
   scene.add(playerMesh)
   syncMeshToEntity(playerMesh, gameState.player.ship)
@@ -4583,6 +4697,24 @@ window.addEventListener('keydown', (e) => {
     // Use both flag and DOM so a desynced state cannot turn F1 into flight toggle.
     if (characterOpen || characterUI?.isOpen?.()) closeCharacterScreen()
     else openCharacterScreen()
+  } else if (
+    e.code === 'KeyL' &&
+    !docked &&
+    !dockEffect &&
+    !chartOpen &&
+    !paused &&
+    !inventoryOpen &&
+    !missionsOpen &&
+    !characterOpen &&
+    !systemScanMap?.isOpen?.() &&
+    !datacoreMinigame?.isOpen?.()
+  ) {
+    // Bow searchlight — fixed dead ahead; on whenever you want, day or night.
+    e.preventDefault()
+    if (playerMesh) {
+      const on = toggleSearchlight(playerMesh)
+      flashToast(on ? 'Searchlight on' : 'Searchlight off')
+    }
   }
 })
 
@@ -5591,6 +5723,12 @@ function animate() {
   lastTime = now
   if (!gameState) {
     spray.clear()
+    ocean.setSearchlight(null)
+    try {
+      audio.setDroneBuzz(0)
+    } catch {
+      /* */
+    }
     updateMenuBackground(dt)
     tickWeather(dt, menuAnimT)
     refreshEnvironment(menuAnimT)
@@ -5635,6 +5773,12 @@ function animate() {
       }
     }
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime + deathOrbit.t)
+    ocean.setSearchlight(null)
+    try {
+      audio.setDroneBuzz(0)
+    } catch {
+      /* */
+    }
     refreshEnvironment(gameState.simTime + deathOrbit.t)
     render()
     return
@@ -5716,6 +5860,7 @@ function animate() {
       const day = refreshEnvironment(gameState.simTime)
       _nightLightFactor = nightLightFactorFromDay(day)
       if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
+      syncOceanSearchlight()
     }
     render()
     return
@@ -5911,15 +6056,19 @@ function animate() {
   const strafeX = cruising ? 0 : (gameState.player.ship.strafeX ?? 0)
   const strafeY = cruising ? 0 : (gameState.player.ship.strafeY ?? 0)
   audio.setStrafeActive(!cruising && flightMode && (strafeX !== 0 || strafeY !== 0))
-  // Water displaced by the hull, not exhaust. Grows with speed.
-  playerWake.update(
-    gameState.player.ship.position,
-    headingOf(gameState.player.ship),
-    shipSpeed / Math.max(1e-3, playerShipClass.stats.speed),
-    playerShipClass.hull.length,
-    gameState.simTime,
-    dt
-  )
+  // Water displaced by the hull, not exhaust. Travel-heading so reverse is
+  // correct; noStrafe so Q/E thrusters do not throw a wake.
+  {
+    const { travelHeading, fraction } = wakeDrive(gameState.player.ship, { noStrafe: true })
+    playerWake.update(
+      gameState.player.ship.position,
+      travelHeading,
+      fraction,
+      playerShipClass.hull.length,
+      gameState.simTime,
+      dt
+    )
+  }
   damageEffects.update(dt, {
     armorFraction: gameState.player.ship.armor / Math.max(1, effectiveMaxArmor(gameState.player.ship, playerShipClass)),
     hullFraction: gameState.player.ship.hull / playerShipClass.stats.hull,
@@ -6391,6 +6540,8 @@ function animate() {
   const day = refreshEnvironment(gameState.simTime)
   _nightLightFactor = nightLightFactorFromDay(day)
   if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
+  // After mesh/turret sync so the water pool follows the beam.
+  syncOceanSearchlight()
   render()
   // HUD reticle on top in true framebuffer NDC (same space as camera.project).
   if (hudReticleRing.visible) {
