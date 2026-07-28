@@ -28,7 +28,7 @@
 
 The seas rose after the war. What is left is water, a scatter of islands, and whatever people have nailed together on top of them.
 
-A desktop ocean sim on **one seamless sea 80 km across** — ~170 islands, harbours, sea forts and sunken wreck fields, **100+** vessel classes (including salvage-only Drowned hulls), real-time boat handling and gunnery, harbour workshops, local security and law standing, saves, and crew berths. No loading screens: the whole world is one coordinate space you can sail across.
+A desktop ocean sim on **one seamless sea 160 km across** (80 km radius from Haven Reach, ~20 100 km²) — about **330** islands, harbours, outposts and wreck fields on the canonical seed, **100+** vessel classes (including salvage-only Drowned hulls), real-time boat handling and gunnery, harbour workshops, local security and law standing, saves, and crew berths. No loading screens: the whole world is one coordinate space you can sail across.
 
 New Game starts you alongside at **Port Haven** on **Haven Reach** — the middle of the sea, the last harbour with a working harbourmaster, always **Security 6**.
 
@@ -36,7 +36,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 
 ## Features
 
-- **One seamless sea** — a fixed canonical seed builds the same 80 km world for every player: archipelagos, coastal harbours, floating rigs, sea forts, and sunken wreck fields. No regions, no jumps, no loading seam. Home is always **Haven Reach**.
+- **One seamless sea** — a fixed canonical seed builds the same **160 km** disk for every player (radius **80 km** from the centre, open water past the rim). Roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields** (~330 places in all). No regions, no jumps, no loading seam. Home is always **Haven Reach** at the middle; remoteness (and difficulty) climb toward the edge.
 - **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on steep crests; the sun lays a track across it. No painted foam collars on shores or quays — just open water and the wake.
 - **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them. Deck guns free-traverse a full 360°.
 - **Autopilot (C)** — hand the helm over and it comes round onto your waypoint, holds the course, **steers around islands**, and eases off as it closes. About 1.5× a hand-steered passage: enough that you are not holding W across an ocean, not so much that the sea stops mattering. Same diesel note as under the helm — no separate “cruise” bed.
