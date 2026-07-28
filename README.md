@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/LaughingInPurgatory/drowned-world/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/LaughingInPurgatory/drowned-world?style=flat-square" /></a>
+  <a href="https://github.com/LaughingInPurgatory/the-drowned/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/LaughingInPurgatory/the-drowned?style=flat-square" /></a>
 </p>
 
 ---
@@ -84,7 +84,7 @@ npm run make      # build + electron-builder (macOS arm64 DMG, unsigned)
 
 Artifacts land in `release/` (e.g. `release/mac-arm64/The Drowned.app`). `.blockmap` files are for remote auto-update deltas and can be deleted for local testing.
 
-Prebuilt builds (macOS arm64, unsigned) are on the [Releases](https://github.com/LaughingInPurgatory/drowned-world/releases) page. Pushing a `v*` tag — or running the **Release** workflow — runs the tests, builds the DMG on GitHub Actions and attaches it (`.github/workflows/release.yml`). Other platforms are a commented matrix at the bottom of that file.
+Prebuilt builds (macOS arm64, unsigned) are on the [Releases](https://github.com/LaughingInPurgatory/the-drowned/releases) page. Pushing a `v*` tag — or running the **Release** workflow — runs the tests, builds the DMG on GitHub Actions and attaches it (`.github/workflows/release.yml`). Other platforms are a commented matrix at the bottom of that file.
 
 The build is unsigned, so macOS quarantines it on first open: right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/The Drowned.app"`.
 

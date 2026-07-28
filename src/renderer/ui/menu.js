@@ -262,11 +262,12 @@ const STYLE = `
   width: min(78vw, 620px);
   height: auto;
   margin: 0 auto;
-  /* A dark lift so it holds against a bright horizon, plus the coloured halo
-     the title has always had — as a drop-shadow filter, since there is no text
-     to take a text-shadow. */
+  /* Dark rim lift so the keyed metal edge dissolves into the horizon instead
+     of reading as a hard cutout, plus the coloured halo the title has always
+     had — as drop-shadow filters, since there is no text to take a text-shadow. */
   filter:
-    drop-shadow(0 3px 6px rgba(0, 0, 0, 0.9))
+    drop-shadow(0 2px 3px rgba(0, 0, 0, 0.95))
+    drop-shadow(0 0 10px rgba(0, 0, 0, 0.75))
     drop-shadow(0 0 26px rgba(var(--title-glow), 0.35));
   animation: titleGlow 5s ease-in-out infinite;
 }
@@ -277,27 +278,32 @@ const STYLE = `
    only animate radius and alpha, so the pulse survives any colour. */
 @keyframes titleGlow {
   0%   { filter:
-    drop-shadow(0 1px 2px rgba(0,0,0,0.55))
+    drop-shadow(0 2px 3px rgba(0,0,0,0.95))
+    drop-shadow(0 0 10px rgba(0,0,0,0.72))
     drop-shadow(0 0 14px rgba(var(--title-glow), 0.35))
     drop-shadow(0 0 42px rgba(var(--title-glow), 0.18))
     drop-shadow(0 0 72px rgba(var(--title-glow), 0.1)); }
   25%  { filter:
-    drop-shadow(0 1px 2px rgba(0,0,0,0.55))
+    drop-shadow(0 2px 3px rgba(0,0,0,0.95))
+    drop-shadow(0 0 10px rgba(0,0,0,0.72))
     drop-shadow(0 0 16px rgba(var(--title-glow), 0.38))
     drop-shadow(0 0 48px rgba(var(--title-glow), 0.16))
     drop-shadow(0 0 80px rgba(var(--title-glow), 0.09)); }
   50%  { filter:
-    drop-shadow(0 1px 2px rgba(0,0,0,0.55))
+    drop-shadow(0 2px 3px rgba(0,0,0,0.95))
+    drop-shadow(0 0 11px rgba(0,0,0,0.74))
     drop-shadow(0 0 18px rgba(var(--title-glow), 0.4))
     drop-shadow(0 0 52px rgba(var(--title-glow), 0.18))
     drop-shadow(0 0 88px rgba(var(--title-glow), 0.1)); }
   75%  { filter:
-    drop-shadow(0 1px 2px rgba(0,0,0,0.55))
+    drop-shadow(0 2px 3px rgba(0,0,0,0.95))
+    drop-shadow(0 0 10px rgba(0,0,0,0.72))
     drop-shadow(0 0 16px rgba(var(--title-glow), 0.36))
     drop-shadow(0 0 48px rgba(var(--title-glow), 0.15))
     drop-shadow(0 0 80px rgba(var(--title-glow), 0.09)); }
   100% { filter:
-    drop-shadow(0 1px 2px rgba(0,0,0,0.55))
+    drop-shadow(0 2px 3px rgba(0,0,0,0.95))
+    drop-shadow(0 0 10px rgba(0,0,0,0.72))
     drop-shadow(0 0 14px rgba(var(--title-glow), 0.35))
     drop-shadow(0 0 42px rgba(var(--title-glow), 0.18))
     drop-shadow(0 0 72px rgba(var(--title-glow), 0.1)); }
