@@ -16,7 +16,6 @@ const GEOM_LS_KEY = 'witv.characterPanel'
 
 const SHIP_STAT_ROWS = [
   ['hull', 'Hull'],
-  ['shields', 'Shields'],
   ['armor', 'Armour'],
   ['cargoCapacity', 'Cargo'],
   ['miningCapacity', 'Mining'],
@@ -467,8 +466,8 @@ export function createCharacterUI(container, gameState) {
         } else {
           val = String(val ?? '—')
         }
-        // Live hull/shields/armour from the ship when damaged.
-        if (key === 'hull' || key === 'shields' || key === 'armor') {
+        // Live hull/armour from the boat when damaged.
+        if (key === 'hull' || key === 'armor') {
           const cur = Math.round(Number(ship[key]) || 0)
           const max = Math.round(Number(shipClass.stats[key]) || 0)
           val = `${cur}/${max}`

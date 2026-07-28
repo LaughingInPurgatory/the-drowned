@@ -1,5 +1,5 @@
 import { pick, intRange } from '../procgen/prng.js'
-import { systemsWithinJumps, getSystem } from '../procgen/galaxy.js'
+import { getWorld, getSystem } from '../procgen/world.js'
 import { spawnPointNearBody } from '../game/spawner.js'
 import { GOODS, getGood, isBuyableTradeGood } from './goods.js'
 import { maxShipCargoCapacity } from './shipClasses.js'
@@ -16,34 +16,57 @@ function nextMissionId() {
 }
 
 const BOUNTY_TARGET_CLASSES = ['raider_mk1', 'needle_dart', 'gun_barge', 'light_runner']
-// A mission planted in a different system than where it's picked up should
-// still be a reasonable trip, not an arbitrary trek across the galaxy.
-const MAX_MISSION_JUMP_DISTANCE = 4
-/** Trade hauls must be at least this many hyperspace jumps from origin. */
-const MIN_TRADE_JUMPS = 4
-/** Cap search radius so trade destinations stay in a playable neighborhood. */
-const MAX_TRADE_JUMPS = 10
 
-// Bounty targets always spawn in the giver's own system, so accepting one
-// never requires a hyperspace jump just to reach the fight. Exploration and
-// investigation missions may point at a different system, giving hyperspace
-// travel an actual reason to exist — but capped to a handful of jumps away.
-function pickTargetSystem(rng, galaxy, giverSystem) {
-  if (rng() < 0.5) return giverSystem
-  const reachable = systemsWithinJumps(galaxy, giverSystem.id, MAX_MISSION_JUMP_DISTANCE)
-  return pick(rng, reachable)
+// One sea, so a contract's reach is measured in water rather than jumps.
+/** A posting should be a voyage, not a crossing of the whole world. */
+const MAX_MISSION_DISTANCE = 14000
+/** Close work — half of all postings stay inside this, so there is always
+ *  something to take that does not commit you to a long run. */
+const NEARBY_MISSION_DISTANCE = 4500
+/** Hauls are the long runs: far enough that the hold space is the point. */
+const MIN_TRADE_DISTANCE = 11000
+const MAX_TRADE_DISTANCE = 32000
+
+/** Distance over the water. Everything floats at sea level, so Y is noise. */
+function seaDistance(a, b) {
+  return Math.hypot(a[0] - b[0], a[2] - b[2])
 }
 
-/** Systems at jump distance ∈ [minJumps, maxJumps] from origin (excludes closer). */
-function systemsAtLeastJumps(galaxy, originSystemId, minJumps, maxJumps) {
-  const tooClose = new Set(
-    systemsWithinJumps(galaxy, originSystemId, Math.max(0, minJumps - 1)).map((s) => s.id)
-  )
-  return systemsWithinJumps(galaxy, originSystemId, maxJumps).filter((s) => !tooClose.has(s.id))
+/** Compass bearing from one place to another, for contract flavour text. */
+const COMPASS = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west']
+function bearingFrom(origin, target) {
+  const angle = Math.atan2(target[0] - origin[0], -(target[2] - origin[2]))
+  const i = Math.round((angle / (Math.PI * 2)) * 8 + 8) % 8
+  return COMPASS[i]
+}
+
+/** Eligible bodies in a distance band from a point, nearest-biased. */
+function bodiesInRange(world, from, maxDist, minDist = 0, filter = null) {
+  const out = []
+  for (const body of missionEligibleBodies(world)) {
+    if (filter && !filter(body)) continue
+    const d = seaDistance(from, body.position)
+    if (d < minDist || d > maxDist) continue
+    out.push(body)
+  }
+  return out
+}
+
+/**
+ * Pick somewhere to send the player. Half of all postings stay close to the
+ * harbour that issued them so the board always has short work on it; the rest
+ * reach out across the sea.
+ */
+function pickTargetBody(rng, world, from, filter = null) {
+  const near = bodiesInRange(world, from, NEARBY_MISSION_DISTANCE, 0, filter)
+  if (near.length && rng() < 0.5) return pick(rng, near)
+  const far = bodiesInRange(world, from, MAX_MISSION_DISTANCE, 0, filter)
+  if (far.length) return pick(rng, far)
+  return near.length ? pick(rng, near) : null
 }
 
 function tradeFacilityBodies(system) {
-  return (system?.bodies ?? []).filter((b) => b.kind === 'station' || b.kind === 'settlement')
+  return (system?.bodies ?? []).filter((b) => b.kind === 'port' || b.kind === 'outpost')
 }
 
 // Anomaly sites (e.g. a Rare Ore Deposit) register a synthetic body directly
@@ -72,15 +95,20 @@ function buyableTradeGoodIds() {
 }
 
 export function generateBountyMission(rng, galaxy, giverSystemId, giverStationId) {
-  const giverSystem = galaxy.systems.find((s) => s.id === giverSystemId)
-  const locationBody = pick(rng, missionEligibleBodies(giverSystem))
-  // Outside the body's shell (and clear of other system solids) — never at
-  // body.position (planet/station centers used to bury bounty NPCs).
-  const locationHint = spawnPointNearBody(rng, locationBody, giverSystem.bodies)
+  const world = getWorld(galaxy)
+  const giverBody = world?.bodies.find((b) => b.id === giverStationId)
+  if (!giverBody) return null
+  // Bounties stay in the waters around the harbour that posted them, so taking
+  // one never commits the player to a crossing just to reach the fight.
+  const nearby = bodiesInRange(world, giverBody.position, NEARBY_MISSION_DISTANCE)
+  const locationBody = nearby.length ? pick(rng, nearby) : giverBody
+  // Open water outside the body's shell — never at body.position, which used to
+  // bury bounty targets inside an island.
+  const locationHint = spawnPointNearBody(rng, locationBody, world.bodies)
   return {
     id: nextMissionId(),
     type: 'bounty',
-    title: `Eliminate hostile near ${locationBody.name}`,
+    title: `Clear the raider working ${locationBody.name}`,
     giverStationId,
     giverSystemId,
     reward: intRange(rng, 1500, 5000),
@@ -97,88 +125,75 @@ export function generateBountyMission(rng, galaxy, giverSystemId, giverStationId
 }
 
 export function generateExplorationMission(rng, galaxy, giverSystemId, giverStationId) {
-  const giverSystem = galaxy.systems.find((s) => s.id === giverSystemId)
-  const targetSystem = pickTargetSystem(rng, galaxy, giverSystem)
-  const eligible = missionEligibleBodies(targetSystem)
-  const planets = eligible.filter((b) => b.kind === 'planet')
-  const targetBody = pick(rng, planets.length ? planets : eligible)
+  const world = getWorld(galaxy)
+  const giverBody = world?.bodies.find((b) => b.id === giverStationId)
+  if (!giverBody) return null
+  const targetBody =
+    pickTargetBody(rng, world, giverBody.position, (b) => b.kind === 'island') ??
+    pickTargetBody(rng, world, giverBody.position)
+  if (!targetBody) return null
   return {
     id: nextMissionId(),
     type: 'exploration',
-    title: `Survey ${targetBody.name} in the ${targetSystem.name} system`,
+    title: `Chart ${targetBody.name}, ${bearingFrom(giverBody.position, targetBody.position)} of here`,
     giverStationId,
     giverSystemId,
     reward: intRange(rng, 800, 2500),
     status: 'available',
     objectiveComplete: false,
-    target: { kind: 'body', systemId: targetSystem.id, bodyId: targetBody.id }
+    target: { kind: 'body', systemId: world.id, bodyId: targetBody.id }
   }
 }
 
-const PROBEABLE_KINDS = ['planet', 'moon', 'asteroidField']
+const PROBEABLE_KINDS = ['island', 'wreckField']
 
-function pickProbeableBody(rng, targetSystem) {
-  const probeable = missionEligibleBodies(targetSystem).filter((b) => PROBEABLE_KINDS.includes(b.kind))
-  // Never fall back to stations/settlements — those aren't probeable with P.
-  if (!probeable.length) return null
-  return pick(rng, probeable)
-}
+const isProbeable = (b) => PROBEABLE_KINDS.includes(b.kind)
 
-// Investigation is resolved by probing (see missions.js resolveInvestigationProbe),
-// so the target must be a probeable body — never a station/settlement.
+// Investigation is resolved by sounding the water (see missions.js
+// resolveInvestigationProbe), so the target must be somewhere a sonar drone can
+// work — never a harbour.
 export function generateInvestigationMission(rng, galaxy, giverSystemId, giverStationId) {
-  const giverSystem = galaxy.systems.find((s) => s.id === giverSystemId)
-  // Prefer systems that actually have a probeable body.
-  let targetSystem = pickTargetSystem(rng, galaxy, giverSystem)
-  let targetBody = pickProbeableBody(rng, targetSystem)
-  if (!targetBody) {
-    for (let i = 0; i < 12 && !targetBody; i++) {
-      targetSystem = pickTargetSystem(rng, galaxy, giverSystem)
-      targetBody = pickProbeableBody(rng, targetSystem)
-    }
-  }
+  const world = getWorld(galaxy)
+  const giverBody = world?.bodies.find((b) => b.id === giverStationId)
+  if (!giverBody) return null
+  const targetBody = pickTargetBody(rng, world, giverBody.position, isProbeable)
   if (!targetBody) return null
   return {
     id: nextMissionId(),
     type: 'investigation',
-    title: `Investigate the signal near ${targetBody.name} in ${targetSystem.name}`,
+    title: `Run down the signal off ${targetBody.name}`,
     giverStationId,
     giverSystemId,
     reward: intRange(rng, 1200, 3500),
     status: 'available',
     objectiveComplete: false,
-    target: { kind: 'body', systemId: targetSystem.id, bodyId: targetBody.id }
+    target: { kind: 'body', systemId: world.id, bodyId: targetBody.id }
   }
 }
 
 export function generateProbeMission(rng, galaxy, giverSystemId, giverStationId) {
-  const giverSystem = galaxy.systems.find((s) => s.id === giverSystemId)
-  let targetSystem = pickTargetSystem(rng, galaxy, giverSystem)
-  let targetBody = pickProbeableBody(rng, targetSystem)
-  if (!targetBody) {
-    for (let i = 0; i < 12 && !targetBody; i++) {
-      targetSystem = pickTargetSystem(rng, galaxy, giverSystem)
-      targetBody = pickProbeableBody(rng, targetSystem)
-    }
-  }
+  const world = getWorld(galaxy)
+  const giverBody = world?.bodies.find((b) => b.id === giverStationId)
+  if (!giverBody) return null
+  const targetBody = pickTargetBody(rng, world, giverBody.position, isProbeable)
   if (!targetBody) return null
   return {
     id: nextMissionId(),
     type: 'probe',
-    title: `Probe ${targetBody.name} in the ${targetSystem.name} system for survey data`,
+    title: `Sound the water around ${targetBody.name} and bring back the survey`,
     giverStationId,
     giverSystemId,
     reward: intRange(rng, 1000, 3000),
     status: 'available',
     objectiveComplete: false,
-    target: { kind: 'body', systemId: targetSystem.id, bodyId: targetBody.id }
+    target: { kind: 'body', systemId: world.id, bodyId: targetBody.id }
   }
 }
 
 /**
- * Buy goods at origin (own credits), haul ≥4 jumps, sell at destination where
- * the bay pays more than origin buy cost. Turn in at destination (not origin).
- * Reward scales with quantity × price margin.
+ * Buy at the origin harbour (own credits), haul it a long way across the sea,
+ * and sell where the market pays more than it cost. Turned in at the
+ * destination, not the origin. Reward scales with quantity × price margin.
  */
 export function generateTradeMission(rng, galaxy, giverSystemId, giverStationId) {
   const originSystem = getSystem(galaxy, giverSystemId) ?? galaxy.systems.find((s) => s.id === giverSystemId)
@@ -188,17 +203,20 @@ export function generateTradeMission(rng, galaxy, giverSystemId, giverStationId)
     tradeFacilityBodies(originSystem)[0]
   if (!originBody) return null
 
-  const destSystems = systemsAtLeastJumps(galaxy, originSystem.id, MIN_TRADE_JUMPS, MAX_TRADE_JUMPS)
-  if (!destSystems.length) return null
+  const destFacilities = bodiesInRange(
+    originSystem,
+    originBody.position,
+    MAX_TRADE_DISTANCE,
+    MIN_TRADE_DISTANCE,
+    (b) => b.kind === 'port' || b.kind === 'outpost'
+  )
+  if (!destFacilities.length) return null
 
   const goods = buyableTradeGoodIds()
   if (!goods.length) return null
 
-  // Try several random origin→dest×good pairs until margin is positive.
+  // Try several random dest×good pairs until the margin is positive.
   for (let attempt = 0; attempt < 40; attempt++) {
-    const destSystem = pick(rng, destSystems)
-    const destFacilities = tradeFacilityBodies(destSystem)
-    if (!destFacilities.length) continue
     const destBody = pick(rng, destFacilities)
     const goodId = pick(rng, goods)
     const originBuy = tagUnitPrice(originBody, goodId)
@@ -219,7 +237,7 @@ export function generateTradeMission(rng, galaxy, giverSystemId, giverStationId)
     return {
       id: nextMissionId(),
       type: 'trade',
-      title: `Haul ${quantity} ${goodName} to ${destSystem.name}`,
+      title: `Haul ${quantity} ${goodName} to ${destBody.name}`,
       giverStationId,
       giverSystemId,
       reward,
@@ -231,7 +249,7 @@ export function generateTradeMission(rng, galaxy, giverSystemId, giverStationId)
         originBodyId: originBody.id,
         originSystemId: originSystem.id,
         destBodyId: destBody.id,
-        destSystemId: destSystem.id,
+        destSystemId: originSystem.id,
         originBuyPrice: originBuy,
         destSellPrice: destSell,
         purchased: 0,
@@ -279,11 +297,11 @@ export function generateMissionsForBody(rng, galaxy, systemId, bodyId, count = n
 
 export function seedMissionsForGalaxy(rng, galaxy) {
   const missions = []
-  for (const system of galaxy.systems) {
-    for (const body of system.bodies) {
-      if (!body.hasMissions) continue
-      missions.push(...generateMissionsForBody(rng, galaxy, system.id, body.id))
-    }
+  const world = getWorld(galaxy)
+  if (!world) return missions
+  for (const body of world.bodies) {
+    if (!body.hasMissions) continue
+    missions.push(...generateMissionsForBody(rng, galaxy, world.id, body.id))
   }
   return missions
 }
@@ -310,7 +328,7 @@ export function openMissionCountForBody(gameState, bodyId) {
 export function refillMissionsIfExhausted(gameState, bodyId, rng) {
   if (!bodyId || !gameState?.galaxy || typeof rng !== 'function') return []
   const id = String(bodyId)
-  const system = gameState.galaxy.systems.find((s) => s.bodies.some((b) => String(b.id) === id))
+  const system = getWorld(gameState.galaxy)
   const body = system?.bodies.find((b) => String(b.id) === id)
   if (!body?.hasMissions) return []
 

@@ -1,36 +1,42 @@
 import { pick, range, intRange } from './prng.js'
 
 // Unique ship model names — no Mk / I / II / III.
+/**
+ * Vessel model names. Boats are named the way boats are named: after weather,
+ * seabirds, places on a chart, and the sort of grim humour that comes of
+ * working a drowned world.
+ */
 const SHIP_NAME_POOL = [
   // Single-word
-  'Draymon', 'Solace', 'Ember', 'Halcyon', 'Meridian', 'Vireo', 'Nomad', 'Ithaca',
-  'Juno', 'Karst', 'Lucent', 'Marrow', 'Quill', 'Ronin', 'Umbra', 'Vantage',
-  'Wyvern', 'Paragon', 'Lumen', 'Drift', 'Cinder', 'Auric', 'Bramble', 'Sable',
-  'Tether', 'Orchid', 'Pinnacle', 'Ravel', 'Sundial', 'Tide', 'Veldt', 'Wisp',
-  'Axion', 'Boreal', 'Cairn', 'Dusk', 'Gossamer', 'Helix', 'Isotope', 'Jasper',
-  'Kestreline', 'Larkspur', 'Myriad', 'Nimbus', 'Obsidian', 'Prism', 'Quartz',
-  'Rime', 'Saffron', 'Thorn', 'Ultraviolet', 'Vesper', 'Warden', 'Yarrow', 'Zephyrine',
+  'Solace', 'Halcyon', 'Meridian', 'Petrel', 'Nomad', 'Fulmar',
+  'Kittiwake', 'Gannet', 'Cormorant', 'Skua', 'Tern', 'Shearwater',
+  'Guillemot', 'Puffin', 'Curlew', 'Dunlin', 'Sanderling', 'Brent',
+  'Squall', 'Gale', 'Doldrum', 'Monsoon', 'Trade Wind', 'Sirocco',
+  'Bilge', 'Ballast', 'Gunwale', 'Transom', 'Capstan', 'Windlass',
+  'Halyard', 'Bowline', 'Sheepshank', 'Marlinspike', 'Holdfast', 'Grapnel',
+  'Driftwood', 'Flotsam', 'Jetsam', 'Salvor', 'Wrecker', 'Beachcomber',
+  'Barnacle', 'Limpet', 'Kelp', 'Bladderwrack', 'Spindrift', 'Backwash',
   // Two-word compounds (always unique as a pair)
-  'Ashen Quill', 'Broken Meridian', 'Cold Orbit', 'Deep Veldt', 'Empty Choir',
-  'Far Tether', 'Glass Horizon', 'Hollow Cairn', 'Iron Drift', 'Jade Marrow',
-  'Keen Umbra', 'Lost Solace', 'Mute Ember', 'Night Orchid', 'Open Ravel',
-  'Pale Axion', 'Quiet Boreal', 'Red Sundial', 'Silent Tide', 'Thin Wisp',
-  'Upper Lumen', 'Veiled Pinnacle', 'White Bramble', 'Yellow Sable', 'Zinc Vireo',
-  'Amber Lattice', 'Blue Scaffold', 'Copper Wake', 'Dust Spindle', 'Echo Keel',
-  'Frost Needle', 'Granite Span', 'Harbour Ghost', 'Ivory Circuit', 'Jolt Runner',
-  'Kinetic Loom', 'Ledger Storm', 'Mirror Basin', 'North Scaffold', 'Oxide Bloom',
-  'Pilot Ember', 'Relay Thorn', 'Salt Meridian', 'Torch Quill', 'Underbeam',
-  'Vault Finch', 'Wind Lattice', 'Xeric Drift', 'Yarn of Stars', 'Zenith Coil',
-  'Auric Loom', 'Bramble Wake', 'Cinder Span', 'Dusk Needle', 'Ember Circuit',
-  'Far Scaffold', 'Gossamer Keel', 'Halcyon Bloom', 'Ithaca Relay', 'Juno Basin',
-  'Karst Finch', 'Lucent Coil', 'Marrow Storm', 'Nomad Lattice', 'Orchid Span',
-  'Paragon Wake', 'Quill Basin', 'Ronin Circuit', 'Sable Needle', 'Tide Loom'
+  'Broken Meridian', 'Cold Anchorage', 'Deep Sounding', 'Empty Net',
+  'Far Landing', 'Grey Horizon', 'Hollow Keel', 'Iron Draught', 'Long Watch',
+  'Lost Solace', 'Low Water', 'Night Fisher', 'Old Salt', 'Open Roads',
+  'Pale Wake', 'Quiet Berth', 'Red Ensign', 'Silent Tide', 'Slack Water',
+  'Standing Wave', 'Storm Petrel', 'White Squall', 'Foul Ground', 'Last Buoy',
+  'Amber Lantern', 'Black Rock', 'Copper Wake', 'Dead Reckoning', 'Ebb Tide',
+  'Flood Tide', 'Ghost Net', 'Half Fathom', 'High Water', 'Ill Wind',
+  'Jury Rig', 'Kedge Anchor', 'Leeward Bell', 'Mercy of the Sea', 'Neap Tide',
+  'North Channel', 'Old Compass', 'Port Bower', 'Quarter Sea', 'Rough Passage',
+  'Salt Meridian', 'Spring Tide', 'Tall Water', 'Under Keel', 'Van Der Waal',
+  'Weather Gauge', 'Wide Berth', 'Yellow Flag', 'Zero Fathom', 'Fair Wind',
+  'Grave Shoal', 'Hard Aground', 'Idle Hands', 'Just Enough', 'Keel Hauler',
+  'Late Landfall', 'Made Good', 'Narrow Sound', 'Ordinary Seaman', 'Plain Sailing',
+  'Quick Water', 'Rising Glass', 'Sea Room', 'Two Fathom', 'Up Anchor'
 ]
 
 // Used only for emergency uniqueness if the pool is exhausted.
 const SHIP_NAME_SUFFIXES = [
-  'Runner', 'Keel', 'Wake', 'Span', 'Coil', 'Loom', 'Relay', 'Basin',
-  'Circuit', 'Needle', 'Finch', 'Bloom', 'Ghost', 'Storm', 'Lattice', 'Scaffold'
+  'Runner', 'Keel', 'Wake', 'Trader', 'Hauler', 'Lighter', 'Tender', 'Cutter',
+  'Launch', 'Skiff', 'Dredger', 'Lugger', 'Smack', 'Ketch', 'Hoy', 'Barge'
 ]
 
 const ROLE_WEIGHTS = ['trader', 'trader', 'fighter', 'fighter', 'explorer']
@@ -39,9 +45,9 @@ const ROLE_WEIGHTS = ['trader', 'trader', 'fighter', 'fighter', 'explorer']
 // so light hulls rise modestly and top freighters land near ~700.
 // Ranges are [cheap tier … expensive tier]; generation interpolates by price tier.
 const ROLE_STAT_RANGES = {
-  trader: { hull: [95, 210], shields: [25, 65], armor: [28, 65], cargoCapacity: [60, 260], speed: [95, 55], turnRate: [1.2, 0.65], accel: [22, 12] },
-  fighter: { hull: [55, 155], shields: [60, 135], armor: [12, 55], cargoCapacity: [8, 32], speed: [155, 245], turnRate: [1.9, 3.0], accel: [38, 68] },
-  explorer: { hull: [45, 125], shields: [35, 90], armor: [8, 32], cargoCapacity: [22, 120], speed: [140, 200], turnRate: [1.5, 2.5], accel: [24, 48] }
+  trader: { hull: [95, 210], armor: [53, 130], cargoCapacity: [60, 260], speed: [95, 55], turnRate: [1.2, 0.65], accel: [22, 12] },
+  fighter: { hull: [55, 155], armor: [72, 190], cargoCapacity: [8, 32], speed: [155, 245], turnRate: [1.9, 3.0], accel: [38, 68] },
+  explorer: { hull: [45, 125], armor: [43, 122], cargoCapacity: [22, 120], speed: [140, 200], turnRate: [1.5, 2.5], accel: [24, 48] }
 }
 
 // Shop price bands for generated hulls (hand-crafted keep authored prices).
@@ -134,95 +140,101 @@ function generateShipModelName(rng, usedNames) {
 export const STRONG_ASYMMETRY_CHANCE = 0.14
 
 // Multiple silhouette archetypes per role so generated fleets don't share one curve.
+/**
+ * Hull types by trade. These are boats, so the archetypes are the shapes real
+ * working craft take: full-bodied and blunt for cargo, fine and fast for
+ * patrol, sea-kindly for a survey boat, and beam-heavy for salvage.
+ */
 const ROLE_ARCHETYPES = {
-  trader: ['box', 'barge', 'tug', 'tanker', 'catamaran', 'wedge', 'stack'],
-  fighter: ['needle', 'delta', 'arrow', 'split', 'gunship', 'dart', 'boomerang', 'blade'],
-  explorer: ['slim', 'probe', 'survey', 'longbow', 'saucer', 'moth', 'lance']
+  trader: ['coaster', 'tanker', 'barge', 'container', 'tug', 'catamaran', 'hoy'],
+  fighter: ['patrol', 'gunboat', 'cutter', 'launch', 'corvette', 'hydrofoil'],
+  explorer: ['yacht', 'survey', 'trawler', 'ketch', 'pilot']
 }
 
-/** Width fractions aft→nose (12 stations) for a named archetype. */
+/**
+ * Waterline beam at each of 12 stations, transom (0) → bow (11), as a fraction
+ * of the maximum beam.
+ *
+ * Every one of these ends fine at the bow and full at the transom, because
+ * that is what a hull is: something that parts water at one end and lets it go
+ * at the other. The differences between them are where the volume sits.
+ */
 function archetypeFracs(rng, role, archetype) {
   const j = (a, b) => range(rng, a, b)
+
   if (role === 'trader') {
+    if (archetype === 'tanker') {
+      // Parallel middle body running most of her length — maximum volume.
+      return [j(0.72, 0.88), j(0.9, 1), j(0.98, 1), j(1, 1), j(1, 1), j(1, 1), j(1, 1), j(0.98, 1), j(0.9, 1), j(0.7, 0.88), j(0.42, 0.6), j(0.16, 0.28)]
+    }
     if (archetype === 'barge') {
-      // Very fat mid, blunt both ends.
-      return [j(0.45, 0.65), j(0.7, 0.9), j(0.9, 1), j(1, 1), j(1, 1), j(1, 1), j(1, 1), j(0.95, 1), j(0.85, 0.98), j(0.65, 0.85), j(0.45, 0.65), j(0.3, 0.5)]
+      // Near box-shaped: blunt both ends, made for carrying not for going.
+      return [j(0.85, 1), j(0.95, 1), j(1, 1), j(1, 1), j(1, 1), j(1, 1), j(1, 1), j(1, 1), j(0.95, 1), j(0.85, 0.97), j(0.6, 0.8), j(0.3, 0.48)]
+    }
+    if (archetype === 'container') {
+      // Long, boxy, fine entry — a working feeder ship.
+      return [j(0.7, 0.85), j(0.88, 0.98), j(0.96, 1), j(1, 1), j(1, 1), j(1, 1), j(0.98, 1), j(0.92, 1), j(0.8, 0.94), j(0.58, 0.76), j(0.34, 0.5), j(0.12, 0.22)]
     }
     if (archetype === 'tug') {
-      // Heavy rear engines, skinny nose.
-      return [j(0.55, 0.85), j(0.75, 1), j(0.9, 1), j(0.7, 0.95), j(0.55, 0.75), j(0.45, 0.65), j(0.4, 0.55), j(0.35, 0.5), j(0.3, 0.45), j(0.25, 0.4), j(0.18, 0.32), j(0.12, 0.25)]
-    }
-    if (archetype === 'tanker') {
-      // Long cylindrical cargo mid.
-      return [j(0.25, 0.4), j(0.45, 0.65), j(0.75, 0.95), j(0.95, 1), j(1, 1), j(1, 1), j(1, 1), j(0.95, 1), j(0.7, 0.9), j(0.4, 0.6), j(0.25, 0.4), j(0.15, 0.28)]
+      // Short, deep and enormously beamy aft — all engine and bollard pull.
+      return [j(0.82, 0.98), j(0.95, 1), j(1, 1), j(1, 1), j(0.96, 1), j(0.88, 0.98), j(0.78, 0.9), j(0.68, 0.82), j(0.56, 0.72), j(0.42, 0.58), j(0.28, 0.42), j(0.14, 0.26)]
     }
     if (archetype === 'catamaran') {
-      // Twin-boom read: wide mid with dip then flair (offsets add the split later).
-      return [j(0.3, 0.5), j(0.55, 0.8), j(0.85, 1), j(0.7, 0.9), j(0.55, 0.75), j(0.7, 0.95), j(0.9, 1), j(0.75, 0.95), j(0.55, 0.75), j(0.4, 0.6), j(0.28, 0.45), j(0.18, 0.32)]
+      // Twin hulls; the offsets pass add the split, this is the envelope.
+      return [j(0.8, 0.95), j(0.9, 1), j(1, 1), j(0.94, 1), j(0.88, 0.98), j(0.88, 0.98), j(0.9, 1), j(0.86, 0.96), j(0.72, 0.88), j(0.52, 0.7), j(0.32, 0.48), j(0.14, 0.24)]
     }
-    if (archetype === 'wedge') {
-      // Ramp: skinny tail → massive prow cargo block.
-      return [j(0.12, 0.25), j(0.2, 0.38), j(0.35, 0.55), j(0.5, 0.75), j(0.7, 0.9), j(0.85, 1), j(0.95, 1), j(1, 1), j(0.95, 1), j(0.75, 0.95), j(0.5, 0.75), j(0.3, 0.5)]
+    if (archetype === 'hoy') {
+      // Small beamy trading smack — full aft, apple-cheeked bow.
+      return [j(0.7, 0.88), j(0.88, 1), j(0.97, 1), j(1, 1), j(1, 1), j(0.96, 1), j(0.88, 0.98), j(0.78, 0.9), j(0.66, 0.8), j(0.5, 0.64), j(0.32, 0.46), j(0.16, 0.26)]
     }
-    if (archetype === 'stack') {
-      // Stepped "block stack" — pinches between cargo modules.
-      return [j(0.35, 0.55), j(0.7, 0.95), j(0.55, 0.8), j(0.9, 1), j(0.65, 0.9), j(1, 1), j(0.7, 0.95), j(0.95, 1), j(0.6, 0.85), j(0.45, 0.7), j(0.3, 0.5), j(0.2, 0.35)]
-    }
-    // box — classic freighter block
-    return [j(0.2, 0.38), j(0.4, 0.65), j(0.7, 0.92), j(0.9, 1), j(0.95, 1), j(0.95, 1), j(0.95, 1), j(0.9, 0.99), j(0.75, 0.92), j(0.5, 0.75), j(0.35, 0.55), j(0.22, 0.42)]
+    // coaster — the ordinary short-sea trader
+    return [j(0.72, 0.9), j(0.9, 1), j(0.98, 1), j(1, 1), j(1, 1), j(0.98, 1), j(0.94, 1), j(0.86, 0.96), j(0.72, 0.88), j(0.54, 0.7), j(0.34, 0.5), j(0.14, 0.24)]
   }
+
   if (role === 'fighter') {
-    if (archetype === 'delta') {
-      return [j(0.08, 0.18), j(0.2, 0.4), j(0.45, 0.75), j(0.75, 1), j(0.95, 1), j(0.85, 1), j(0.65, 0.9), j(0.5, 0.75), j(0.4, 0.65), j(0.35, 0.55), j(0.25, 0.4), j(0.12, 0.28)]
+    if (archetype === 'gunboat') {
+      // Beamy forward to carry a gun, still fine at the entry.
+      return [j(0.78, 0.92), j(0.9, 1), j(0.98, 1), j(1, 1), j(1, 1), j(0.98, 1), j(0.92, 1), j(0.82, 0.94), j(0.68, 0.82), j(0.5, 0.66), j(0.3, 0.46), j(0.12, 0.22)]
     }
-    if (archetype === 'arrow') {
-      return [j(0.15, 0.3), j(0.35, 0.55), j(0.55, 0.85), j(0.75, 1), j(0.9, 1), j(0.7, 0.95), j(0.5, 0.75), j(0.35, 0.55), j(0.25, 0.4), j(0.18, 0.32), j(0.12, 0.25), j(0.06, 0.15)]
+    if (archetype === 'cutter') {
+      // Long and lean, a fast hull with a hard chine aft.
+      return [j(0.7, 0.86), j(0.85, 0.97), j(0.94, 1), j(1, 1), j(0.98, 1), j(0.9, 1), j(0.8, 0.92), j(0.68, 0.82), j(0.54, 0.68), j(0.38, 0.52), j(0.22, 0.34), j(0.08, 0.16)]
     }
-    if (archetype === 'split') {
-      // Mid pinch then dual-engine swell.
-      return [j(0.35, 0.6), j(0.55, 0.9), j(0.75, 1), j(0.45, 0.7), j(0.3, 0.5), j(0.4, 0.65), j(0.65, 0.95), j(0.85, 1), j(0.7, 0.95), j(0.45, 0.7), j(0.25, 0.45), j(0.1, 0.25)]
+    if (archetype === 'launch') {
+      // Small, wide transom, planing — mostly engine and a gun.
+      return [j(0.86, 1), j(0.96, 1), j(1, 1), j(0.98, 1), j(0.92, 1), j(0.84, 0.95), j(0.74, 0.86), j(0.62, 0.75), j(0.48, 0.62), j(0.34, 0.48), j(0.2, 0.32), j(0.08, 0.16)]
     }
-    if (archetype === 'gunship') {
-      return [j(0.2, 0.4), j(0.4, 0.7), j(0.65, 0.95), j(0.9, 1), j(1, 1), j(0.95, 1), j(0.85, 0.98), j(0.7, 0.9), j(0.55, 0.75), j(0.4, 0.6), j(0.28, 0.45), j(0.15, 0.3)]
+    if (archetype === 'corvette') {
+      // The biggest thing that still counts as fast — long, powerful, fine bow.
+      return [j(0.68, 0.84), j(0.84, 0.96), j(0.94, 1), j(1, 1), j(1, 1), j(0.96, 1), j(0.88, 0.98), j(0.76, 0.9), j(0.62, 0.76), j(0.44, 0.58), j(0.26, 0.38), j(0.08, 0.16)]
     }
-    if (archetype === 'dart') {
-      return [j(0.05, 0.12), j(0.1, 0.22), j(0.2, 0.4), j(0.4, 0.7), j(0.7, 1), j(0.85, 1), j(0.7, 0.95), j(0.5, 0.75), j(0.35, 0.55), j(0.22, 0.4), j(0.12, 0.25), j(0.05, 0.14)]
+    if (archetype === 'hydrofoil') {
+      // Very fine and narrow — she is meant to be up out of the water.
+      return [j(0.6, 0.76), j(0.76, 0.9), j(0.88, 0.98), j(0.96, 1), j(1, 1), j(0.92, 1), j(0.8, 0.92), j(0.66, 0.8), j(0.5, 0.64), j(0.34, 0.48), j(0.18, 0.3), j(0.06, 0.13)]
     }
-    if (archetype === 'boomerang') {
-      // Thin center, wide swept mid, sharp tips.
-      return [j(0.1, 0.22), j(0.25, 0.45), j(0.55, 0.9), j(0.9, 1), j(0.75, 0.95), j(0.5, 0.75), j(0.35, 0.55), j(0.55, 0.85), j(0.85, 1), j(0.55, 0.8), j(0.25, 0.45), j(0.08, 0.2)]
-    }
-    if (archetype === 'blade') {
-      // Flat knife: very thin height curve later; width stays sharp wedge.
-      return [j(0.06, 0.14), j(0.18, 0.35), j(0.4, 0.7), j(0.7, 1), j(0.95, 1), j(0.95, 1), j(0.85, 1), j(0.65, 0.9), j(0.4, 0.65), j(0.22, 0.4), j(0.1, 0.22), j(0.04, 0.12)]
-    }
-    // needle
-    return [j(0.04, 0.1), j(0.12, 0.28), j(0.3, 0.55), j(0.55, 0.9), j(0.75, 1), j(0.55, 0.9), j(0.45, 0.8), j(0.55, 0.95), j(0.7, 1), j(0.55, 0.85), j(0.28, 0.5), j(0.12, 0.32)]
+    // patrol — the standard fast hull
+    return [j(0.76, 0.9), j(0.88, 1), j(0.96, 1), j(1, 1), j(0.99, 1), j(0.93, 1), j(0.84, 0.96), j(0.72, 0.86), j(0.58, 0.72), j(0.42, 0.56), j(0.24, 0.38), j(0.09, 0.18)]
   }
+
   // explorer
-  if (archetype === 'probe') {
-    return [j(0.15, 0.3), j(0.25, 0.45), j(0.4, 0.7), j(0.7, 1), j(0.95, 1), j(0.85, 1), j(0.55, 0.8), j(0.35, 0.55), j(0.25, 0.4), j(0.2, 0.35), j(0.15, 0.28), j(0.1, 0.2)]
+  if (archetype === 'yacht') {
+    // Fine, sea-kindly, a bit of overhang aft. The pretty one.
+    return [j(0.6, 0.76), j(0.8, 0.94), j(0.92, 1), j(1, 1), j(1, 1), j(0.96, 1), j(0.88, 0.98), j(0.76, 0.9), j(0.6, 0.76), j(0.42, 0.58), j(0.24, 0.38), j(0.08, 0.16)]
   }
-  if (archetype === 'survey') {
-    return [j(0.1, 0.22), j(0.2, 0.4), j(0.4, 0.7), j(0.65, 0.95), j(0.85, 1), j(0.9, 1), j(0.85, 1), j(0.7, 0.9), j(0.5, 0.75), j(0.35, 0.55), j(0.22, 0.4), j(0.12, 0.25)]
+  if (archetype === 'trawler') {
+    // Deep and full — built to stay out in weather, not to be quick.
+    return [j(0.8, 0.95), j(0.92, 1), j(1, 1), j(1, 1), j(0.98, 1), j(0.92, 1), j(0.84, 0.95), j(0.74, 0.87), j(0.62, 0.76), j(0.46, 0.6), j(0.28, 0.42), j(0.12, 0.22)]
   }
-  if (archetype === 'longbow') {
-    return [j(0.06, 0.14), j(0.12, 0.28), j(0.25, 0.5), j(0.45, 0.75), j(0.7, 0.95), j(0.9, 1), j(0.95, 1), j(0.85, 0.98), j(0.65, 0.85), j(0.4, 0.6), j(0.2, 0.35), j(0.08, 0.18)]
+  if (archetype === 'ketch') {
+    // A sailing hull under power: long keel, easy lines, fine ends.
+    return [j(0.55, 0.7), j(0.75, 0.9), j(0.9, 1), j(0.98, 1), j(1, 1), j(0.97, 1), j(0.9, 1), j(0.78, 0.92), j(0.62, 0.78), j(0.44, 0.6), j(0.26, 0.4), j(0.1, 0.18)]
   }
-  if (archetype === 'saucer') {
-    // Wide mid disk, stub ends.
-    return [j(0.2, 0.35), j(0.4, 0.65), j(0.7, 0.95), j(0.95, 1), j(1, 1), j(0.95, 1), j(0.7, 0.9), j(0.45, 0.7), j(0.3, 0.5), j(0.2, 0.35), j(0.15, 0.28), j(0.1, 0.2)]
+  if (archetype === 'pilot') {
+    // A pilot boat: short, immensely strong, made to lie alongside anything.
+    return [j(0.84, 1), j(0.94, 1), j(1, 1), j(1, 1), j(0.96, 1), j(0.9, 1), j(0.82, 0.94), j(0.72, 0.85), j(0.58, 0.72), j(0.42, 0.56), j(0.26, 0.38), j(0.11, 0.2)]
   }
-  if (archetype === 'moth') {
-    // Fat sensor mid, narrow neck, flared sensor nose.
-    return [j(0.18, 0.32), j(0.35, 0.55), j(0.65, 0.95), j(0.9, 1), j(0.75, 0.95), j(0.45, 0.7), j(0.35, 0.55), j(0.55, 0.85), j(0.85, 1), j(0.7, 0.95), j(0.4, 0.65), j(0.2, 0.38)]
-  }
-  if (archetype === 'lance') {
-    // Ultra-long thin science boom profile.
-    return [j(0.08, 0.18), j(0.12, 0.25), j(0.2, 0.4), j(0.35, 0.6), j(0.55, 0.85), j(0.8, 1), j(0.95, 1), j(0.9, 1), j(0.7, 0.9), j(0.4, 0.65), j(0.2, 0.35), j(0.08, 0.18)]
-  }
-  // slim
-  return [j(0.05, 0.12), j(0.15, 0.32), j(0.35, 0.6), j(0.55, 0.85), j(0.8, 1), j(0.85, 1), j(0.75, 0.95), j(0.6, 0.85), j(0.45, 0.7), j(0.3, 0.5), j(0.18, 0.35), j(0.08, 0.22)]
+  // survey — beamy working platform with a clear afterdeck
+  return [j(0.82, 0.96), j(0.92, 1), j(1, 1), j(1, 1), j(0.98, 1), j(0.94, 1), j(0.88, 0.98), j(0.78, 0.9), j(0.64, 0.78), j(0.48, 0.62), j(0.3, 0.44), j(0.12, 0.22)]
 }
 
 /**
@@ -296,29 +308,37 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
     : pick(rng, archetypes)
 
   const [minLen, maxLen] = ROLE_LENGTH_RANGES[role] ?? ROLE_LENGTH_RANGES.explorer
-  // Stretch length bands by archetype for extra silhouette spread.
+  // Length by hull type. Tankers and container boats are long for their beam;
+  // tugs, launches and pilot boats are famously short for theirs.
   let lenScale = 1
-  if (archetype === 'longbow' || archetype === 'tanker' || archetype === 'lance') {
-    lenScale = range(rng, 1.08, 1.32)
+  if (archetype === 'tanker' || archetype === 'container' || archetype === 'corvette') {
+    lenScale = range(rng, 1.1, 1.35)
   }
-  if (archetype === 'dart' || archetype === 'tug' || archetype === 'blade') {
-    lenScale = range(rng, 0.75, 0.95)
+  if (archetype === 'tug' || archetype === 'launch' || archetype === 'pilot' || archetype === 'hoy') {
+    lenScale = range(rng, 0.7, 0.9)
   }
-  if (archetype === 'saucer' || archetype === 'barge' || archetype === 'stack') {
-    lenScale = range(rng, 0.82, 1.08)
+  if (archetype === 'barge' || archetype === 'trawler' || archetype === 'survey') {
+    lenScale = range(rng, 0.85, 1.05)
   }
-  if (archetype === 'wedge' || archetype === 'moth') lenScale = range(rng, 0.95, 1.18)
-  if (archetype === 'boomerang') lenScale = range(rng, 0.88, 1.1)
-  // Extra per-hull jitter so same archetype still spreads.
-  lenScale *= range(rng, 0.9, 1.12)
+  if (archetype === 'hydrofoil' || archetype === 'cutter' || archetype === 'ketch') {
+    lenScale = range(rng, 1.0, 1.22)
+  }
+  // Extra per-hull jitter so the same type still spreads.
+  lenScale *= range(rng, 0.92, 1.1)
   const length = range(rng, minLen, maxLen) * lenScale
-  const bulkMul =
-    archetype === 'saucer' || archetype === 'barge' || archetype === 'stack'
-      ? 0.18
-      : archetype === 'blade' || archetype === 'lance' || archetype === 'needle'
-        ? 0.1
-        : 0.145
-  const peakWidth = range(rng, length * 0.04, length * bulkMul)
+
+  // Beam-to-length. This is the single number that most decides whether
+  // something reads as a barge or a launch — real hulls run roughly 1:3 (a tug)
+  // to 1:9 (a fast patrol boat).
+  const beamRatio =
+    archetype === 'barge' || archetype === 'tug' || archetype === 'pilot' || archetype === 'hoy'
+      ? range(rng, 0.16, 0.22)
+      : archetype === 'hydrofoil' || archetype === 'cutter' || archetype === 'corvette'
+        ? range(rng, 0.075, 0.11)
+        : archetype === 'tanker' || archetype === 'container'
+          ? range(rng, 0.13, 0.17)
+          : range(rng, 0.11, 0.16)
+  const peakWidth = (length * beamRatio) / 2
 
   const fracs = archetypeFracs(rng, role, archetype)
   // Independent per-station noise so clones of the same archetype diverge.
@@ -329,28 +349,45 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
       i >= 3 && i <= 8 && rng() < 0.35 ? range(rng, 0.88, 1.22) : 1
     return Math.max(0.08, f * peakWidth * wobble * midBump)
   })
+  // Depth of hull relative to beam. Cargo carriers are deep-sided; fast boats
+  // are shallow so they can get up and plane.
   const heightRatio =
     role === 'trader'
-      ? range(rng, archetype === 'tanker' ? 0.65 : 0.42, 0.98)
+      ? range(rng, 0.7, 1.05)
       : role === 'fighter'
-        ? range(rng, archetype === 'blade' ? 0.28 : 0.32, archetype === 'gunship' ? 0.85 : 0.78)
-        : range(rng, archetype === 'saucer' ? 0.35 : 0.38, 0.88)
-  // Height curve can diverge from width (tall command decks vs flat disks).
-  const heightBias =
-    archetype === 'saucer' || archetype === 'blade'
-      ? range(rng, 0.45, 0.78)
-      : range(rng, 0.75, 1.28)
-  // Optional decoupled height profile (not just width × constant).
-  const heightProfile = stationWidths.map((_, i) => {
-    if (archetype === 'stack') {
-      return i % 2 === 0 ? range(rng, 0.75, 0.95) : range(rng, 1.05, 1.35)
-    }
-    if (archetype === 'wedge') return range(rng, 0.85 + i * 0.02, 1.05 + i * 0.03)
-    return range(rng, 0.78, 1.22)
-  })
+        ? range(rng, 0.42, 0.66)
+        : range(rng, 0.55, 0.85)
+  const heightBias = range(rng, 0.9, 1.15)
+  // Slight per-station variation so the sheer is not a perfect sweep.
+  const heightProfile = stationWidths.map(() => range(rng, 0.94, 1.08))
   const stationHeights = stationWidths.map((w, i) => {
     const tip = i < 2 || i > 9 ? range(rng, 0.75, 1.12) : 1
     return Math.max(0.06, w * heightRatio * heightBias * tip * heightProfile[i])
+  })
+
+  // --- Boat profile ---------------------------------------------------------
+  // Stations run aft (0) → bow (last). Three things separate a hull from a
+  // fuselage, and none of them need new geometry code:
+  //   1. A transom. Boats do not taper to a point at the stern.
+  //   2. Sheer — the deck line rises toward the bow so it lifts over a sea.
+  //   3. Freeboard. Sitting a symmetric hull on the waterline puts half the
+  //      boat under; a real hull shows more above than below.
+  const last = stationWidths.length - 1
+  const transom = range(rng, 0.62, 0.9)
+  stationWidths[0] = Math.max(stationWidths[0], stationWidths[1] * transom)
+  stationHeights[0] = Math.max(stationHeights[0], stationHeights[1] * transom)
+  // Fine the bow so it parts water instead of pushing it.
+  stationWidths[last] *= range(rng, 0.35, 0.6)
+  stationWidths[last - 1] *= range(rng, 0.6, 0.85)
+
+  const sheer = range(rng, 0.1, 0.32)
+  const freeboard = range(rng, 0.16, 0.3)
+  const baseOffsetsY = stationHeights.map((h, i) => {
+    const t = i / last
+    // Rises toward the bow, and a little at the transom — the classic sheer
+    // line, lowest around midships where the working deck is.
+    const curve = Math.pow(t, 2.2) * sheer + Math.pow(1 - t, 3) * sheer * 0.35
+    return h * (freeboard + curve)
   })
 
   const crossSectionSides = pick(
@@ -361,19 +398,19 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
         ? [6, 8, 8, 10, 12, 14]
         : [8, 10, 12, 14, 16, 18]
   )
+  // Bilge shape. Low values are a round-bilge displacement hull; high values a
+  // hard-chine planing hull, which is what the fast boats want.
   const superellipseExponent =
-    archetype === 'box' || archetype === 'barge' || archetype === 'stack'
-      ? range(rng, 2.8, 4.6)
-      : archetype === 'blade' || archetype === 'saucer'
-        ? range(rng, 1.4, 2.4)
-        : role === 'fighter'
-          ? range(rng, 1.5, 3.0)
-          : range(rng, 1.8, 3.8)
+    archetype === 'barge' || archetype === 'container' || archetype === 'tanker'
+      ? range(rng, 3.0, 4.4)
+      : role === 'fighter'
+        ? range(rng, 2.4, 3.6)
+        : range(rng, 1.6, 2.6)
 
   const asymmetric =
     archetype === 'catamaran' || archetype === 'split' || rng() < STRONG_ASYMMETRY_CHANCE
   let stationOffsetsX = null
-  let stationOffsetsY = null
+  let stationOffsetsY = baseOffsetsY
   if (asymmetric) {
     const bias = (rng() < 0.5 ? -1 : 1) * peakWidth * range(rng, 0.12, 0.38)
     stationOffsetsX = stationWidths.map((_, i) => {
@@ -385,85 +422,57 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
       return bias * (0.45 + 0.55 * Math.sin((i / (stationWidths.length - 1)) * Math.PI))
     })
     if (rng() < 0.75) {
+      // A raised deckhouse amidships, on top of the sheer line.
       const hump = peakWidth * range(rng, 0.08, 0.22)
-      stationOffsetsY = stationHeights.map((_, i) =>
-        i >= 3 && i <= 8 ? hump * (i >= 5 && i <= 6 ? 1 : 0.55) : 0
+      stationOffsetsY = baseOffsetsY.map((y, i) =>
+        y + (i >= 3 && i <= 8 ? hump * (i >= 5 && i <= 6 ? 1 : 0.55) : 0)
       )
     }
   }
 
+  // Sponsons and guards, not wings. The lofter's "wing" primitive is just a
+  // flat slab attached at a station, which reads as an outrigger, a rubbing
+  // strake or a gun platform if it stays low, short and level. Anything swept
+  // or raised turns the hull back into an aircraft, so none of that here.
   const wings = []
-  const wingChance =
-    role === 'fighter' ? 0.95 : role === 'explorer' ? 0.82 : archetype === 'tug' ? 0.4 : 0.58
-  if (rng() < wingChance || archetype === 'delta' || archetype === 'arrow') {
-    const atStation = pick(rng, role === 'trader' ? [4, 5, 6] : [3, 4, 5, 6, 7])
-    let side = 'both'
-    if (asymmetric && rng() < 0.75) side = pick(rng, ['left', 'right', 'both'])
-    const spanMul = archetype === 'delta' ? 1.4 : archetype === 'arrow' ? 1.15 : 1
+  const sponsonChance = role === 'fighter' ? 0.55 : role === 'trader' ? 0.7 : 0.5
+  if (rng() < sponsonChance) {
     wings.push({
-      atStation,
-      span: range(
-        rng,
-        peakWidth * (role === 'fighter' ? 2.2 : 1.4) * spanMul,
-        peakWidth * (role === 'fighter' ? 5.2 : 3.4) * spanMul
-      ),
-      sweep: range(rng, role === 'fighter' ? 0.2 : -0.4, role === 'fighter' ? 1.7 : 0.9),
-      thickness: range(rng, 0.2, 0.55),
-      side,
-      tipOffsetY: asymmetric && rng() < 0.55 ? range(rng, -0.45, 0.55) : 0,
-      chordScale: range(rng, 0.85, 1.2)
-    })
-    if (rng() < (role === 'fighter' ? 0.75 : 0.45) || archetype === 'split') {
-      wings.push({
-        atStation: pick(rng, [2, 3, 4, 5]),
-        span: range(rng, peakWidth * 0.9, peakWidth * 2.4),
-        sweep: range(rng, -0.35, 0.75),
-        thickness: range(rng, 0.14, 0.32),
-        side: asymmetric && rng() < 0.55 ? pick(rng, ['left', 'right']) : 'both'
-      })
-    }
-    if ((role === 'fighter' && rng() < 0.5) || archetype === 'gunship') {
-      wings.push({
-        atStation: pick(rng, [1, 2, 3]),
-        span: range(rng, peakWidth * 0.7, peakWidth * 1.7),
-        sweep: range(rng, -0.15, 0.5),
-        thickness: range(rng, 0.12, 0.26),
-        side: 'both'
-      })
-    }
-  }
-
-  const tailChance =
-    role === 'fighter' ? 0.78 : role === 'explorer' ? 0.62 : archetype === 'tug' ? 0.45 : 0.3
-  if (rng() < tailChance) {
-    wings.push({
-      atStation: pick(rng, [1, 2, 3]),
-      span: range(rng, peakWidth * 0.9, peakWidth * (role === 'fighter' ? 2.5 : 1.9)),
-      sweep: range(rng, -0.55, 0.15),
-      thickness: range(rng, 0.16, 0.4),
-      side: 'top',
-      tipOffsetX: asymmetric && rng() < 0.4 ? range(rng, -0.25, 0.25) : 0,
-      chordScale: range(rng, 0.75, 1.1)
+      atStation: pick(rng, [3, 4, 5, 6, 7]),
+      // Wide enough to read as a hull form, never wide enough to read as a wing.
+      span: range(rng, peakWidth * 0.5, peakWidth * 1.2),
+      sweep: range(rng, -0.15, 0.15),
+      thickness: range(rng, 0.1, 0.24),
+      side: asymmetric && rng() < 0.35 ? pick(rng, ['left', 'right']) : 'both',
+      tipOffsetY: range(rng, -0.12, 0.05),
+      chordScale: range(rng, 0.9, 1.4)
     })
   }
-
-  const bellyChance =
-    role === 'trader' ? 0.4 : role === 'fighter' ? (archetype === 'gunship' ? 0.55 : 0.25) : 0.2
-  if (rng() < bellyChance) {
+  // A stern gun platform / working deck over the transom.
+  if (role === 'fighter' ? rng() < 0.5 : rng() < 0.3) {
     wings.push({
-      atStation: pick(rng, [3, 4, 5, 6]),
-      span: range(rng, peakWidth * 0.7, peakWidth * 1.9),
-      sweep: range(rng, -0.2, 0.5),
-      thickness: range(rng, 0.18, 0.42),
+      atStation: pick(rng, [1, 2]),
+      span: range(rng, peakWidth * 0.6, peakWidth * 1.3),
+      sweep: range(rng, -0.1, 0.1),
+      thickness: range(rng, 0.08, 0.18),
+      side: 'both',
+      chordScale: range(rng, 0.8, 1.2)
+    })
+  }
+  // Bilge keel — a thin strake under the turn of the bilge.
+  if (rng() < 0.35) {
+    wings.push({
+      atStation: pick(rng, [4, 5, 6]),
+      span: range(rng, peakWidth * 0.3, peakWidth * 0.7),
+      sweep: 0,
+      thickness: range(rng, 0.06, 0.14),
       side: 'bottom',
-      tipOffsetX: asymmetric && rng() < 0.45 ? range(rng, -0.3, 0.3) : 0,
-      chordScale: range(rng, 0.8, 1.1),
-      tipAerial: rng() < 0.28
+      chordScale: range(rng, 1.0, 1.6)
     })
   }
 
   const radarDishes = []
-  if (role === 'explorer' || archetype === 'probe' || rng() < 0.7) radarDishes.push('top')
+  if (role === 'explorer' || archetype === 'survey' || rng() < 0.7) radarDishes.push('top')
   if (role === 'explorer' ? rng() < 0.6 : rng() < 0.25) radarDishes.push('bottom')
   if (role === 'fighter' ? rng() < 0.45 : role === 'explorer' ? rng() < 0.55 : rng() < 0.3) {
     radarDishes.push(rng() < 0.55 ? 'side' : pick(rng, ['left', 'right']))
@@ -471,7 +480,7 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
   if (radarDishes.length === 0) radarDishes.push('top')
 
   const cockpitBottomChance =
-    role === 'fighter' ? (archetype === 'gunship' ? 0.45 : 0.28) : role === 'trader' ? 0.22 : 0.12
+    role === 'fighter' ? (archetype === 'gunboat' ? 0.45 : 0.28) : role === 'trader' ? 0.22 : 0.12
   const cockpitMount = rng() < cockpitBottomChance ? 'bottom' : 'top'
 
   // Distinct detail kit (0–31) drives addHullDetails branching so meshes diverge.
@@ -480,14 +489,12 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
   const engineLayout = pick(
     rng,
     role === 'trader'
-      ? archetype === 'tug' || archetype === 'stack'
-        ? ['triple', 'quad', 'quad', 'twin']
-        : ['single', 'twin', 'triple', 'quad', 'quad']
+      ? archetype === 'tug'
+        ? ['twin', 'twin', 'triple']
+        : ['single', 'single', 'twin', 'twin']
       : role === 'fighter'
-        ? archetype === 'split' || archetype === 'boomerang'
-          ? ['twin', 'twin', 'quad', 'triple']
-          : ['single', 'single', 'twin', 'twin', 'triple', 'quad']
-        : ['single', 'twin', 'twin', 'triple', 'quad']
+        ? ['twin', 'twin', 'triple', 'quad']
+        : ['single', 'single', 'twin']
   )
 
   // Plating family — mesh uses this for structural identity within a role.
@@ -574,7 +581,6 @@ export function shipPowerScore(shipClass) {
   const acc = Math.max(0, Math.floor(Number(shipClass?.accessorySlots) || 0))
   const drones = Math.max(0, Math.floor(Number(shipClass?.droneBays) || 0))
   const hull = Number(s.hull) || 0
-  const shields = Number(s.shields) || 0
   const armor = Number(s.armor) || 0
   const cargo = Number(s.cargoCapacity) || 0
   const mining = Number(s.miningCapacity) || 0
@@ -584,12 +590,11 @@ export function shipPowerScore(shipClass) {
   const role = shipClass?.role
 
   if (role === 'trader') {
-    return cargo * 2.4 + hull * 0.7 + armor * 0.55 + shields * 0.35 + mining * 0.12 + hps * 25 + acc * 15
+    return cargo * 2.4 + hull * 0.7 + armor * 0.72 + mining * 0.12 + hps * 25 + acc * 15
   }
   if (role === 'fighter') {
     return (
       hull * 1.1 +
-      shields * 1.55 +
       armor * 1.25 +
       speed * 0.95 +
       turn * 42 +
@@ -604,7 +609,6 @@ export function shipPowerScore(shipClass) {
       speed * 1.15 +
       turn * 38 +
       cargo * 1.35 +
-      shields * 1.1 +
       hull * 0.65 +
       accel * 1.1 +
       mining * 0.15 +
@@ -614,18 +618,18 @@ export function shipPowerScore(shipClass) {
     )
   }
   if (role === 'miner') {
-    return mining * 1.55 + hull * 0.9 + armor * 0.5 + shields * 0.35 + cargo * 0.8 + hps * 15 + drones * 25
+    return mining * 1.55 + hull * 0.9 + armor * 0.68 + cargo * 0.8 + hps * 15 + drones * 25
   }
-  return hull + shields + armor + cargo + speed
+  return hull + armor + cargo + speed
 }
 
 /** Stats that scale when buffing/nerfing a hull toward price rank. */
 function scalableStatKeys(role) {
-  if (role === 'miner') return ['hull', 'shields', 'armor']
-  if (role === 'trader') return ['hull', 'shields', 'armor', 'cargoCapacity']
-  if (role === 'fighter') return ['hull', 'shields', 'armor', 'speed', 'accel', 'turnRate']
-  if (role === 'explorer') return ['hull', 'shields', 'armor', 'speed', 'accel', 'turnRate', 'cargoCapacity']
-  return ['hull', 'shields', 'armor', 'speed', 'accel']
+  if (role === 'miner') return ['hull', 'armor']
+  if (role === 'trader') return ['hull', 'armor', 'cargoCapacity']
+  if (role === 'fighter') return ['hull', 'armor', 'speed', 'accel', 'turnRate']
+  if (role === 'explorer') return ['hull', 'armor', 'speed', 'accel', 'turnRate', 'cargoCapacity']
+  return ['hull', 'armor', 'speed', 'accel']
 }
 
 function scaleShipStats(shipClass, factor) {

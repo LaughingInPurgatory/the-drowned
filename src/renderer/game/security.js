@@ -1,8 +1,15 @@
 /**
- * Player law standing + system security helpers.
+ * Player law standing + local security helpers.
  *
- * System securityRating 0–6: police response speed (0 = none).
+ * securityRating 0–6: patrol response speed (0 = none).
  * Player lawStanding 0–10: reputation with authorities (start 10).
+ *
+ * Security is a property of *places*, not the world: each port and outpost
+ * carries its own rating, and "how policed is it here" is whichever of them the
+ * player is closest to. The open sea between them answers 0, which is why
+ * pirates work out deep and harbourmasters do not. `applyLocalSecurity` writes
+ * the answer onto the world object once a frame, so every existing caller that
+ * asks the region how policed it is keeps working and now gets a local answer.
  */
 
 export const MAX_LAW_STANDING = 10
@@ -12,7 +19,7 @@ export const STARTING_LAW_STANDING = 10
 export const LAW_POLICE_SOS = 2
 /** Also shoot-on-sight by all ships in 3–6 systems. */
 export const LAW_TOTAL_SOS = 0
-/** Below this, stations in 3–6 systems refuse docking (settlements still allow). */
+/** Below this, ports in Sec 3–6 waters refuse a berth (outposts still take you). */
 export const LAW_STATION_DOCK_MIN = 5
 
 export function ensureLawStanding(gameState) {
@@ -33,16 +40,19 @@ export function getSystemSecurity(system) {
   return Math.max(0, Math.min(6, Math.floor(s)))
 }
 
-/** Center 30% of the galaxy map (coreFraction 0 → 0.3). */
+/** Home waters: the inner 30% of the sea (remoteness 0 → 0.3). */
 export const CORE_FRAC_MAX = 0.3
-/** Outer rim: last 10% around the edge (coreFraction ≥ 0.9). */
+/** The deep: outermost 10% of the sea (remoteness ≥ 0.9). */
 export const OUTER_RIM_FRAC_MIN = 0.9
 
+/** How far a harbour's patrols reach out to sea. Past this you are on your own. */
+export const SECURITY_INFLUENCE_RANGE = 8000
+
 /**
- * Roll security for a system from coreFraction (0 core → 1 rim).
- * - Outer rim (≥0.9, last 10%): always 0
- * - Inner core (<0.3, center 30%): 80% 3–6, 20% 1–2, never 0
- * - Mid (the rest): 75% 1–2, remaining 25% split between 0 and 3–6
+ * Roll security for a place from its remoteness (0 home waters → 1 the deep).
+ * - The deep (≥0.9, outermost 10%): always 0
+ * - Home waters (<0.3, inner 30%): 80% 3–6, 20% 1–2, never 0
+ * - Between: 75% 1–2, remaining 25% split between 0 and 3–6
  */
 export function rollSecurityRating(rng, coreFrac) {
   const f = Math.max(0, Math.min(1, Number(coreFrac) || 0))
@@ -60,9 +70,48 @@ export function rollSecurityRating(rng, coreFrac) {
   return 3 + Math.floor(rng() * 4)
 }
 
-/** Law standing loss for attacking innocents only applies in Sec 3–6 systems. */
+/** Law standing loss for attacking innocents only applies in Sec 3–6 waters. */
 export function lawPenaltyAppliesInSystem(system) {
   return getSystemSecurity(system) >= 3
+}
+
+/**
+ * Security rating of the nearest patrolled place, or 0 out on open water.
+ * Falls off in steps rather than smoothly: a rating is a response tier, and
+ * half a police boat is not a thing.
+ */
+export function localSecurityAt(world, position) {
+  if (!world?.bodies || !position) return 0
+  const x = position[0]
+  const z = position[2]
+  let best = 0
+  let bestDistSq = Infinity
+  for (const body of world.bodies) {
+    const sec = body.securityRating
+    if (!sec) continue
+    const dx = body.position[0] - x
+    const dz = body.position[2] - z
+    const distSq = dx * dx + dz * dz
+    if (distSq > SECURITY_INFLUENCE_RANGE * SECURITY_INFLUENCE_RANGE) continue
+    if (distSq >= bestDistSq) continue
+    bestDistSq = distSq
+    // Full authority in the anchorage, tapering to nothing at the edge of the
+    // patrol range, so running for open water genuinely gets you clear.
+    const t = Math.sqrt(distSq) / SECURITY_INFLUENCE_RANGE
+    best = Math.max(0, Math.round(sec * (1 - t * t)))
+  }
+  return Math.max(0, Math.min(6, best))
+}
+
+/**
+ * Refresh the world's live security from where the player actually is. Called
+ * once a frame; everything downstream reads `world.securityRating` exactly as
+ * it always did.
+ */
+export function applyLocalSecurity(world, position) {
+  if (!world) return 0
+  world.securityRating = localSecurityAt(world, position)
+  return world.securityRating
 }
 
 /** Seconds until police respond when pirates are fighting the player. */
@@ -148,13 +197,13 @@ export function flushPendingToasts(gameState) {
   return list
 }
 
-/** Can the player dock at this body given system security + law standing? */
+/** Can the player berth here, given local security + law standing? */
 export function canDockWithLaw(gameState, body, system) {
   ensureLawStanding(gameState)
   if (!body) return false
-  if (body.kind === 'settlement') return true
-  if (body.kind !== 'station') return true
-  const sec = getSystemSecurity(system)
+  // Outposts take anyone's money; only a proper harbour checks your papers.
+  if (body.kind !== 'port') return true
+  const sec = body.securityRating ?? getSystemSecurity(system)
   if (sec < 3) return true
   return gameState.player.lawStanding >= LAW_STATION_DOCK_MIN
 }

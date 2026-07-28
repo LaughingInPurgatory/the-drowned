@@ -52,73 +52,6 @@ const STYLE = `
   padding: 12px 18px 10px 20px;
   z-index: 8;
 }
-/* Plotted warp-gate route — floating text under the top-left system box. */
-#hud .route-hud {
-  position: fixed; left: 20px; top: 128px; z-index: 6;
-  width: min(280px, 36vw); max-height: min(42vh, 360px);
-  padding: 0;
-  display: none;
-  pointer-events: none;
-  overflow: hidden;
-  background: none;
-  border: none;
-  box-shadow: none;
-  filter: none;
-  color: #ffffff;
-  text-shadow:
-    0 1px 2px rgba(0,0,0,0.9),
-    0 2px 6px rgba(0,0,0,0.75),
-    0 0 10px rgba(0,0,0,0.45);
-}
-#hud .route-hud.visible { display: block; }
-#hud .route-hud .rh-title {
-  font-size: 11px; letter-spacing: 2.5px; text-transform: uppercase;
-  color: #ffffff; opacity: 0.92; margin: 0 0 6px 0;
-  text-shadow:
-    0 1px 2px rgba(0,0,0,0.9),
-    0 2px 6px rgba(0,0,0,0.75),
-    0 0 10px rgba(0,0,0,0.45);
-}
-#hud .route-hud .rh-title .rh-count {
-  opacity: 0.75; letter-spacing: 1px; font-size: 10px; margin-left: 6px;
-  text-transform: none;
-}
-#hud .route-hud .rh-list {
-  list-style: none; margin: 0; padding: 0;
-  max-height: min(34vh, 300px); overflow: hidden;
-}
-#hud .route-hud .rh-list li {
-  display: flex; align-items: baseline; gap: 8px;
-  padding: 2px 0;
-  margin: 0;
-  font-size: 13px; letter-spacing: 0.3px; line-height: 1.45;
-  background: none;
-  border: none;
-  color: #ffffff;
-  opacity: 0.88;
-  text-shadow:
-    0 1px 2px rgba(0,0,0,0.9),
-    0 2px 6px rgba(0,0,0,0.7);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-#hud .route-hud .rh-list li.next {
-  opacity: 1;
-  font-weight: 600;
-}
-#hud .route-hud .rh-list li.dest { opacity: 0.95; }
-#hud .route-hud .rh-list .hop {
-  opacity: 0.7; font-size: 11px; min-width: 1.4em; flex-shrink: 0;
-}
-#hud .route-hud .rh-list .name {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
-}
-#hud .route-hud .rh-list .tag {
-  font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
-  opacity: 0.7; color: #ffffff; flex-shrink: 0;
-}
-#hud.docked .route-hud {
-  top: 100px;
-}
 #hud .panel-title {
   font-size: 10px; letter-spacing: 3px; opacity: 0.65; color: var(--ui-accent);
   text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.75);
@@ -132,7 +65,7 @@ const STYLE = `
 }
 #hud .row-label .value { opacity: 0.95; }
 
-/* Compact status typography (matches shield/armour/hull labels). */
+/* Compact status typography (matches armour/hull labels). */
 #hud .status-panel .sa-pair .row-label,
 #hud .status-panel .velocity-row .row-label,
 #hud .status-panel .drones-bay .row-label,
@@ -145,7 +78,7 @@ const STYLE = `
   text-shadow: 0 1px 2px rgba(0,0,0,0.75);
 }
 
-/* Shield + armour + hull side-by-side, compact bars. */
+/* Armour + hull side-by-side, compact bars. */
 #hud .status-panel .sa-pair {
   display: flex; gap: 8px; margin-bottom: 6px;
 }
@@ -202,7 +135,6 @@ const STYLE = `
   background-size: 220% 100%;
   animation: hud-shine 3.2s linear infinite;
 }
-#hud .shield .fill { background: linear-gradient(90deg, var(--ui-deep), var(--ui-accent)); box-shadow: none; }
 #hud .armor .fill { background: linear-gradient(90deg, #8a6a2a, #d9b56a); box-shadow: none; }
 #hud .hull .fill { background: linear-gradient(90deg, #7a2626, #c24a4a); box-shadow: none; }
 #hud .hull .fill.critical { animation: hud-critical-pulse 0.6s ease-in-out infinite; }
@@ -368,222 +300,6 @@ const STYLE = `
   box-shadow: none;
 }
 /* Shared soft ground shadow — kept in glitch rest frames so animation doesn't wipe it. */
-/* Supercruise: stronger chromatic HUD glitch (still sparser than title ~6.5s). */
-#hud.cruise-glitch .target-panel,
-#hud.cruise-glitch .route-hud {
-  animation: hudCruisePanelGlitch 12s steps(1) infinite;
-}
-#hud.cruise-glitch .cockpit-frame .corner {
-  animation: hudCruiseCornerGlitch 12s steps(1) infinite;
-}
-#hud.cruise-glitch .status-panel,
-#hud.cruise-glitch #radar {
-  animation: hudCruisePanelGlitchCenter 12s steps(1) infinite;
-}
-#hud.cruise-glitch .system-label {
-  animation: hudCruisePanelGlitch 12s steps(1) infinite;
-}
-#hud.cruise-glitch .scanlines {
-  animation: hudCruiseScanGlitch 12s steps(1) infinite;
-}
-#hud.cruise-glitch .status-panel { animation-delay: 0s; }
-#hud.cruise-glitch .system-label { animation-delay: 0.05s; }
-#hud.cruise-glitch .target-panel { animation-delay: 0.04s; }
-#hud.cruise-glitch .route-hud { animation-delay: 0.02s; }
-#hud.cruise-glitch #radar { animation-delay: 0.1s; }
-#hud.cruise-glitch .cockpit-frame .corner.tl { animation-delay: 0s; }
-#hud.cruise-glitch .cockpit-frame .corner.tr { animation-delay: 0.03s; }
-#hud.cruise-glitch .cockpit-frame .corner.bl { animation-delay: 0.06s; }
-#hud.cruise-glitch .cockpit-frame .corner.br { animation-delay: 0.09s; }
-
-/* Rest frames: no glow (panel box-shadow handles depth). Chromatic slices keep SC glitch. */
-@keyframes hudCruisePanelGlitch {
-  0%, 78%, 100% {
-    filter: none;
-    transform: none;
-  }
-  79% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(-5px 0 0 rgba(255, 40, 90, 0.85))
-      drop-shadow(5px 0 0 rgba(40, 220, 255, 0.85));
-    transform: translate(-5px, 0) skewX(-1.4deg);
-  }
-  80% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(6px 0 0 rgba(255, 40, 90, 0.75))
-      drop-shadow(-4px 0 0 rgba(40, 220, 255, 0.75));
-    transform: translate(6px, 2px) skewX(1.6deg);
-  }
-  81% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(-3px 1px 0 rgba(255, 80, 120, 0.7))
-      drop-shadow(4px -1px 0 rgba(80, 200, 255, 0.7));
-    transform: translate(-3px, -1px) skewX(0.8deg);
-  }
-  82% {
-    filter: none;
-    transform: none;
-  }
-  90% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(-4px 0 0 rgba(255, 50, 100, 0.7))
-      drop-shadow(4px 0 0 rgba(50, 210, 255, 0.7));
-    transform: translate(4px, 0) skewX(-1deg);
-  }
-  91% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(3px 0 0 rgba(255, 50, 100, 0.55))
-      drop-shadow(-5px 0 0 rgba(50, 210, 255, 0.55));
-    transform: translate(-4px, 1px);
-  }
-  92% {
-    filter: none;
-    transform: none;
-  }
-}
-@keyframes hudCruisePanelGlitchCenter {
-  0%, 78%, 100% {
-    filter: none;
-    transform: translateX(-50%);
-  }
-  79% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(-5px 0 0 rgba(255, 40, 90, 0.85))
-      drop-shadow(5px 0 0 rgba(40, 220, 255, 0.85));
-    transform: translateX(calc(-50% - 5px)) skewX(-1.4deg);
-  }
-  80% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(6px 0 0 rgba(255, 40, 90, 0.75))
-      drop-shadow(-4px 0 0 rgba(40, 220, 255, 0.75));
-    transform: translateX(calc(-50% + 6px)) translateY(2px) skewX(1.6deg);
-  }
-  81% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(-3px 1px 0 rgba(255, 80, 120, 0.7))
-      drop-shadow(4px -1px 0 rgba(80, 200, 255, 0.7));
-    transform: translateX(calc(-50% - 3px)) translateY(-1px) skewX(0.8deg);
-  }
-  82% {
-    filter: none;
-    transform: translateX(-50%);
-  }
-  90% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(-4px 0 0 rgba(255, 50, 100, 0.7))
-      drop-shadow(4px 0 0 rgba(50, 210, 255, 0.7));
-    transform: translateX(calc(-50% + 4px)) skewX(-1deg);
-  }
-  91% {
-    filter:
-      drop-shadow(0 2px 4px rgba(0,0,0,0.85))
-      drop-shadow(3px 0 0 rgba(255, 50, 100, 0.55))
-      drop-shadow(-5px 0 0 rgba(50, 210, 255, 0.55));
-    transform: translateX(calc(-50% - 4px)) translateY(1px);
-  }
-  92% {
-    filter: none;
-    transform: translateX(-50%);
-  }
-}
-@keyframes hudCruiseCornerGlitch {
-  0%, 78%, 100% {
-    filter:
-      drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-      drop-shadow(0 3px 6px rgba(0,0,0,0.7));
-  }
-  79% {
-    filter:
-      drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-      drop-shadow(-4px 0 0 rgba(255, 40, 90, 0.9))
-      drop-shadow(4px 0 0 rgba(40, 220, 255, 0.9));
-  }
-  80% {
-    filter:
-      drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-      drop-shadow(5px 0 0 rgba(255, 40, 90, 0.75))
-      drop-shadow(-5px 0 0 rgba(40, 220, 255, 0.75));
-  }
-  81%, 82% {
-    filter:
-      drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-      drop-shadow(0 3px 6px rgba(0,0,0,0.7));
-  }
-  90% {
-    filter:
-      drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-      drop-shadow(-3px 0 0 rgba(255, 50, 100, 0.7))
-      drop-shadow(3px 0 0 rgba(50, 210, 255, 0.7));
-  }
-  91%, 92% {
-    filter:
-      drop-shadow(0 1px 2px rgba(0,0,0,0.95))
-      drop-shadow(0 3px 6px rgba(0,0,0,0.7));
-  }
-}
-@keyframes hudCruiseScanGlitch {
-  0%, 78%, 100% { opacity: 0.35; }
-  79%, 81% { opacity: 0.95; }
-  82% { opacity: 0.35; }
-  90%, 91% { opacity: 0.8; }
-  92% { opacity: 0.35; }
-}
-
-/* White-noise / static burst timed with the chromatic glitch windows. */
-#hud .static-noise {
-  position: fixed; inset: 0; pointer-events: none; z-index: 7;
-  opacity: 0;
-  mix-blend-mode: screen;
-  /* SVG fractal noise — no texture files; re-tiled via background-size animation. */
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 180px 180px;
-}
-#hud.cruise-glitch .static-noise {
-  animation: hudCruiseStatic 12s steps(1) infinite;
-}
-@keyframes hudCruiseStatic {
-  0%, 78%, 100% {
-    opacity: 0;
-    background-position: 0 0;
-  }
-  79% {
-    opacity: 0.42;
-    background-position: -40px 12px;
-  }
-  80% {
-    opacity: 0.55;
-    background-position: 28px -22px;
-  }
-  81% {
-    opacity: 0.28;
-    background-position: -18px 36px;
-  }
-  82% {
-    opacity: 0;
-    background-position: 0 0;
-  }
-  90% {
-    opacity: 0.32;
-    background-position: 50px -30px;
-  }
-  91% {
-    opacity: 0.2;
-    background-position: -60px 20px;
-  }
-  92% {
-    opacity: 0;
-    background-position: 0 0;
-  }
-}
 `
 
 export function createHud(container) {
@@ -600,11 +316,10 @@ export function createHud(container) {
       <div class="corner tl"></div><div class="corner tr"></div>
       <div class="corner bl"></div><div class="corner br"></div>
     </div>
-    <div class="system-label" role="button" tabindex="0" title="System Scan (B)" aria-label="System Scan">
-      <span class="sys-tag">System</span>
+    <div class="system-label" role="button" tabindex="0" title="Sounding (B)" aria-label="Sounding">
       <span class="sys-name">—</span>
-      <span class="nearest-body"><span class="nb-tag">Nearest Body</span><span class="nb-name"></span></span>
-      <span class="sys-scan-hint">System Scan (B)</span>
+      <span class="nearest-body"><span class="nb-name"></span></span>
+      <span class="sys-scan-hint">Sounding (B)</span>
     </div>
     <div class="target-panel" aria-live="polite">
       <div class="tp-tag">Target</div>
@@ -618,10 +333,6 @@ export function createHud(container) {
         <div class="bar velocity"><div class="zero-marker"></div><div class="fill"></div></div>
       </div>
       <div class="sa-pair">
-        <div class="row shield">
-          <div class="row-label"><span>Shield</span><span class="value"></span></div>
-          <div class="bar"><div class="fill"></div></div>
-        </div>
         <div class="row armor">
           <div class="row-label"><span>Armour</span><span class="value"></span></div>
           <div class="bar"><div class="fill"></div></div>
@@ -638,10 +349,6 @@ export function createHud(container) {
         <div class="panel-title" style="margin-bottom:6px">Drones (deployed)</div>
         <div class="drone-rows"></div>
       </div>
-    </div>
-    <div class="route-hud" aria-live="polite">
-      <div class="rh-title">Route <span class="rh-count"></span></div>
-      <ol class="rh-list"></ol>
     </div>
   `
   container.appendChild(hud)
@@ -661,27 +368,24 @@ export function createHud(container) {
   const radarH = radarCanvas.height
   const systemLabelEl = hud.querySelector('.system-label')
 
-  // Ships: neutral yellow, hostile flashing red. Stations blue, worlds green,
-  // gates + datacores purple, asteroids brown.
+  // Boats: neutral yellow, hostile flashing red. Harbours blue, land green,
+  // signals purple, hulks brown.
   const contactColor = (kind) => {
     const PURPLE = '#b070ff'
     const fixed = {
-      // Ships
+      // Boats
       neutral: '#f0d24a',
       hostile: '#ff3030',
-      // Stations / docks
-      station: '#4aa8ff',
-      // Planets, moons, sun
-      planet: '#5ee08a',
-      moon: '#5ee08a',
-      sun: '#5ee08a',
+      // Harbours and outposts
+      port: '#4aa8ff',
+      // Land
+      island: '#5ee08a',
       body: '#5ee08a',
-      // Warp gates + datacore anomalies
-      gate: PURPLE,
+      // Signals worth investigating
       anomaly: PURPLE,
       datacore: PURPLE,
-      // Other contacts — rocks are brown; belt kind unused (fields not on radar).
-      belt: '#8B5A2B',
+      // Salvage — the field itself is not painted, only the hulks in it.
+      wreckField: '#8B5A2B',
       asteroid: '#8B5A2B',
       waypoint: '#7fe0a0',
       mission: '#ff8a3d',
@@ -694,10 +398,10 @@ export function createHud(container) {
   // Below this fraction the hull bar pulses red as an urgent low-hull cue.
   const CRITICAL_HULL_FRACTION = 0.25
 
-  const shieldFill = hud.querySelector('.shield .fill')
+
   const armorFill = hud.querySelector('.armor .fill')
   const hullFill = hud.querySelector('.hull .fill')
-  const shieldValue = hud.querySelector('.shield .value')
+
   const armorValue = hud.querySelector('.armor .value')
   const hullValue = hud.querySelector('.hull .value')
   const velocityFill = hud.querySelector('.velocity .fill')
@@ -709,12 +413,8 @@ export function createHud(container) {
   const targetNameEl = hud.querySelector('.target-panel .tp-name')
   const targetMetaEl = hud.querySelector('.target-panel .tp-meta')
   const targetBarsEl = hud.querySelector('.target-panel .tp-bars')
-  const routeHudEl = hud.querySelector('.route-hud')
-  const routeCountEl = hud.querySelector('.route-hud .rh-count')
-  const routeListEl = hud.querySelector('.route-hud .rh-list')
   let lastSystemLabelKey = null
   let lastNearestBodyName = undefined
-  let lastRouteKey = null
 
   function pct(value, max) {
     return Math.max(0, Math.min(100, (value / max) * 100))
@@ -728,37 +428,36 @@ export function createHud(container) {
     </div>`
   }
 
-  function formatSystemLabel(systemName, securityRating) {
-    const name = systemName || '—'
+  /**
+   * Where you are, not what region you are in. One sea, so naming it every
+   * frame told the player nothing — the useful answer is the nearest place,
+   * and how policed the water around it is.
+   */
+  function formatSystemLabel(placeName, securityRating) {
+    const name = placeName || 'Open water'
     if (securityRating == null || !Number.isFinite(securityRating)) return name
     const sec = Math.max(0, Math.min(6, Math.floor(securityRating)))
     let cls = 'sec-low'
     if (sec >= 4) cls = 'sec-high'
     else if (sec >= 2) cls = 'sec-mid'
-    return `${name} <span class="sec-badge ${cls}" title="System security ${sec}/6">Sec ${sec}</span>`
+    return `${name} <span class="sec-badge ${cls}" title="Local security ${sec}/6">Sec ${sec}</span>`
   }
 
   return {
     // forwardSpeed is signed (negative while reversing), unlike speed which
     // is the overall (unsigned) velocity magnitude shown in the text readout.
-    // nearestBodyName: string when within HUD proximity of a planet/moon/star/
+    // nearestBodyName: string when within HUD proximity of an island /
     // station/settlement; null/undefined hides the line.
     // securityRating: 0–6 system security shown beside the name.
     update(shipState, shipClass, speed, forwardSpeed, systemName = null, nearestBodyName = null, securityRating = null) {
-      const maxSh = (typeof shipState.maxShields === 'number' && shipState.maxShields > 0)
-        ? shipState.maxShields
-        : shipClass.stats.shields
       const maxAr = (typeof shipState.maxArmor === 'number' && shipState.maxArmor > 0)
         ? shipState.maxArmor
         : shipClass.stats.armor
-      const shieldPct = pct(shipState.shields, maxSh)
       const armorPct = pct(shipState.armor, maxAr)
       const hullPct = pct(shipState.hull, shipClass.stats.hull)
-      shieldFill.style.width = `${shieldPct}%`
       armorFill.style.width = `${armorPct}%`
       hullFill.style.width = `${hullPct}%`
       hullFill.classList.toggle('critical', hullPct / 100 < CRITICAL_HULL_FRACTION)
-      shieldValue.textContent = `${shieldPct.toFixed(0)}%`
       armorValue.textContent = `${armorPct.toFixed(0)}%`
       hullValue.textContent = `${hullPct.toFixed(0)}%`
 
@@ -813,7 +512,6 @@ export function createHud(container) {
           droneRows.innerHTML = deployed
             .map((d, i) => {
               const h = pct(d.hull, d.maxHull || d.hull || 1)
-              const s = pct(d.shields, d.maxShields || d.shields || 1)
               const a = pct(d.armor, d.maxArmor || d.armor || 1)
               return `<div class="row" style="margin-bottom:6px">
                 <div class="row-label"><span>Drone ${i + 1}</span><span class="value">S${s.toFixed(0)} A${a.toFixed(0)} H${h.toFixed(0)}</span></div>
@@ -831,7 +529,6 @@ export function createHud(container) {
      * Tab-lock target panel (top right, left of system overview).
      * @param {null|{
      *   name:string, hostile?:boolean, meta?:string,
-     *   shields?:number, maxShields?:number,
      *   armor?:number, maxArmor?:number,
      *   hull?:number, maxHull?:number,
      *   oreLeft?:number, oreMax?:number,
@@ -853,8 +550,6 @@ export function createHud(container) {
 
       // Only rebuild bar HTML when values change (was every frame → layout thrash).
       const barsKey = [
-        info.shields | 0,
-        info.maxShields | 0,
         info.armor | 0,
         info.maxArmor | 0,
         info.hull | 0,
@@ -866,9 +561,6 @@ export function createHud(container) {
       targetPanel.dataset.barsKey = barsKey
 
       const parts = []
-      if (info.maxShields != null && info.maxShields > 0) {
-        parts.push(barRow('Shield', info.shields ?? 0, info.maxShields, 'shield'))
-      }
       if (info.maxArmor != null && info.maxArmor > 0) {
         parts.push(barRow('Armour', info.armor ?? 0, info.maxArmor, 'armor'))
       }
@@ -881,58 +573,8 @@ export function createHud(container) {
       targetBarsEl.innerHTML = parts.join('')
     },
     /**
-     * Warp-gate plotted route on the far left.
      * @param {null|Array<{ id?: string, name: string }|string>} hops remaining systems (dest last)
      */
-    updatePlottedRoute(hops) {
-      if (!routeHudEl || !routeListEl) return
-      const list = Array.isArray(hops) ? hops : []
-      if (!list.length) {
-        if (lastRouteKey !== '') {
-          lastRouteKey = ''
-          routeHudEl.classList.remove('visible')
-          routeListEl.innerHTML = ''
-          if (routeCountEl) routeCountEl.textContent = ''
-        }
-        return
-      }
-      const rows = list.map((h) => {
-        if (h && typeof h === 'object') {
-          return { id: String(h.id ?? h.name ?? ''), name: String(h.name ?? h.id ?? '—') }
-        }
-        return { id: String(h), name: String(h) }
-      })
-      const key = rows.map((r) => r.id || r.name).join('\0')
-      if (key === lastRouteKey) return
-      lastRouteKey = key
-      routeHudEl.classList.add('visible')
-      const n = rows.length
-      if (routeCountEl) {
-        routeCountEl.textContent = `· ${n} jump${n === 1 ? '' : 's'}`
-      }
-      // Escape names for safety (system names are generated, but keep consistent).
-      const esc = (s) =>
-        String(s)
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-      routeListEl.innerHTML = rows
-        .map((r, i) => {
-          const isNext = i === 0
-          const isDest = i === n - 1
-          const tags = [
-            isNext ? '<span class="tag">next</span>' : '',
-            isDest ? '<span class="tag">dest</span>' : ''
-          ].join('')
-          return `<li class="${isNext ? 'next' : ''} ${isDest ? 'dest' : ''}">
-            <span class="hop">${i + 1}.</span>
-            <span class="name">${esc(r.name)}</span>
-            ${tags}
-          </li>`
-        })
-        .join('')
-    },
     // contacts: [{ x, y, z, kind }] ship-local (x=right, y=up, z=forward).
     // 3D rectangular floor grid (heading-up) — rotates with ship via local frame.
     // Bare canvas (no panel chrome). elapsed: gameState.simTime.
@@ -1144,9 +786,6 @@ export function createHud(container) {
       radarCtx.globalAlpha = 1
     },
     /** Sparse chromatic glitch on all HUD chrome while supercruising. */
-    setCruiseGlitch(active) {
-      hud.classList.toggle('cruise-glitch', !!active)
-    },
     /**
      * System-name chip opens System Scan (replaces the old dedicated button).
      * @param {() => void} fn
@@ -1171,17 +810,11 @@ export function createHud(container) {
      * Keep system name + station/settlement on the top-left.
      * @param {boolean} docked
      * @param {{ systemName?: string|null, locationName?: string|null, securityRating?: number|null }} [info]
+     *   systemName carries the place you are berthed at, not a region.
      */
     setDocked(docked, info = {}) {
       hud.classList.toggle('docked', !!docked)
-      if (!docked) {
-        // Restore default nearest-body tag wording.
-        const tag = nearestBodyEl.querySelector('.nb-tag')
-        if (tag) tag.textContent = 'Nearest Body'
-        return
-      }
-      const tag = nearestBodyEl.querySelector('.nb-tag')
-      if (tag) tag.textContent = 'Docked'
+      if (!docked) return
       const systemName = info.systemName ?? null
       const securityRating = info.securityRating ?? null
       const locationName = info.locationName ?? null

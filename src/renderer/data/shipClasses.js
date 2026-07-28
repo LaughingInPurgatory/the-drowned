@@ -11,7 +11,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     name: 'Bravia',
     role: 'trader',
     price: 12000,
-    stats: { hull: 100, shields: 50, armor: 20, cargoCapacity: 40, speed: 120, turnRate: 1.8, accel: 30 },
+    stats: { hull: 100, armor: 70, cargoCapacity: 40, speed: 120, turnRate: 1.8, accel: 30 },
     // Forward hardpoint on the industrial prow.
     hardpoints: [{ id: 'fwd1', position: [0, 0.25, 8.2], type: 'laser' }],
     accessorySlots: 1,
@@ -77,7 +77,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     name: 'Hold Runner',
     role: 'trader',
     price: 20000,
-    stats: { hull: 150, shields: 30, armor: 40, cargoCapacity: 120, speed: 70, turnRate: 0.9, accel: 15 },
+    stats: { hull: 150, armor: 70, cargoCapacity: 120, speed: 70, turnRate: 0.9, accel: 15 },
     hardpoints: [{ id: 'fwd1', position: [0, 0.5, 12], type: 'laser' }],
     accessorySlots: 2,
     hull: {
@@ -115,10 +115,10 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'needle_dart',
-    name: 'Needle Dart',
+    name: 'Sea Dart',
     role: 'fighter',
     price: 35000,
-    stats: { hull: 70, shields: 80, armor: 10, cargoCapacity: 10, speed: 220, turnRate: 2.8, accel: 55 },
+    stats: { hull: 70, armor: 90, cargoCapacity: 10, speed: 220, turnRate: 2.8, accel: 55 },
     hardpoints: [
       { id: 'fwd1', position: [-1.2, 0, 9], type: 'laser' },
       { id: 'fwd2', position: [1.2, 0, 9], type: 'laser' }
@@ -159,7 +159,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     name: 'Gun Barge',
     role: 'fighter',
     price: 45000,
-    stats: { hull: 130, shields: 100, armor: 50, cargoCapacity: 25, speed: 140, turnRate: 2.0, accel: 35 },
+    stats: { hull: 130, armor: 150, cargoCapacity: 25, speed: 140, turnRate: 2.0, accel: 35 },
     hardpoints: [
       { id: 'wing1', position: [-3, 0, 6], type: 'laser' },
       { id: 'wing2', position: [3, 0, 6], type: 'missile' }
@@ -204,7 +204,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     name: 'Light Runner',
     role: 'explorer',
     price: 8500,
-    stats: { hull: 50, shields: 40, armor: 5, cargoCapacity: 15, speed: 180, turnRate: 2.5, accel: 45 },
+    stats: { hull: 50, armor: 45, cargoCapacity: 15, speed: 180, turnRate: 2.5, accel: 45 },
     hardpoints: [{ id: 'fwd1', position: [0, 0.1, 7], type: 'laser' }],
     accessorySlots: 1,
     hull: {
@@ -241,7 +241,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'fighter',
     price: 28000,
     npcOnly: true,
-    stats: { hull: 90, shields: 60, armor: 25, cargoCapacity: 20, speed: 160, turnRate: 2.2, accel: 40 },
+    stats: { hull: 90, armor: 85, cargoCapacity: 20, speed: 160, turnRate: 2.2, accel: 40 },
     hardpoints: [
       { id: 'fwd1', position: [-1, 0, 8], type: 'laser' },
       { id: 'fwd2', position: [1, 0, 8], type: 'missile' }
@@ -281,12 +281,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   {
     // Authority response fighter — white/black livery, top guns + missiles.
     id: 'system_patrol',
-    name: 'System Patrol',
+    name: 'Coastguard Cutter',
     role: 'fighter',
     price: 0,
     npcOnly: true,
     faction: 'police',
-    stats: { hull: 110, shields: 120, armor: 40, cargoCapacity: 15, speed: 190, turnRate: 2.6, accel: 48 },
+    stats: { hull: 110, armor: 160, cargoCapacity: 15, speed: 190, turnRate: 2.6, accel: 48 },
     hardpoints: [
       { id: 'turret1', position: [0, 1.2, 2], type: 'laser' },
       { id: 'turret2', position: [0, 1.1, -1], type: 'laser' },
@@ -329,7 +329,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     name: 'Swift Keel',
     role: 'explorer',
     price: 18000,
-    stats: { hull: 80, shields: 50, armor: 15, cargoCapacity: 60, speed: 150, turnRate: 1.6, accel: 28 },
+    stats: { hull: 80, armor: 65, cargoCapacity: 60, speed: 150, turnRate: 1.6, accel: 28 },
     hardpoints: [{ id: 'fwd1', position: [0, 0.3, 13], type: 'laser' }],
     accessorySlots: 2,
     hull: {
@@ -369,7 +369,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'explorer',
     price: 22000,
     droneBays: 1,
-    stats: { hull: 75, shields: 55, armor: 12, cargoCapacity: 35, speed: 165, turnRate: 2.0, accel: 38 },
+    stats: { hull: 75, armor: 67, cargoCapacity: 35, speed: 165, turnRate: 2.0, accel: 38 },
     hardpoints: [{ id: 'fwd1', position: [0, 0.2, 10], type: 'laser' }],
     accessorySlots: 2,
     hull: {
@@ -396,7 +396,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'explorer',
     price: 26000,
     droneBays: 1,
-    stats: { hull: 85, shields: 60, armor: 18, cargoCapacity: 50, speed: 155, turnRate: 1.7, accel: 32 },
+    stats: { hull: 85, armor: 78, cargoCapacity: 50, speed: 155, turnRate: 1.7, accel: 32 },
     hardpoints: [
       { id: 'fwd1', position: [0, 0.25, 11], type: 'laser' },
       { id: 'fwd2', position: [0, -0.1, 10], type: 'missile' }
@@ -429,7 +429,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'explorer',
     price: 38000,
     droneBays: 2,
-    stats: { hull: 100, shields: 70, armor: 22, cargoCapacity: 70, speed: 145, turnRate: 1.55, accel: 30 },
+    stats: { hull: 100, armor: 92, cargoCapacity: 70, speed: 145, turnRate: 1.55, accel: 30 },
     hardpoints: [
       { id: 'fwd1', position: [-0.8, 0.2, 12], type: 'laser' },
       { id: 'fwd2', position: [0.8, 0.2, 12], type: 'laser' }
@@ -459,7 +459,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'explorer',
     price: 52000,
     droneBays: 2,
-    stats: { hull: 120, shields: 85, armor: 30, cargoCapacity: 90, speed: 135, turnRate: 1.4, accel: 26 },
+    stats: { hull: 120, armor: 115, cargoCapacity: 90, speed: 135, turnRate: 1.4, accel: 26 },
     hardpoints: [
       { id: 'fwd1', position: [0, 0.3, 14], type: 'laser' },
       { id: 'fwd2', position: [0, -0.15, 12], type: 'missile' }
@@ -490,7 +490,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'fighter',
     price: 30000,
     droneBays: 1,
-    stats: { hull: 65, shields: 75, armor: 12, cargoCapacity: 12, speed: 210, turnRate: 2.9, accel: 58 },
+    stats: { hull: 65, armor: 87, cargoCapacity: 12, speed: 210, turnRate: 2.9, accel: 58 },
     hardpoints: [
       { id: 'fwd1', position: [-0.9, 0, 8.5], type: 'laser' },
       { id: 'fwd2', position: [0.9, 0, 8.5], type: 'laser' }
@@ -520,7 +520,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'fighter',
     price: 40000,
     droneBays: 1,
-    stats: { hull: 80, shields: 90, armor: 20, cargoCapacity: 15, speed: 195, turnRate: 2.5, accel: 48 },
+    stats: { hull: 80, armor: 110, cargoCapacity: 15, speed: 195, turnRate: 2.5, accel: 48 },
     hardpoints: [
       { id: 'fwd1', position: [-1.1, 0, 9], type: 'laser' },
       { id: 'fwd2', position: [1.1, 0, 9], type: 'missile' }
@@ -549,11 +549,11 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'skyhook',
-    name: 'Skyhook',
+    name: 'Derrick',
     role: 'fighter',
     price: 48000,
     droneBays: 1,
-    stats: { hull: 95, shields: 95, armor: 28, cargoCapacity: 18, speed: 175, turnRate: 2.3, accel: 42 },
+    stats: { hull: 95, armor: 123, cargoCapacity: 18, speed: 175, turnRate: 2.3, accel: 42 },
     hardpoints: [
       { id: 'fwd1', position: [-1.3, 0.1, 9.5], type: 'laser' },
       { id: 'fwd2', position: [1.3, 0.1, 9.5], type: 'laser' },
@@ -584,7 +584,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'trader',
     price: 28000,
     droneBays: 1,
-    stats: { hull: 140, shields: 40, armor: 45, cargoCapacity: 160, speed: 75, turnRate: 0.95, accel: 16 },
+    stats: { hull: 140, armor: 85, cargoCapacity: 160, speed: 75, turnRate: 0.95, accel: 16 },
     hardpoints: [{ id: 'fwd1', position: [0, 0.4, 11], type: 'laser' }],
     accessorySlots: 2,
     hull: {
@@ -610,7 +610,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'trader',
     price: 36000,
     droneBays: 1,
-    stats: { hull: 170, shields: 35, armor: 55, cargoCapacity: 220, speed: 65, turnRate: 0.8, accel: 12 },
+    stats: { hull: 170, armor: 90, cargoCapacity: 220, speed: 65, turnRate: 0.8, accel: 12 },
     hardpoints: [
       { id: 'fwd1', position: [0, 0.5, 13], type: 'laser' },
       { id: 'fwd2', position: [0, -0.2, 10], type: 'missile' }
@@ -639,7 +639,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'trader',
     price: 48000,
     droneBays: 2,
-    stats: { hull: 160, shields: 55, armor: 50, cargoCapacity: 200, speed: 85, turnRate: 1.05, accel: 18 },
+    stats: { hull: 160, armor: 105, cargoCapacity: 200, speed: 85, turnRate: 1.05, accel: 18 },
     hardpoints: [
       { id: 'fwd1', position: [-1.2, 0.3, 12], type: 'laser' },
       { id: 'fwd2', position: [1.2, 0.3, 12], type: 'laser' }
@@ -669,7 +669,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     role: 'trader',
     price: 62000,
     droneBays: 2,
-    stats: { hull: 190, shields: 60, armor: 65, cargoCapacity: 280, speed: 70, turnRate: 0.85, accel: 14 },
+    stats: { hull: 190, armor: 125, cargoCapacity: 280, speed: 70, turnRate: 0.85, accel: 14 },
     hardpoints: [
       { id: 'fwd1', position: [0, 0.45, 14], type: 'laser' },
       { id: 'fwd2', position: [0, -0.25, 11], type: 'missile' }
@@ -694,18 +694,18 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     }
   },
 
-  // --- Mining hulls (role: miner) — huge ore holds, tiny cargo, weak combat ---
+  // --- Salvage hulls (role: miner) — huge holds, tiny cargo, weak in a fight ---
   // miningCapacity set explicitly (200 → 2000). cargoCapacity is final (no scale
   // pass); max 40. Small hulls: 0 accessory slots; larger: 1. Slow and fragile.
   // Prices scale super-linearly with hold size — big rigs are late-game buys.
   {
     id: 'ore_skiff',
-    name: 'Ore Skiff',
+    name: 'Scrap Skiff',
     role: 'miner',
     price: 14000,
     droneBays: 0,
     stats: {
-      hull: 48, shields: 16, armor: 8, cargoCapacity: 12, miningCapacity: 200,
+      hull: 48, armor: 24, cargoCapacity: 12, miningCapacity: 200,
       speed: 58, turnRate: 0.72, accel: 12
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.2, 7.5], type: 'laser' }],
@@ -732,12 +732,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'lode_seeker',
-    name: 'Lode Seeker',
+    name: 'Wreck Seeker',
     role: 'miner',
     price: 28000,
     droneBays: 0,
     stats: {
-      hull: 58, shields: 18, armor: 10, cargoCapacity: 16, miningCapacity: 450,
+      hull: 58, armor: 28, cargoCapacity: 16, miningCapacity: 450,
       speed: 52, turnRate: 0.65, accel: 11
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.25, 8.5], type: 'laser' }],
@@ -770,7 +770,7 @@ const HAND_CRAFTED_SHIP_CLASSES = [
     price: 48000,
     droneBays: 0,
     stats: {
-      hull: 68, shields: 20, armor: 12, cargoCapacity: 20, miningCapacity: 700,
+      hull: 68, armor: 32, cargoCapacity: 20, miningCapacity: 700,
       speed: 48, turnRate: 0.58, accel: 10
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.3, 9.5], type: 'laser' }],
@@ -799,12 +799,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'rockhound',
-    name: 'Rockhound',
+    name: 'Hull Hound',
     role: 'miner',
     price: 75000,
     droneBays: 0,
     stats: {
-      hull: 78, shields: 22, armor: 14, cargoCapacity: 24, miningCapacity: 950,
+      hull: 78, armor: 36, cargoCapacity: 24, miningCapacity: 950,
       speed: 45, turnRate: 0.52, accel: 9
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.3, 10.5], type: 'laser' }],
@@ -832,12 +832,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'strip_miner',
-    name: 'Strip Miner',
+    name: 'Stripper',
     role: 'miner',
     price: 120000,
     droneBays: 0,
     stats: {
-      hull: 90, shields: 24, armor: 16, cargoCapacity: 28, miningCapacity: 1200,
+      hull: 90, armor: 40, cargoCapacity: 28, miningCapacity: 1200,
       speed: 42, turnRate: 0.48, accel: 8
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.35, 11.5], type: 'laser' }],
@@ -865,12 +865,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'deep_vein',
-    name: 'Deep Vein',
+    name: 'Deep Diver',
     role: 'miner',
     price: 185000,
     droneBays: 0,
     stats: {
-      hull: 100, shields: 26, armor: 18, cargoCapacity: 32, miningCapacity: 1500,
+      hull: 100, armor: 44, cargoCapacity: 32, miningCapacity: 1500,
       speed: 40, turnRate: 0.45, accel: 8
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.4, 12.5], type: 'laser' }],
@@ -898,12 +898,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'extraction_rig',
-    name: 'Extraction Rig',
+    name: 'Salvage Rig',
     role: 'miner',
     price: 280000,
     droneBays: 1,
     stats: {
-      hull: 115, shields: 28, armor: 20, cargoCapacity: 36, miningCapacity: 1750,
+      hull: 115, armor: 48, cargoCapacity: 36, miningCapacity: 1750,
       speed: 37, turnRate: 0.42, accel: 7
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.4, 13.5], type: 'laser' }],
@@ -933,12 +933,12 @@ const HAND_CRAFTED_SHIP_CLASSES = [
   },
   {
     id: 'motherlode',
-    name: 'Motherlode',
+    name: 'Mother Ship',
     role: 'miner',
     price: 420000,
     droneBays: 1,
     stats: {
-      hull: 130, shields: 30, armor: 22, cargoCapacity: 40, miningCapacity: 2000,
+      hull: 130, armor: 52, cargoCapacity: 40, miningCapacity: 2000,
       speed: 34, turnRate: 0.38, accel: 6
     },
     hardpoints: [{ id: 'fwd1', position: [0, 0.45, 14.5], type: 'laser' }],
@@ -1014,14 +1014,14 @@ const GENERATED_SHIP_CLASSES = generateShipClassRoster(mulberry32(SHIP_ROSTER_SE
 export const ALIEN_SHIP_CLASSES = [
   {
     id: 'void_cyst',
-    name: 'Void Cyst',
+    name: 'Drowned Hulk',
     role: 'fighter',
     price: 48000,
     alien: true,
     npcOnly: true,
     faction: 'alien',
     droneBays: 0,
-    stats: { hull: 85, shields: 95, armor: 15, cargoCapacity: 12, speed: 200, turnRate: 2.6, accel: 50 },
+    stats: { hull: 85, armor: 110, cargoCapacity: 12, speed: 200, turnRate: 2.6, accel: 50 },
     hardpoints: [
       { id: 'fwd1', position: [-0.8, 0.4, 7.5], type: 'laser' },
       { id: 'fwd2', position: [0.8, 0.4, 7.5], type: 'laser' }
@@ -1056,14 +1056,14 @@ export const ALIEN_SHIP_CLASSES = [
   },
   {
     id: 'spine_skimmer',
-    name: 'Spine Skimmer',
+    name: 'Grey Skimmer',
     role: 'fighter',
     price: 62000,
     alien: true,
     npcOnly: true,
     faction: 'alien',
     droneBays: 0,
-    stats: { hull: 65, shields: 70, armor: 8, cargoCapacity: 8, speed: 260, turnRate: 3.1, accel: 62 },
+    stats: { hull: 65, armor: 78, cargoCapacity: 8, speed: 260, turnRate: 3.1, accel: 62 },
     hardpoints: [
       { id: 'fwd1', position: [0, 0.2, 11], type: 'laser' },
       { id: 'fwd2', position: [0, -0.3, 10.5], type: 'missile' }
@@ -1099,14 +1099,14 @@ export const ALIEN_SHIP_CLASSES = [
   },
   {
     id: 'chor_lathe',
-    name: 'Chor Lathe',
+    name: 'Blockade Runner',
     role: 'explorer',
     price: 88000,
     alien: true,
     npcOnly: true,
     faction: 'alien',
     droneBays: 1,
-    stats: { hull: 140, shields: 100, armor: 35, cargoCapacity: 35, speed: 140, turnRate: 1.6, accel: 32 },
+    stats: { hull: 140, armor: 135, cargoCapacity: 35, speed: 140, turnRate: 1.6, accel: 32 },
     hardpoints: [
       { id: 'fwd1', position: [-1.5, 0.5, 8], type: 'laser' },
       { id: 'fwd2', position: [1.5, 0.5, 8], type: 'laser' },
@@ -1143,14 +1143,14 @@ export const ALIEN_SHIP_CLASSES = [
   },
   {
     id: 'zealot_carapace',
-    name: 'Zealot Carapace',
+    name: 'Dreadnought',
     role: 'fighter',
     price: 125000,
     alien: true,
     npcOnly: true,
     faction: 'alien',
     droneBays: 1,
-    stats: { hull: 220, shields: 120, armor: 70, cargoCapacity: 28, speed: 100, turnRate: 1.2, accel: 24 },
+    stats: { hull: 220, armor: 190, cargoCapacity: 28, speed: 100, turnRate: 1.2, accel: 24 },
     hardpoints: [
       { id: 'fwd1', position: [-1.8, 0.6, 9], type: 'laser' },
       { id: 'fwd2', position: [1.8, 0.6, 9], type: 'laser' },
@@ -1214,6 +1214,49 @@ export const SHIP_CLASSES = [
   ...GENERATED_SHIP_CLASSES,
   ...ALIEN_SHIP_CLASSES
 ]
+
+/**
+ * Water is not vacuum. The inherited stat blocks were tuned for spacecraft
+ * crossing a star system, which on an 80 km sea reads as every hull doing
+ * several boat-lengths a second. One scale here beats editing a hundred stat
+ * blocks, and keeps the relative ordering the balance pass depends on.
+ *
+ * ponytail: single global divisor. Split it per role if planing hulls and
+ * loaded freighters need to diverge by more than their authored ratio.
+ */
+const SPEED_SCALE = 0.2
+/** Turning is what makes a boat feel like a boat — slower than the speed cut. */
+const TURN_SCALE = 0.55
+const ACCEL_SCALE = 0.3
+
+for (const c of SHIP_CLASSES) {
+  if (!c?.stats) continue
+  c.stats.speed = Math.max(4, Math.round(c.stats.speed * SPEED_SCALE))
+  c.stats.turnRate = Math.max(0.15, +(c.stats.turnRate * TURN_SCALE).toFixed(3))
+  c.stats.accel = Math.max(1, +(c.stats.accel * ACCEL_SCALE).toFixed(2))
+}
+
+/**
+ * Hulls authored for space carry swept wings and fins. The lofter's "wing" is
+ * just a flat slab bolted to a station, so held low, short and level it reads
+ * as a sponson or a rubbing strake — swept or raised, it reads as an aircraft.
+ * The generated roster already emits them that way (procgen/shipRoster.js);
+ * this brings the hand-authored hulls into line without redrawing all of them.
+ */
+for (const c of SHIP_CLASSES) {
+  const hull = c?.hull
+  if (!hull?.wings?.length) continue
+  const beam = Math.max(...hull.stationWidths)
+  hull.wings = hull.wings.map((w) => ({
+    ...w,
+    span: Math.min(w.span, beam * 1.3),
+    sweep: Math.max(-0.15, Math.min(0.15, w.sweep ?? 0)),
+    thickness: Math.min(w.thickness ?? 0.2, 0.26),
+    tipOffsetY: Math.max(-0.12, Math.min(0.05, w.tipOffsetY ?? 0)),
+    // Aerials belong on a mast, not hanging off a sponson underwater.
+    tipAerial: false
+  }))
+}
 
 // One-shot cargo pass — hand-crafted, generated, and alien hulls (not miners).
 for (const c of SHIP_CLASSES) {

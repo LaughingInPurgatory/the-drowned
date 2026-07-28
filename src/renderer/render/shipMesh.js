@@ -143,11 +143,14 @@ function defaultStyle(hull, rng) {
  * Optional zFrac (fraction of length along +Z) and size (relative to peakWidth).
  */
 function addRadarDish(group, mats, peakWidth, peakHeight, length, mount, opts = {}) {
-  const z = (opts.zFrac ?? 0.22) * length
+  const z = opts.zAbs ?? (opts.zFrac ?? 0.22) * length
   const size = peakWidth * (opts.size ?? 0.13)
   const mastH = peakHeight * (opts.mastScale ?? 0.35)
   const xOff = opts.x ?? 0
   const yOff = opts.y ?? 0
+  // yAbs mounts the dish at a given height instead of on the hull surface —
+  // used to put it on the crosstrees where a boat's radar actually lives.
+  const topY = opts.yAbs ?? peakHeight * 0.92
 
   const addOne = (mastPos, dishPos, dishRot) => {
     const mast = new THREE.Mesh(
@@ -178,8 +181,8 @@ function addRadarDish(group, mats, peakWidth, peakHeight, length, mount, opts = 
   }
 
   if (mount === 'top') {
-    const root = new THREE.Vector3(xOff, peakHeight * 0.92, z)
-    const tip = new THREE.Vector3(xOff, peakHeight * 0.92 + mastH, z)
+    const root = new THREE.Vector3(xOff, topY, z)
+    const tip = new THREE.Vector3(xOff, topY + mastH, z)
     addOne(root, tip, { x: -Math.PI / 3, y: 0, z: 0 })
   } else if (mount === 'bottom') {
     const root = new THREE.Vector3(xOff, -peakHeight * 0.92, z)
@@ -265,624 +268,558 @@ export function getEngineNozzleLocals(hull) {
   return offsets.map(([x, y]) => ({ x, y, z }))
 }
 
-/** Forward-pointing aerial at the tip of a ventral (underside) wing. */
-function addVentralWingAerials(group, hull, mats) {
-  const { length, stationWidths, stationHeights, wings = [], stationOffsetsX, stationOffsetsY } = hull
-  const n = stationWidths.length
-  for (const w of wings) {
-    if (w.side !== 'bottom' && w.side !== 'ventral') continue
-    if (!w.tipAerial) continue
-    const i = Math.max(0, Math.min(n - 1, w.atStation ?? 0))
-    const zc = -length / 2 + (length * i) / Math.max(1, n - 1)
-    const rootH = stationHeights[i]
-    const rootOy = stationOffsetsY?.[i] ?? 0
-    const rootOx = stationOffsetsX?.[i] ?? 0
-    const tipY = rootOy - rootH - (w.span ?? 1)
-    const tipZ = zc + (w.sweep ?? 0)
-    const tipX = rootOx + (w.tipOffsetX ?? 0)
-    // Mast base at tip, boom aims +Z (ship forward / nose).
-    const aerialLen = Math.max(1.2, length * 0.14)
-    const boom = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.035, 0.05, aerialLen, 6),
-      mats.antenna
-    )
-    boom.rotation.x = Math.PI / 2 // cylinder Y → +Z after rot
-    boom.position.set(tipX, tipY, tipZ + aerialLen * 0.5)
-    group.add(boom)
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.07, 8, 6), mats.antenna)
-    tip.position.set(tipX, tipY, tipZ + aerialLen)
-    group.add(tip)
-    // Small root fairing where aerial meets the wing tip.
-    const fairing = new THREE.Mesh(
-      new THREE.BoxGeometry(0.22, 0.16, 0.28),
-      mats.structure
-    )
-    fairing.position.set(tipX, tipY, tipZ)
-    group.add(fairing)
-  }
-}
 
 // Cosmetic details on the parametric hull — canopy, engines, radiators,
 // greebles, cargo. Seeded per class id so every ship of a class matches.
 // style.visualKit (0–31) + platingStyle branch layout so same-role hulls diverge.
-function addHullDetails(group, hull, mats) {
+/**
+ * Everything above the sheer line.
+ *
+ * The hull itself is lofted from station lines (procgen/hull.js) and already
+ * reads as a boat. What makes it read as a *working* boat is what is bolted to
+ * the deck: a wheelhouse, a stack, a mast with a radar on it, railings you
+ * could fall over, and whatever gear the trade calls for. That is all this is.
+ *
+ * Everything here is positioned relative to the sheer (the top of the hull at
+ * that station), so it sits on the deck regardless of how the hull was lofted.
+ */
+function addHullDetails(group, hull, mats, role = 'trader') {
   const rng = mulberry32(hashString(group.name))
   const { length, stationWidths, stationHeights } = hull
-  const peakWidth = Math.max(...stationWidths)
-  const peakHeight = Math.max(...stationHeights)
+  const beam = Math.max(...stationWidths)
+  const depth = Math.max(...stationHeights)
   const style = defaultStyle(hull, rng)
-  const kit = Number.isFinite(style.visualKit)
-    ? style.visualKit
-    : hashString(group.name) % 32
-  const plating =
-    style.platingStyle ||
-    ['belts', 'sparse', 'spine', 'sponsons', 'scales', 'ribs', 'clamshell', 'lattice'][kit % 8]
-  addVentralWingAerials(group, hull, mats)
-  // Asymmetric: full bridge offset. Symmetric: stay centered (or tiny noise only never).
-  const bridgeX = style.asymmetric ? style.bridgeSide * peakWidth * 0.32 : 0
-  const density = (style.detailDensity ?? 1) * (0.75 + (kit % 7) * 0.07)
+  const kit = Number.isFinite(style.visualKit) ? style.visualKit : hashString(group.name) % 32
+  const last = stationWidths.length - 1
 
-  // —— Plating families: structural identity within a role ——
-  if (plating === 'belts' || plating === 'sparse') {
-    const bandCount = Math.round(
-      (plating === 'sparse' ? 2 + (kit % 3) : 4 + (kit % 5) + Math.floor(rng() * 4)) * density
-    )
-    for (let i = 0; i < bandCount; i++) {
-      const z = -length * 0.38 + (i / Math.max(1, bandCount - 1)) * length * 0.76
-      const yOff = (i % 3 === 0 ? 0.35 : i % 3 === 1 ? 0.12 : -0.28) * peakHeight
-      const band = new THREE.Mesh(
-        new THREE.BoxGeometry(peakWidth * (1.05 + (i % 2) * 0.08), peakHeight * 0.05, length * 0.032),
-        i % 2 === 0 ? mats.panel : mats.structure
-      )
-      band.position.set(bridgeX * 0.12, yOff, z)
-      group.add(band)
-    }
-  }
-  if (plating === 'spine' || plating === 'ribs') {
-    // Dorsal spine ridge.
-    const spine = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.18, peakHeight * (0.35 + (kit % 4) * 0.08), length * 0.7),
-      mats.structure
-    )
-    spine.position.set(bridgeX * 0.2, peakHeight * 0.55, length * 0.02)
-    group.add(spine)
-    if (plating === 'ribs') {
-      const ribN = 5 + (kit % 5)
-      for (let i = 0; i < ribN; i++) {
-        const z = -length * 0.3 + (i / Math.max(1, ribN - 1)) * length * 0.6
-        const rib = new THREE.Mesh(
-          new THREE.BoxGeometry(peakWidth * 1.08, peakHeight * 0.12, length * 0.04),
-          mats.panel
-        )
-        rib.position.set(0, peakHeight * 0.15, z)
-        group.add(rib)
-      }
-    }
-  }
-  if (plating === 'sponsons' || plating === 'clamshell') {
-    for (const sx of [-1, 1]) {
-      const spo = new THREE.Mesh(
-        new THREE.BoxGeometry(
-          peakWidth * (0.35 + (kit % 3) * 0.08),
-          peakHeight * (plating === 'clamshell' ? 0.55 : 0.4),
-          length * (0.35 + (kit % 4) * 0.06)
-        ),
-        mats.panel
-      )
-      spo.position.set(
-        sx * peakWidth * (0.75 + (kit % 3) * 0.05),
-        plating === 'clamshell' ? peakHeight * 0.05 : -peakHeight * 0.1,
-        length * (0.05 - (kit % 5) * 0.02)
-      )
-      group.add(spo)
-    }
-  }
-  if (plating === 'scales') {
-    const rows = 3 + (kit % 3)
-    const cols = 4 + (kit % 4)
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        const scale = new THREE.Mesh(
-          new THREE.BoxGeometry(peakWidth * 0.22, peakHeight * 0.06, length * 0.08),
-          r % 2 === 0 ? mats.panel : mats.structure
-        )
-        scale.position.set(
-          (c - (cols - 1) / 2) * peakWidth * 0.28,
-          peakHeight * (0.35 + r * 0.12),
-          -length * 0.25 + r * length * 0.12 + c * length * 0.02
-        )
-        group.add(scale)
-      }
-    }
-  }
-  if (plating === 'lattice') {
-    for (let i = 0; i < 6 + (kit % 4); i++) {
-      const beam = new THREE.Mesh(
-        new THREE.BoxGeometry(peakWidth * 0.04, peakHeight * 0.04, length * 0.55),
-        mats.structure
-      )
-      beam.position.set(
-        (i % 2 === 0 ? -1 : 1) * peakWidth * (0.4 + (i % 3) * 0.15),
-        (Math.floor(i / 2) - 1) * peakHeight * 0.25,
-        length * 0.05
-      )
-      beam.rotation.y = (i % 3 - 1) * 0.12
-      group.add(beam)
-    }
-  }
-  // Side keel rails (always — subtle structure).
-  for (const sx of [-1, 1]) {
-    const rail = new THREE.Mesh(
-      new THREE.BoxGeometry(
-        peakWidth * (0.05 + (kit % 3) * 0.015),
-        peakHeight * 0.08,
-        length * (0.45 + (kit % 4) * 0.05)
-      ),
-      mats.structure
-    )
-    rail.position.set(sx * peakWidth * 0.92, -peakHeight * (0.1 + (kit % 3) * 0.05), length * 0.02)
-    group.add(rail)
+  const add = (mesh) => {
+    mesh.castShadow = true
+    group.add(mesh)
+    return mesh
   }
 
-  // Bridge / cockpit canopy — dorsal (top) or ventral (bottom) mount.
-  // Bottom cockpits flip the dome under the belly for a gunship/dropship look.
-  const cockpitBottom = style.cockpitMount === 'bottom' || style.cockpitMount === 'ventral'
-  const cockpitYSign = cockpitBottom ? -1 : 1
-  const canopyScale =
-    kit % 4 === 0 ? [1.35, 0.42, 1.5] : kit % 4 === 1 ? [0.9, 0.65, 2.2] : kit % 4 === 2 ? [1.15, 0.55, 1.7] : [1.08, 0.52, 1.9]
-  const canopyZ = length * (0.16 + (kit % 5) * 0.02)
-  const canopy = new THREE.Mesh(
-    new THREE.SphereGeometry(peakWidth * (0.28 + (kit % 3) * 0.04), 20, 14, 0, Math.PI * 2, 0, Math.PI / 2),
-    mats.canopy
+  /** Station index (0 = transom, last = bow) for a fraction along the hull. */
+  const stationAt = (f) => Math.max(0, Math.min(last, Math.round(f * last)))
+  /** Z of a fraction along the hull; -length/2 is the transom. */
+  const zAt = (f) => -length / 2 + f * length
+  /** Half-beam at a fraction along the hull. */
+  const halfBeamAt = (f) => stationWidths[stationAt(f)]
+  /** Deck height at a fraction along the hull — the top of the hull there. */
+  const deckAt = (f) => {
+    const i = stationAt(f)
+    const off = hull.stationOffsetsY?.[i] ?? 0
+    return stationHeights[i] + off
+  }
+
+  // —— Deck ————————————————————————————————————————————————————————
+  // A flat working surface spanning the hull. Without it you can see straight
+  // down into an open shell, which is the single biggest tell of a fuselage.
+  {
+    const deckSegs = 10
+    const pts = []
+    for (let i = 0; i <= deckSegs; i++) {
+      const f = i / deckSegs
+      pts.push(new THREE.Vector2(Math.max(0.02, halfBeamAt(f) * 0.94), zAt(f)))
+    }
+    const shape = new THREE.Shape()
+    shape.moveTo(pts[0].x, pts[0].y)
+    for (const p of pts) shape.lineTo(p.x, p.y)
+    for (let i = pts.length - 1; i >= 0; i--) shape.lineTo(-pts[i].x, pts[i].y)
+    shape.closePath()
+    const deck = new THREE.Mesh(new THREE.ShapeGeometry(shape), mats.panel)
+    deck.rotation.x = -Math.PI / 2
+    deck.position.y = deckAt(0.5) * 0.96
+    deck.receiveShadow = true
+    group.add(deck)
+  }
+
+  // —— Wheelhouse ——————————————————————————————————————————————————
+  // Where it sits is most of a vessel's silhouette: a trawler works its deck
+  // forward of an aft house; a freighter keeps the house right aft over the
+  // engine; a fast boat puts it amidships.
+  const housePos =
+    role === 'trader' ? 0.22 : role === 'fighter' ? 0.44 : role === 'miner' ? 0.26 : 0.38
+  const houseZ = zAt(housePos)
+  const houseDeck = deckAt(housePos)
+  const houseW = halfBeamAt(housePos) * (1.05 + rng() * 0.3)
+  const houseL = length * (0.1 + rng() * 0.07)
+  const houseH = depth * (0.85 + rng() * 0.6)
+
+  const house = add(
+    new THREE.Mesh(new THREE.BoxGeometry(houseW * 2, houseH, houseL), mats.structure)
   )
-  canopy.scale.set(canopyScale[0], canopyScale[1], canopyScale[2])
-  if (cockpitBottom) canopy.rotation.z = Math.PI // dome faces down
-  canopy.position.set(bridgeX, cockpitYSign * peakHeight * 0.8, canopyZ)
-  group.add(canopy)
-  // Canopy frame ribs.
-  for (let i = 0; i < 4; i++) {
-    const rib = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.02, peakHeight * 0.28, peakWidth * 0.35),
-      mats.structure
+  house.position.set(0, houseDeck + houseH * 0.5, houseZ)
+
+  // Bridge windows — a band right round the front and sides.
+  {
+    const bandH = houseH * 0.3
+    const bandY = houseDeck + houseH * 0.74
+    const front = add(
+      new THREE.Mesh(new THREE.BoxGeometry(houseW * 1.92, bandH, houseL * 0.06), mats.window)
     )
-    rib.position.set(
-      bridgeX + (i - 1.5) * peakWidth * 0.12,
-      cockpitYSign * peakHeight * 0.78,
-      length * 0.22
-    )
-    group.add(rib)
+    front.position.set(0, bandY, houseZ + houseL * 0.5)
+    for (const sx of [-1, 1]) {
+      const sideWin = add(
+        new THREE.Mesh(new THREE.BoxGeometry(houseW * 0.06, bandH, houseL * 0.72), mats.window)
+      )
+      sideWin.position.set(sx * houseW, bandY, houseZ)
+    }
   }
 
-  // Framed window strip near the canopy (reads as a bridge).
-  const windowCount = 5 + Math.floor(rng() * 5)
-  for (let i = 0; i < windowCount; i++) {
-    const w = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.07, peakHeight * 0.06, peakWidth * 0.05),
-      mats.window
+  // Cabin roof — a lip over the windows, and a step-down upper deck on bigger
+  // hulls so the house is not one plain block.
+  {
+    const roof = add(
+      new THREE.Mesh(
+        new THREE.BoxGeometry(houseW * 2.15, houseH * 0.07, houseL * 1.12),
+        mats.panel
+      )
     )
-    w.position.set(
-      bridgeX + (i - (windowCount - 1) / 2) * peakWidth * 0.095,
-      cockpitYSign * peakHeight * 0.64,
-      length * 0.28
-    )
-    group.add(w)
+    roof.position.set(0, houseDeck + houseH, houseZ)
+    if (beam > length * 0.06 || rng() < 0.5) {
+      const upper = add(
+        new THREE.Mesh(
+          new THREE.BoxGeometry(houseW * 1.25, houseH * 0.5, houseL * 0.6),
+          mats.structure
+        )
+      )
+      upper.position.set(0, houseDeck + houseH * 1.25, houseZ - houseL * 0.08)
+    }
   }
-  // Second window row aft of bridge.
-  if (rng() < 0.75) {
+
+  // —— Funnel ——————————————————————————————————————————————————————
+  // Aft of the house, raked back. Diesel has to go somewhere.
+  {
+    const fz = houseZ - houseL * (0.75 + rng() * 0.4)
+    const fr = depth * (0.16 + rng() * 0.1)
+    const fh = depth * (0.7 + rng() * 0.7)
+    const funnel = add(
+      new THREE.Mesh(new THREE.CylinderGeometry(fr * 0.86, fr, fh, 10), mats.nacelle)
+    )
+    funnel.position.set(0, deckAt(housePos) + fh * 0.5, fz)
+    funnel.rotation.x = -0.1
+    // Painted band — the one bit of colour most working boats carry.
+    const band = add(
+      new THREE.Mesh(new THREE.CylinderGeometry(fr * 1.04, fr * 1.04, fh * 0.2, 10), mats.accent)
+    )
+    band.position.set(0, deckAt(housePos) + fh * 0.78, fz + fh * 0.03)
+    band.rotation.x = -0.1
+    // Soot-black cap.
+    const cap = add(
+      new THREE.Mesh(new THREE.CylinderGeometry(fr * 0.9, fr * 0.9, fh * 0.06, 10), mats.hardpoint)
+    )
+    cap.position.set(0, deckAt(housePos) + fh, fz - fh * 0.05)
+  }
+
+  // —— Mast ————————————————————————————————————————————————————————
+  // Stepped just forward of the house, with crosstrees and a masthead light.
+  const mastZ = houseZ + houseL * 0.5
+  const mastBase = deckAt(housePos) + houseH * 1.05
+  const mastH = depth * (1.5 + rng() * 1.2)
+  {
+    const mast = add(
+      new THREE.Mesh(
+        new THREE.CylinderGeometry(beam * 0.022, beam * 0.03, mastH, 6),
+        mats.antenna
+      )
+    )
+    mast.position.set(0, mastBase + mastH * 0.5, mastZ)
+    const cross = add(
+      new THREE.Mesh(
+        new THREE.BoxGeometry(beam * 0.9, beam * 0.03, beam * 0.05),
+        mats.antenna
+      )
+    )
+    cross.position.set(0, mastBase + mastH * 0.62, mastZ)
+    // Stays running down to the deck — cheap, and they read as rigging.
+    for (const sx of [-1, 1]) {
+      const stay = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.006, beam * 0.006, mastH * 0.92, 4),
+          mats.antenna
+        )
+      )
+      stay.position.set(sx * beam * 0.3, mastBase + mastH * 0.42, mastZ - beam * 0.1)
+      stay.rotation.z = sx * 0.32
+      stay.rotation.x = 0.14
+    }
+    // Masthead and sidelights.
+    const masthead = add(
+      new THREE.Mesh(new THREE.SphereGeometry(beam * 0.035, 8, 6), mats.window)
+    )
+    masthead.position.set(0, mastBase + mastH, mastZ)
+    for (const sx of [-1, 1]) {
+      const nav = add(new THREE.Mesh(new THREE.SphereGeometry(beam * 0.028, 6, 5), mats.window))
+      nav.position.set(sx * beam * 0.45, mastBase + mastH * 0.62, mastZ)
+    }
+  }
+
+  // Radar on the crosstrees, where it belongs.
+  addRadarDish(group, mats, beam, depth, length, 'top', {
+    x: 0,
+    yAbs: mastBase + mastH * 0.66,
+    zAbs: mastZ,
+    size: 0.5 + rng() * 0.25,
+    mastScale: 0.06
+  })
+
+  // —— Railings ————————————————————————————————————————————————————
+  // A stanchion every so often with two rails through them. This is what makes
+  // the deck read as a place a person could stand.
+  {
+    const posts = 9 + (kit % 5)
+    const railY = deckAt(0.5) * 0.96
+    const stanchionH = depth * 0.3
+    for (let i = 0; i < posts; i++) {
+      const f = 0.06 + (i / (posts - 1)) * 0.86
+      const hb = halfBeamAt(f) * 0.94
+      if (hb < beam * 0.12) continue
+      for (const sx of [-1, 1]) {
+        const post = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.012, beam * 0.012, stanchionH, 4),
+            mats.antenna
+          )
+        )
+        post.position.set(sx * hb, railY + stanchionH * 0.5, zAt(f))
+      }
+    }
+    // Two horizontal rails per side, run as long thin boxes along the sheer.
+    for (const sx of [-1, 1]) {
+      for (const h of [0.55, 1.0]) {
+        const rail = add(
+          new THREE.Mesh(
+            new THREE.BoxGeometry(beam * 0.018, beam * 0.018, length * 0.78),
+            mats.antenna
+          )
+        )
+        rail.position.set(sx * halfBeamAt(0.5) * 0.94, railY + stanchionH * h, zAt(0.5))
+      }
+    }
+  }
+
+  // —— Bow gear ————————————————————————————————————————————————————
+  {
+    const bowF = 0.9
+    const bowDeck = deckAt(bowF)
+    // Anchor windlass.
+    const windlass = add(
+      new THREE.Mesh(
+        new THREE.CylinderGeometry(beam * 0.09, beam * 0.09, beam * 0.22, 8),
+        mats.nacelle
+      )
+    )
+    windlass.rotation.z = Math.PI / 2
+    windlass.position.set(0, bowDeck + beam * 0.09, zAt(bowF))
+    // Anchor stowed against the bow.
+    const anchor = add(
+      new THREE.Mesh(new THREE.BoxGeometry(beam * 0.06, depth * 0.3, depth * 0.1), mats.hardpoint)
+    )
+    anchor.position.set(halfBeamAt(0.95) * 0.9, bowDeck * 0.35, zAt(0.95))
+    // Bollards, fore and aft.
+    for (const f of [0.84, 0.14]) {
+      for (const sx of [-1, 1]) {
+        const bol = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.03, beam * 0.035, depth * 0.18, 6),
+            mats.nacelle
+          )
+        )
+        bol.position.set(sx * halfBeamAt(f) * 0.7, deckAt(f) + depth * 0.09, zAt(f))
+      }
+    }
+  }
+
+  // —— Fenders ——————————————————————————————————————————————————————
+  // Old tyres and rope bundles down the side. Nothing says "this boat comes
+  // alongside a lot" more cheaply.
+  {
+    const count = 3 + (kit % 3)
+    for (let i = 0; i < count; i++) {
+      const f = 0.3 + (i / Math.max(1, count - 1)) * 0.4
+      for (const sx of [-1, 1]) {
+        const fender = add(
+          new THREE.Mesh(
+            new THREE.TorusGeometry(depth * 0.16, depth * 0.055, 5, 9),
+            mats.hardpoint
+          )
+        )
+        fender.position.set(sx * halfBeamAt(f) * 1.0, deckAt(f) * 0.35, zAt(f))
+        fender.rotation.y = Math.PI / 2
+      }
+    }
+  }
+
+  // —— Trade gear ——————————————————————————————————————————————————
+  if (role === 'trader') {
+    // Deck cargo: stacked containers, lashed down forward of the house.
+    const rows = 2 + (kit % 3)
+    const cw = halfBeamAt(0.6) * 0.42
+    for (let r = 0; r < rows; r++) {
+      const f = 0.5 + r * 0.13
+      if (f > 0.82) break
+      const stack = 1 + (rng() < 0.45 ? 1 : 0)
+      for (let sIdx = 0; sIdx < stack; sIdx++) {
+        for (const sx of [-1, 1]) {
+          const box = add(
+            new THREE.Mesh(
+              new THREE.BoxGeometry(cw, depth * 0.42, length * 0.085),
+              sIdx % 2 === 0 ? mats.panel : mats.accent
+            )
+          )
+          box.position.set(
+            sx * cw * 0.55,
+            deckAt(f) * 0.96 + depth * 0.21 + sIdx * depth * 0.44,
+            zAt(f)
+          )
+        }
+      }
+    }
+    // Deck crane on the bigger hulls.
+    if (beam > length * 0.055) {
+      const craneBase = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.09, beam * 0.11, depth * 0.5, 8),
+          mats.structure
+        )
+      )
+      craneBase.position.set(0, deckAt(0.42) + depth * 0.25, zAt(0.42))
+      const jib = add(
+        new THREE.Mesh(
+          new THREE.BoxGeometry(beam * 0.06, beam * 0.06, length * 0.2),
+          mats.structure
+        )
+      )
+      jib.position.set(0, deckAt(0.42) + depth * 0.62, zAt(0.5))
+      jib.rotation.x = -0.42
+    }
+  }
+
+  // —— Gun boat gear ————————————————————————————————————————————————
+  if (role === 'fighter') {
+    // Forward gun tub — a ring of plate around a mount.
+    const tubF = 0.72
+    const tub = add(
+      new THREE.Mesh(
+        new THREE.CylinderGeometry(beam * 0.42, beam * 0.42, depth * 0.32, 10, 1, true),
+        mats.panel
+      )
+    )
+    tub.position.set(0, deckAt(tubF) + depth * 0.16, zAt(tubF))
+    const mount = add(
+      new THREE.Mesh(
+        new THREE.CylinderGeometry(beam * 0.16, beam * 0.2, depth * 0.3, 8),
+        mats.nacelle
+      )
+    )
+    mount.position.set(0, deckAt(tubF) + depth * 0.28, zAt(tubF))
+    // Ammo lockers along the deck.
     for (let i = 0; i < 3; i++) {
-      const w = new THREE.Mesh(
-        new THREE.BoxGeometry(peakWidth * 0.06, peakHeight * 0.05, peakWidth * 0.04),
-        mats.window
-      )
-      w.position.set(
-        bridgeX + (i - 1) * peakWidth * 0.1,
-        cockpitYSign * peakHeight * 0.55,
-        length * 0.12
-      )
-      group.add(w)
+      for (const sx of [-1, 1]) {
+        const locker = add(
+          new THREE.Mesh(
+            new THREE.BoxGeometry(beam * 0.16, depth * 0.22, length * 0.06),
+            mats.hardpoint
+          )
+        )
+        locker.position.set(
+          sx * halfBeamAt(0.55) * 0.62,
+          deckAt(0.55) * 0.96 + depth * 0.11,
+          zAt(0.5 + i * 0.07)
+        )
+      }
     }
+    // Splinter plating around the house.
+    const splinterPlate = add(
+      new THREE.Mesh(new THREE.BoxGeometry(houseW * 2.3, depth * 0.4, houseL * 1.25), mats.panel)
+    )
+    splinterPlate.position.set(0, houseDeck + depth * 0.2, houseZ)
   }
 
-  // Raised (or lowered) bridge tower for freighter / gunship silhouettes.
-  if (style.asymmetric || rng() < 0.4 || cockpitBottom) {
-    const tower = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.38, peakHeight * 0.6, peakWidth * 0.55),
-      mats.structure
+  // —— Explorer gear ————————————————————————————————————————————————
+  if (role === 'explorer') {
+    // Davits with a boat slung between them.
+    for (const sx of [-1, 1]) {
+      for (const dz of [-0.05, 0.07]) {
+        const davit = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.02, beam * 0.025, depth * 0.7, 5),
+            mats.antenna
+          )
+        )
+        davit.position.set(sx * halfBeamAt(0.35) * 0.95, deckAt(0.35) + depth * 0.35, zAt(0.35 + dz))
+        davit.rotation.z = sx * 0.25
+      }
+      const tender = add(
+        new THREE.Mesh(new THREE.BoxGeometry(beam * 0.16, depth * 0.2, length * 0.11), mats.panel)
+      )
+      tender.position.set(sx * halfBeamAt(0.35) * 1.05, deckAt(0.35) + depth * 0.42, zAt(0.36))
+    }
+    // Survey winch on the afterdeck.
+    const winch = add(
+      new THREE.Mesh(
+        new THREE.CylinderGeometry(beam * 0.11, beam * 0.11, beam * 0.26, 10),
+        mats.nacelle
+      )
     )
-    tower.position.set(bridgeX, cockpitYSign * peakHeight * 0.98, length * 0.04)
-    group.add(tower)
-    // Tower sensor blister.
-    const blister = new THREE.Mesh(
-      new THREE.SphereGeometry(peakWidth * 0.1, 10, 8),
-      mats.antenna
-    )
-    blister.position.set(bridgeX, cockpitYSign * peakHeight * 1.28, length * 0.04)
-    group.add(blister)
+    winch.rotation.z = Math.PI / 2
+    winch.position.set(0, deckAt(0.12) + beam * 0.11, zAt(0.12))
   }
 
-  // Engine nacelles + glow — real housings, not floating discs.
-  const layout = style.engineLayout ?? 'twin'
-  const offsets = engineOffsets(layout, peakWidth)
-  const engineR = peakHeight * (layout === 'quad' ? 0.26 : layout === 'single' ? 0.42 : 0.36) * (0.9 + (kit % 3) * 0.06)
-  const finCount = 5 + (kit % 5)
-  for (const [ox, oy] of offsets) {
-    const nacelle = new THREE.Mesh(
-      new THREE.CylinderGeometry(engineR * 0.95, engineR * 1.08, peakHeight * (0.85 + (kit % 4) * 0.06), 12),
-      mats.nacelle
+  // —— Salvage gear ————————————————————————————————————————————————
+  if (role === 'miner') {
+    // A-frame over the transom — the whole point of a salvage boat.
+    for (const sx of [-1, 1]) {
+      const leg = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.045, beam * 0.055, depth * 1.5, 6),
+          mats.structure
+        )
+      )
+      leg.position.set(sx * halfBeamAt(0.1) * 0.8, deckAt(0.1) + depth * 0.75, zAt(0.1))
+      leg.rotation.z = sx * 0.2
+      leg.rotation.x = -0.16
+    }
+    const head = add(
+      new THREE.Mesh(new THREE.BoxGeometry(beam * 1.3, beam * 0.07, beam * 0.09), mats.structure)
     )
-    nacelle.rotation.x = Math.PI / 2
-    nacelle.position.set(ox, oy, -length / 2 + peakHeight * 0.38)
-    group.add(nacelle)
-
-    // Cooling fins around nacelle (count varies by visual kit).
-    for (let f = 0; f < finCount; f++) {
-      const ang = (f / finCount) * Math.PI * 2 + 0.15
-      const fin = new THREE.Mesh(
-        new THREE.BoxGeometry(engineR * 0.07, engineR * (0.45 + (kit % 3) * 0.1), peakHeight * 0.55),
+    head.position.set(0, deckAt(0.1) + depth * 1.5, zAt(0.07))
+    // Dive platform off the transom.
+    const platform = add(
+      new THREE.Mesh(
+        new THREE.BoxGeometry(halfBeamAt(0.05) * 1.5, depth * 0.06, length * 0.07),
         mats.panel
       )
-      fin.position.set(
-        ox + Math.cos(ang) * engineR * 0.98,
-        oy + Math.sin(ang) * engineR * 0.98,
-        -length / 2 + peakHeight * 0.4
+    )
+    platform.position.set(0, deckAt(0.05) * 0.35, zAt(-0.01))
+    // Spoil bins amidships.
+    for (const sx of [-1, 1]) {
+      const bin = add(
+        new THREE.Mesh(
+          new THREE.BoxGeometry(halfBeamAt(0.4) * 0.5, depth * 0.4, length * 0.16),
+          mats.radiator
+        )
       )
-      fin.rotation.z = ang
-      group.add(fin)
-    }
-    // Nacelle ring clamps.
-    for (const zOff of [0.15, 0.55]) {
-      const ring = new THREE.Mesh(
-        new THREE.TorusGeometry(engineR * 1.05, engineR * 0.08, 6, 16),
-        mats.structure
-      )
-      ring.rotation.y = Math.PI / 2
-      ring.position.set(ox, oy, -length / 2 + peakHeight * zOff)
-      group.add(ring)
+      bin.position.set(sx * halfBeamAt(0.4) * 0.5, deckAt(0.4) * 0.96 + depth * 0.2, zAt(0.4))
     }
 
-    const bell = new THREE.Mesh(
-      new THREE.CylinderGeometry(engineR * 1.2, engineR * 0.7, peakHeight * 0.4, 14),
-      mats.structure
-    )
-    bell.rotation.x = Math.PI / 2
-    bell.position.set(ox, oy, -length / 2 - 0.06)
-    group.add(bell)
-
-    const glow = new THREE.Mesh(new THREE.CircleGeometry(engineR * 0.9, 20), mats.engineGlow)
-    glow.position.set(ox, oy, -length / 2 - peakHeight * 0.22)
-    glow.rotation.y = Math.PI
-    group.add(glow)
-
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(engineR * 0.6, peakHeight * 1.2, 12, 1, true),
-      mats.engineCone
-    )
-    cone.rotation.x = -Math.PI / 2
-    cone.position.set(ox, oy, -length / 2 - peakHeight * 0.58)
-    group.add(cone)
-
-    if (Math.abs(ox) > 0.05 || Math.abs(oy) > 0.05) {
-      const strutLen = Math.hypot(ox, oy)
-      const strut = new THREE.Mesh(
-        new THREE.BoxGeometry(strutLen, peakHeight * 0.14, peakHeight * 0.22),
-        mats.structure
+    // Deck crane — the thing that actually makes it a salvage boat. Slewing
+    // pedestal, lattice jib out over the working deck, hook on its fall.
+    {
+      const cf = 0.55
+      const base = deckAt(cf) * 0.96
+      const pedestal = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.13, beam * 0.17, depth * 0.55, 10),
+          mats.structure
+        )
       )
-      strut.position.set(ox * 0.5, oy * 0.5, -length / 2 + peakHeight * 0.52)
-      strut.rotation.z = Math.atan2(oy, ox)
-      group.add(strut)
-      // Strut brace plates.
-      const brace = new THREE.Mesh(
-        new THREE.BoxGeometry(strutLen * 0.45, peakHeight * 0.08, peakHeight * 0.35),
-        mats.panel
+      pedestal.position.set(0, base + depth * 0.28, zAt(cf))
+
+      const house = add(
+        new THREE.Mesh(
+          new THREE.BoxGeometry(beam * 0.34, depth * 0.42, length * 0.07),
+          mats.nacelle
+        )
       )
-      brace.position.set(ox * 0.35, oy * 0.35, -length / 2 + peakHeight * 0.62)
-      brace.rotation.z = Math.atan2(oy, ox)
-      group.add(brace)
+      house.position.set(0, base + depth * 0.72, zAt(cf))
+
+      // Jib, raked up and out over the transom where the work happens.
+      const jibLen = length * 0.4
+      const jib = add(
+        new THREE.Mesh(new THREE.BoxGeometry(beam * 0.1, beam * 0.1, jibLen), mats.accent)
+      )
+      jib.position.set(0, base + depth * 1.05, zAt(cf) - jibLen * 0.38)
+      jib.rotation.x = 0.34
+      // Lattice bracing, so it does not read as one solid bar.
+      for (let i = 0; i < 5; i++) {
+        const brace = add(
+          new THREE.Mesh(
+            new THREE.BoxGeometry(beam * 0.16, beam * 0.03, beam * 0.03),
+            mats.antenna
+          )
+        )
+        const t = (i / 4 - 0.5) * jibLen * 0.8
+        brace.position.set(0, base + depth * 1.05 + t * 0.34, zAt(cf) - jibLen * 0.38 - t)
+        brace.rotation.x = 0.34
+      }
+      // Fall and hook block hanging over the after deck.
+      const tipZ = zAt(cf) - jibLen * 0.86
+      const tipY = base + depth * 1.05 + jibLen * 0.32
+      const fall = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.012, beam * 0.012, depth * 1.1, 4),
+          mats.antenna
+        )
+      )
+      fall.position.set(0, tipY - depth * 0.55, tipZ)
+      const hook = add(
+        new THREE.Mesh(new THREE.BoxGeometry(beam * 0.11, depth * 0.16, beam * 0.11), mats.hardpoint)
+      )
+      hook.position.set(0, tipY - depth * 1.1, tipZ)
+    }
+
+    // Dive compressor and gas racks against the house.
+    for (let i = 0; i < 4; i++) {
+      const bottle = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.05, beam * 0.05, depth * 0.45, 8),
+          i % 2 === 0 ? mats.accent : mats.nacelle
+        )
+      )
+      bottle.position.set(
+        (i - 1.5) * beam * 0.13,
+        deckAt(0.3) * 0.96 + depth * 0.22,
+        zAt(0.3)
+      )
     }
   }
+}
 
-  // Heat radiators — flat dark panels (very "human spacecraft").
-  if (style.hasRadiator) {
-    const side = style.asymmetric ? (style.bridgeSide !== 0 ? style.bridgeSide : rng() < 0.5 ? -1 : 1) : 1
-    const radW = peakWidth * (0.95 + rng() * 0.65)
-    const radH = peakHeight * (0.07 + rng() * 0.06)
-    const radL = length * (0.3 + rng() * 0.22)
-    const rad = new THREE.Mesh(new THREE.BoxGeometry(radW, radH, radL), mats.radiator)
-    rad.position.set(side * (peakWidth * 0.55 + radW * 0.45), peakHeight * 0.15, -length * 0.05)
-    rad.rotation.z = side * 0.12
-    group.add(rad)
-    for (let i = 0; i < 9; i++) {
-      const rib = new THREE.Mesh(
-        new THREE.BoxGeometry(radW * 0.95, radH * 1.55, radL * 0.022),
-        mats.panel
-      )
-      rib.position.set(
-        side * (peakWidth * 0.55 + radW * 0.45),
-        peakHeight * 0.15,
-        -length * 0.05 + (i - 4) * (radL * 0.1)
-      )
-      group.add(rib)
-    }
-    // Second radiator plane (common on industrial hulls).
-    if (rng() < 0.55 || density > 1.5) {
-      const rad2 = new THREE.Mesh(
-        new THREE.BoxGeometry(radW * 0.7, radH * 0.9, radL * 0.65),
-        mats.radiator
-      )
-      rad2.position.set(
-        -side * (peakWidth * 0.5 + radW * 0.3),
-        peakHeight * 0.05,
-        -length * 0.12
-      )
-      rad2.rotation.z = -side * 0.1
-      group.add(rad2)
-    }
-  }
+/**
+ * The cheapest superstructure that still reads as a boat: a wheelhouse, a roof,
+ * a stack and a mast. Four meshes, no per-station work, no railings — used for
+ * NPC contacts where the full `addHullDetails` pass is too expensive to run a
+ * dozen times on one frame.
+ */
+function addLiteSuperstructure(group, hull, mats) {
+  const { length, stationWidths, stationHeights } = hull
+  const beam = Math.max(...stationWidths)
+  const depth = Math.max(...stationHeights)
+  const mid = Math.round(stationWidths.length * 0.35)
+  const deck = stationHeights[mid] + (hull.stationOffsetsY?.[mid] ?? 0)
+  const z = -length / 2 + length * 0.35
 
-  // Cargo pods / ISO containers bolted under freighters.
-  if (style.hasCargoPods) {
-    const pods = 4 + Math.floor(rng() * 5)
-    for (let i = 0; i < pods; i++) {
-      const pw = peakWidth * (0.32 + rng() * 0.28)
-      const ph = peakHeight * (0.32 + rng() * 0.22)
-      const pl = length * (0.11 + rng() * 0.12)
-      const pod = new THREE.Mesh(new THREE.BoxGeometry(pw, ph, pl), mats.panel)
-      const side =
-        style.asymmetric && i === 0 ? (rng() < 0.5 ? -1 : 1) : i % 2 === 0 ? -1 : 1
-      pod.position.set(
-        side * peakWidth * (0.55 + rng() * 0.22),
-        -peakHeight * (0.55 + rng() * 0.18),
-        (rng() - 0.5) * length * 0.38
-      )
-      group.add(pod)
-      // Pod clamp.
-      const clamp = new THREE.Mesh(
-        new THREE.BoxGeometry(pw * 1.05, ph * 0.12, pl * 0.15),
-        mats.structure
-      )
-      clamp.position.copy(pod.position)
-      clamp.position.y += ph * 0.45
-      group.add(clamp)
-    }
-  }
+  const houseH = depth * 1.05
+  const house = new THREE.Mesh(
+    new THREE.BoxGeometry(stationWidths[mid] * 2.1, houseH, length * 0.13),
+    mats.structure
+  )
+  house.position.set(0, deck + houseH * 0.5, z)
+  house.castShadow = true
+  group.add(house)
 
-  // Hazard / identity accent stripe(s) — placement varies by kit.
-  if (kit % 5 !== 4) {
-    const stripe = new THREE.Mesh(
-      new THREE.BoxGeometry(
-        peakWidth * (0.08 + (kit % 3) * 0.03),
-        peakHeight * 0.055,
-        length * (0.35 + (kit % 4) * 0.08)
-      ),
-      mats.accent
-    )
-    const stripeY =
-      kit % 3 === 0 ? peakHeight * 0.5 : kit % 3 === 1 ? -peakHeight * 0.35 : peakHeight * 0.15
-    stripe.position.set(bridgeX * 0.35, stripeY, length * (0.02 - (kit % 4) * 0.03))
-    group.add(stripe)
-  }
-  if (kit % 4 === 1) {
-    // Second chevron stripe on the opposite side.
-    const stripe2 = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.07, peakHeight * 0.04, length * 0.28),
-      mats.accent
-    )
-    stripe2.position.set(-bridgeX * 0.4 - peakWidth * 0.35, peakHeight * 0.2, -length * 0.1)
-    group.add(stripe2)
-  }
+  const win = new THREE.Mesh(
+    new THREE.BoxGeometry(stationWidths[mid] * 2.0, houseH * 0.3, length * 0.012),
+    mats.window
+  )
+  win.position.set(0, deck + houseH * 0.72, z + length * 0.066)
+  group.add(win)
 
-  // Radar dishes — top, bottom, and/or side mounts (see style.radarDishes).
-  const radarMounts = resolveRadarMounts(style, rng)
-  const asymX =
-    style.asymmetric
-      ? peakWidth * (0.18 + rng() * 0.2) * (style.bridgeSide || (rng() < 0.5 ? -1 : 1))
-      : peakWidth * 0.08
-  let dishIdx = 0
-  for (const entry of radarMounts) {
-    const mount = typeof entry === 'string' ? entry : entry.mount
-    const zFrac = (typeof entry === 'object' && entry.zFrac != null)
-      ? entry.zFrac
-      : 0.18 + dishIdx * 0.08 + (rng() - 0.5) * 0.06
-    const size = typeof entry === 'object' && entry.size != null ? entry.size : 0.11 + rng() * 0.05
-    addRadarDish(group, mats, peakWidth, peakHeight, length, mount, {
-      x: mount === 'top' || mount === 'bottom' ? asymX * (dishIdx % 2 === 0 ? 1 : -0.6) : 0,
-      zFrac,
-      size,
-      mastScale: 0.28 + rng() * 0.2
-    })
-    dishIdx++
-  }
-  // Legacy whip antenna near the primary dorsal dish when sensors are on.
-  if ((style.hasSensorMast !== false || radarMounts.length > 0) && rng() < 0.65) {
-    const whip = new THREE.Mesh(
-      new THREE.CylinderGeometry(peakWidth * 0.009, peakWidth * 0.009, peakHeight * 0.95, 5),
-      mats.antenna
-    )
-    whip.position.set(-asymX * 0.7, peakHeight * 1.12, length * 0.15)
-    whip.rotation.z = 0.18
-    group.add(whip)
-  }
-
-  // Docking collar ring near nose (freighters / explorers).
-  if (style.hasDockingRing) {
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(peakWidth * 0.55, peakWidth * 0.055, 8, 20),
-      mats.nacelle
-    )
-    ring.position.set(0, 0, length * 0.35)
-    group.add(ring)
-  }
-
-  // RCS thruster blocks (four corners of mid-body).
-  for (const [sx, sy] of [
-    [1, 1],
-    [1, -1],
-    [-1, 1],
-    [-1, -1]
-  ]) {
-    const rcs = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.1, peakHeight * 0.1, peakWidth * 0.12),
-      mats.nacelle
-    )
-    rcs.position.set(sx * peakWidth * 0.88, sy * peakHeight * 0.55, length * 0.05)
-    group.add(rcs)
-    // Tiny thruster nozzle.
-    const noz = new THREE.Mesh(
-      new THREE.CylinderGeometry(peakWidth * 0.025, peakWidth * 0.03, peakWidth * 0.06, 6),
-      mats.structure
-    )
-    noz.rotation.z = sx > 0 ? Math.PI / 2 : -Math.PI / 2
-    noz.position.set(sx * peakWidth * 0.95, sy * peakHeight * 0.55, length * 0.05)
-    group.add(noz)
-  }
-
-  // Surface plating / greeble panels — density/shape varies by visual kit.
-  const greebleCount = Math.round((18 + (kit % 6) * 3 + Math.floor(rng() * 18)) * density)
-  for (let i = 0; i < greebleCount; i++) {
-    const w = peakWidth * (0.035 + rng() * 0.13)
-    const h = peakHeight * (0.03 + rng() * 0.1)
-    const d = peakWidth * (0.06 + rng() * 0.26)
-    const greeble = new THREE.Mesh(
-      new THREE.BoxGeometry(w, h, d),
-      rng() < 0.45 ? mats.panel : mats.structure
-    )
-    const sideBias = style.asymmetric && rng() < 0.55 ? (style.bridgeSide || 1) * 0.35 : 0
-    greeble.position.set(
-      (rng() - 0.5 + sideBias) * peakWidth * 1.6,
-      (rng() - 0.35) * peakHeight * 1.2,
-      (rng() - 0.5) * length * 0.74
-    )
-    greeble.rotation.y = rng() * Math.PI * 0.4
-    if (rng() < 0.25) greeble.rotation.z = (rng() - 0.5) * 0.4
-    group.add(greeble)
-  }
-
-  // Conduit / cable trunks.
-  const conduitCount = Math.round((4 + Math.floor(rng() * 4)) * density)
-  for (let i = 0; i < conduitCount; i++) {
-    const conduit = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.04, peakHeight * 0.05, length * (0.15 + rng() * 0.2)),
-      mats.structure
-    )
-    conduit.position.set(
-      (rng() - 0.5) * peakWidth * 1.1,
-      (rng() - 0.2) * peakHeight * 0.9,
-      (rng() - 0.5) * length * 0.4
-    )
-    group.add(conduit)
-  }
-
-  // Pipe runs along the spine + flanks.
-  const pipeCount = Math.round((5 + Math.floor(rng() * 5)) * density)
-  for (let i = 0; i < pipeCount; i++) {
-    const pipe = new THREE.Mesh(
-      new THREE.CylinderGeometry(peakWidth * 0.018, peakWidth * 0.018, length * (0.3 + rng() * 0.3), 8),
-      mats.antenna
-    )
-    pipe.rotation.x = Math.PI / 2
-    if (rng() < 0.3) pipe.rotation.z = (rng() - 0.5) * 0.5
-    pipe.position.set(
-      (rng() - 0.5) * peakWidth * 0.85 + bridgeX * 0.2,
-      peakHeight * (0.35 + rng() * 0.35),
-      (rng() - 0.5) * length * 0.2
-    )
-    group.add(pipe)
-    // Pipe joint sphere.
-    if (rng() < 0.5) {
-      const joint = new THREE.Mesh(
-        new THREE.SphereGeometry(peakWidth * 0.035, 8, 6),
-        mats.structure
-      )
-      joint.position.copy(pipe.position)
-      joint.position.z += length * 0.08
-      group.add(joint)
-    }
-  }
-
-  // Vent / grille blocks.
-  const ventCount = Math.round((3 + Math.floor(rng() * 4)) * density)
-  for (let i = 0; i < ventCount; i++) {
-    const vent = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.2, peakHeight * 0.04, peakWidth * 0.25),
-      mats.panel
-    )
-    vent.position.set(
-      (rng() - 0.5) * peakWidth * 1.2,
-      peakHeight * (0.3 + rng() * 0.4),
-      (rng() - 0.5) * length * 0.5
-    )
-    group.add(vent)
-    for (let g = 0; g < 3; g++) {
-      const grill = new THREE.Mesh(
-        new THREE.BoxGeometry(peakWidth * 0.18, peakHeight * 0.01, peakWidth * 0.02),
-        mats.structure
-      )
-      grill.position.set(vent.position.x, vent.position.y + peakHeight * 0.03, vent.position.z + (g - 1) * peakWidth * 0.05)
-      group.add(grill)
-    }
-  }
-
-  // Underside cargo bay / heat shield plates (segmented).
-  for (let i = 0; i < 3; i++) {
-    const plate = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.82, peakHeight * 0.055, length * 0.12),
-      mats.panel
-    )
-    plate.position.set(
-      style.asymmetric ? peakWidth * 0.1 * (style.bridgeSide || 1) : 0,
-      -peakHeight * 0.52,
-      -length * 0.15 + i * length * 0.12
-    )
-    group.add(plate)
-  }
-
-  // Side airlock / hatch (often off-center on asymmetric ships).
-  const hatchSide = style.asymmetric
-    ? style.bridgeSide !== 0
-      ? -style.bridgeSide
-      : 1
-    : rng() < 0.5
-      ? -1
-      : 1
-  const hatch = new THREE.Mesh(
-    new THREE.CylinderGeometry(peakHeight * 0.22, peakHeight * 0.22, peakWidth * 0.08, 14),
+  const funnel = new THREE.Mesh(
+    new THREE.CylinderGeometry(depth * 0.16, depth * 0.19, depth * 0.85, 8),
     mats.nacelle
   )
-  hatch.rotation.z = Math.PI / 2
-  hatch.position.set(hatchSide * peakWidth * 0.95, 0, length * 0.1)
-  group.add(hatch)
-  const hatchRing = new THREE.Mesh(
-    new THREE.TorusGeometry(peakHeight * 0.24, peakWidth * 0.02, 6, 16),
-    mats.structure
-  )
-  hatchRing.rotation.y = Math.PI / 2
-  hatchRing.position.copy(hatch.position)
-  group.add(hatchRing)
-  // Second hatch opposite side (common industrial detail).
-  if (density > 1.4) {
-    const hatch2 = hatch.clone()
-    hatch2.position.x *= -1
-    group.add(hatch2)
-    const ring2 = hatchRing.clone()
-    ring2.position.x *= -1
-    group.add(ring2)
-  }
+  funnel.position.set(0, deck + depth * 0.42, z - length * 0.1)
+  funnel.castShadow = true
+  group.add(funnel)
 
-  // Dorsal sensor ridge / spine armor.
-  const spine = new THREE.Mesh(
-    new THREE.BoxGeometry(peakWidth * 0.18, peakHeight * 0.12, length * 0.4),
-    mats.structure
+  const mast = new THREE.Mesh(
+    new THREE.CylinderGeometry(beam * 0.025, beam * 0.03, depth * 1.8, 5),
+    mats.antenna
   )
-  spine.position.set(bridgeX * 0.3, peakHeight * 0.72, length * 0.05)
-  group.add(spine)
-  for (let i = 0; i < 4; i++) {
-    const tile = new THREE.Mesh(
-      new THREE.BoxGeometry(peakWidth * 0.22, peakHeight * 0.04, length * 0.06),
-      mats.panel
-    )
-    tile.position.set(bridgeX * 0.3, peakHeight * 0.8, -length * 0.1 + i * length * 0.1)
-    group.add(tile)
-  }
+  mast.position.set(0, deck + houseH + depth * 0.9, z + length * 0.05)
+  group.add(mast)
 }
 
 // Hull + EdgesGeometry are expensive (especially EdgesGeometry). Cache per class.
@@ -1395,24 +1332,31 @@ export function buildShipMesh(shipClass, opts = {}) {
   if (!lite) {
     if (isAlien) addAlienDetails(group, shipClass.hull, mats, baseColor)
     else if (isMiner) {
-      // Shared industrial plates first, then mining-specific hoppers / scoops.
-      addHullDetails(group, shipClass.hull, mats)
+      // Shared superstructure first, then the salvage rig on top of it.
+      addHullDetails(group, shipClass.hull, mats, 'miner')
       addMinerDetails(group, shipClass.hull, mats)
-    } else addHullDetails(group, shipClass.hull, mats)
-  } else if (isAlien) {
-    // Lite alien NPCs still get a couple glow nodes so they read as non-human.
-    const glow = new THREE.Mesh(
-      new THREE.SphereGeometry(0.35, 6, 6),
-      new THREE.MeshBasicMaterial({
-        color: 0x9bff4a,
-        transparent: true,
-        opacity: 0.7,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false
-      })
-    )
-    glow.position.set(0, 0.8, 2)
-    group.add(glow)
+    } else addHullDetails(group, shipClass.hull, mats, shipClass.role ?? 'trader')
+  } else {
+    // Lite NPCs skip the full superstructure — it is the main cost when a dozen
+    // contacts mesh on one combat frame — but a bare lofted hull reads as a
+    // floating tube. A wheelhouse and a mast are four meshes and buy back most
+    // of the silhouette.
+    addLiteSuperstructure(group, shipClass.hull, mats)
+    if (isAlien) {
+      // Lite Drowned hulls still get a glow node so they read as not-ours.
+      const glow = new THREE.Mesh(
+        new THREE.SphereGeometry(0.35, 6, 6),
+        new THREE.MeshBasicMaterial({
+          color: 0x9bff4a,
+          transparent: true,
+          opacity: 0.7,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false
+        })
+      )
+      glow.position.set(0, 0.8, 2)
+      group.add(glow)
+    }
   }
 
   for (const hp of shipClass.hardpoints ?? []) {

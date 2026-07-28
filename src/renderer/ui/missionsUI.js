@@ -1,4 +1,4 @@
-import { findBody, getSystem } from '../procgen/galaxy.js'
+import { findBody, getSystem } from '../procgen/world.js'
 import { dropMission, missionNavTarget, setWaypointForMission } from '../game/missions.js'
 import { escapeHtml } from './escapeHtml.js'
 import { gameConfirm, gameNotice } from './gameDialog.js'

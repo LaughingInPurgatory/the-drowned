@@ -1,10 +1,10 @@
 import * as THREE from 'three'
 import { getShipClass } from '../data/shipClasses.js'
-import {
-  effectiveHardpoints,
-  effectiveMaxShields
-} from '../data/accessories.js'
-import { getSystem, ensureSystemSecurity } from '../procgen/galaxy.js'
+import { effectiveHardpoints } from '../data/accessories.js'
+import { getSystem } from '../procgen/world.js'
+import { snapToSea } from '../world/sea.js'
+import { inHomeWaters } from '../procgen/world.js'
+import { headingOf, applySeaAttitude } from './flight.js'
 import {
   clearPositionOfBodies,
   positionOverlapsBodies,
@@ -100,10 +100,9 @@ export function flushPendingLawPenalties(gameState) {
     ? getSystem(gameState.galaxy, gameState._pendingLawSystemId ?? gameState.player.currentSystemId)
     : null
   gameState._pendingLawSystemId = null
-  if (system) {
-    if (system.securityRating == null) ensureSystemSecurity(system)
-    if (!lawPenaltyAppliesInSystem(system)) return
-  }
+  // securityRating on the world is live local security, refreshed each frame
+  // from the player's position by security.js applyLocalSecurity.
+  if (system && !lawPenaltyAppliesInSystem(system)) return
   // One standing loss per first-strike even if multiple shots landed same frame.
   applyLawPenaltyForAttack(gameState, false)
 }
@@ -129,12 +128,8 @@ const HIT_RADIUS = 1.5
 // Mining lasers need a generous pad — pure geometric rock shells are easy to miss
 // at speed / with wing parallax, and felt "broken" when reticle sat on a rock.
 const MINE_HIT_PAD = 14
-const SHIELD_REGEN_DELAY_S = 4
-// NPC combat regen (points per second after idle delay).
-const SHIELD_REGEN_RATE = 10
-// Player: 1% of max shields every 10s while out of combat.
-const PLAYER_SHIELD_REGEN_FRACTION = 0.01
-const PLAYER_SHIELD_REGEN_PERIOD_S = 10
+// Nothing on this sea has shields — armour absorbs, then the hull takes it, and
+// steel does not grow back. Repairs are a yard job (game/economy.js repairShip).
 
 const ATTACK_RANGE = 250
 // Anomaly-spawned guards/waves (tagged npc.anomalySiteId) actively hunt the
@@ -173,11 +168,6 @@ export const PLAYER_DAMAGE_TAKEN_MULT = 0.75
 export function applyDamage(entity, amount, simTime = null, { player = false } = {}) {
   let remaining = amount
   if (player) remaining *= PLAYER_DAMAGE_TAKEN_MULT
-  if (entity.shields > 0) {
-    const absorbed = Math.min(entity.shields, remaining)
-    entity.shields -= absorbed
-    remaining -= absorbed
-  }
   if (remaining > 0 && entity.armor > 0) {
     const absorbed = Math.min(entity.armor, remaining)
     entity.armor -= absorbed
@@ -186,19 +176,6 @@ export function applyDamage(entity, amount, simTime = null, { player = false } =
   if (remaining > 0) entity.hull -= remaining
   if (simTime !== null) entity.lastHitAt = simTime
   if (entity.hull <= 0 && 'destroyed' in entity) entity.destroyed = true
-}
-
-// opts.player + opts.inCombat: player only regens out of combat at 1%/10s.
-// NPCs keep the faster point-based combat regen.
-export function regenShields(entity, shipClass, simTime, dt, { player = false, inCombat = false } = {}) {
-  if (player && inCombat) return
-  const idleSeconds = simTime - (entity.lastHitAt ?? -Infinity)
-  if (idleSeconds <= SHIELD_REGEN_DELAY_S) return
-  const max = player ? effectiveMaxShields(entity, shipClass) : shipClass.stats.shields
-  const rate = player
-    ? (max * PLAYER_SHIELD_REGEN_FRACTION) / PLAYER_SHIELD_REGEN_PERIOD_S
-    : SHIELD_REGEN_RATE
-  entity.shields = Math.min(max, entity.shields + rate * dt)
 }
 
 // weaponTypeFilter (optional) restricts firing to hardpoints of that type —
@@ -543,10 +520,10 @@ export function updateProjectiles(gameState, dt, onHit) {
         if (dist >= target._hitRadius) continue
         applyDamage(target, proj.damage, gameState.simTime, { player: false })
         markPlayerCombatEngagement(gameState, proj, target, false)
-        if (
-          target.faction === 'trader' &&
-          gameState.player.currentSystemId === gameState.player.startingSystemId
-        ) {
+        // Firing on honest traffic inside Haven Reach's patrol area ends the
+        // peace there permanently — the harbour remembers.
+        if (target.faction === 'trader' && inHomeWaters(gameState.player.ship.position)) {
+          gameState.flags ??= {}
           gameState.flags.startingSystemPeaceBroken = true
         }
         if (target.destroyed) {
@@ -562,7 +539,6 @@ export function updateProjectiles(gameState, dt, onHit) {
           if (target.faction === 'pirate') {
             applyLawBonusForPirateKill(gameState)
           }
-          if (currentSystem) ensureSystemSecurity(currentSystem)
           applyShipBounty(gameState, target, getSystemSecurity(currentSystem), Math.random)
         }
         _inbound.subVectors(_projPrev, _projNext)
@@ -581,11 +557,14 @@ export function updateProjectiles(gameState, dt, onHit) {
         break
       }
     } else {
-      // NPC projectile — hit player or specific NPC target.
+      // NPC projectile — hit player or specific NPC target. Shots already in
+      // the air when the player ties up pass harmlessly.
       const targets =
         proj.targetRef?.kind === 'npc'
           ? npcs.filter((n) => n.id === proj.targetRef.id)
-          : [gameState.player.ship]
+          : gameState.player.dockedBodyId
+            ? []
+            : [gameState.player.ship]
       for (const target of targets) {
         if (target.destroyed) continue
         const targetShipClass = getShipClass(target.shipClassId ?? target.classId)
@@ -651,7 +630,7 @@ export function updateProjectiles(gameState, dt, onHit) {
     // any guard is alive nearby, unlike a normal belt.
     if (!hit && proj.ownerId === 'player' && currentSystem) {
       fieldLoop: for (const body of currentSystem.bodies) {
-        if (body.kind !== 'asteroidField') continue
+        if (body.kind !== 'wreckField') continue
         if (skipRockTestsThisFrame && !body.anomalySiteId) continue
         // Skip whole field if projectile is nowhere near its scatter volume.
         const fr = (body.radius ?? 0) + 120
@@ -673,7 +652,7 @@ export function updateProjectiles(gameState, dt, onHit) {
             const shipClass = getShipClass(gameState.player.ship.classId)
             // Stronger guns chip more ore (pulse laser 1, rocket pod 2, …).
             const yieldAmt = mineYieldForWeapon(proj.weaponId ?? proj.weaponType)
-            const mined = mineRock(gameState, shipClass, currentSystem, body.id, i, yieldAmt, body.oreOverride)
+            const mined = mineRock(gameState, shipClass, body, body.id, i, yieldAmt, body.oreOverride)
             onHit?.({
               position: proj.position.slice(),
               rockPosition: [_targetPos.x, _targetPos.y, _targetPos.z],
@@ -720,14 +699,29 @@ export function updateProjectiles(gameState, dt, onHit) {
   gameState.projectiles = alive
 }
 
-function faceToward(quat, fromPos, toPos, turnRate, dt) {
-  // Matrix4.lookAt follows the camera convention (local +Z points away from
-  // the target), but our ships' forward is +Z, so eye/target are swapped here.
-  const targetQuat = new THREE.Quaternion().setFromRotationMatrix(
-    new THREE.Matrix4().lookAt(toPos, fromPos, new THREE.Vector3(0, 1, 0))
-  )
-  quat.slerp(targetQuat, Math.min(1, turnRate * dt))
-  return new THREE.Vector3(0, 0, 1).applyQuaternion(quat)
+const _steerOut = new THREE.Vector3()
+
+/**
+ * Come round toward a point on the water. Heading only, rate-limited: a hull
+ * has a maximum rate of turn, and it aims its bow rather than tipping its nose
+ * up at something riding a crest. `npc.heading` is the authoritative attitude
+ * — pitch and roll come from the sea (see applySeaAttitude).
+ *
+ * Returns the flat forward vector, so thrust can never drive a boat upward.
+ */
+function faceToward(npc, fromPos, toPos, turnRate, dt) {
+  let heading = headingOf(npc)
+  const dx = toPos.x - fromPos.x
+  const dz = toPos.z - fromPos.z
+  if (dx * dx + dz * dz > 1e-8) {
+    const target = Math.atan2(dx, dz)
+    // Shortest way round, so a boat never turns 350° to make 10°.
+    const delta = Math.atan2(Math.sin(target - heading), Math.cos(target - heading))
+    const maxTurn = turnRate * dt
+    heading += Math.max(-maxTurn, Math.min(maxTurn, delta))
+    npc.heading = heading
+  }
+  return _steerOut.set(Math.sin(heading), 0, Math.cos(heading))
 }
 
 // A pirate/alien encounter turns three-way the moment an alien is present:
@@ -747,7 +741,6 @@ export function prepareCombatFrame(gameState) {
   const system = gameState.galaxy
     ? getSystem(gameState.galaxy, gameState.player.currentSystemId)
     : null
-  if (system) ensureSystemSecurity(system)
   const truce = truceActive(gameState)
   // Pre-index live hostiles by faction for O(1) opponent lists.
   const pirates = []
@@ -763,6 +756,9 @@ export function prepareCombatFrame(gameState) {
     system,
     bodies: system?.bodies ?? [],
     playerPos: gameState.player.ship.position,
+    // Moored alongside: nobody starts anything with a boat tied up under a
+    // harbour's guns, and nothing can reach it if they try.
+    playerMoored: !!gameState.player.dockedBodyId,
     truce,
     policeSos: policeHostileToPlayer(gameState, system),
     civSos: civiliansHostileToPlayer(gameState, system),
@@ -780,6 +776,9 @@ export function prepareCombatFrame(gameState) {
 // without re-deriving it.
 function opponentsFor(npc, gameState, frame = null) {
   const ctx = frame ?? prepareCombatFrame(gameState)
+  // A moored boat is not a target. Without this, raiders queue up off the quay
+  // and open fire on something that cannot answer or leave.
+  if (ctx.playerMoored) return []
   const playerPos = ctx.playerPos
   const engaged = !!ctx.engagedMap[npc.id]
 
@@ -828,13 +827,11 @@ function opponentsFor(npc, gameState, frame = null) {
 export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame = null) {
   if (npc.destroyed) return
   const npcShipClass = getShipClass(npc.shipClassId)
-  regenShields(npc, npcShipClass, gameState.simTime, dt)
 
   const npcPos = new THREE.Vector3().fromArray(npc.position)
   const playerPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
   const hullFraction = npc.hull / npcShipClass.stats.hull
   const stats = npcShipClass.stats
-  const quat = new THREE.Quaternion().fromArray(npc.quaternion)
   const velocity = new THREE.Vector3().fromArray(npc.velocity)
 
   let opponent = null
@@ -873,8 +870,10 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
   let forward
   if (npc.aiState === 'attack' && opponent) {
     const opponentPos = new THREE.Vector3().fromArray(opponent.position)
-    forward = faceToward(quat, npcPos, opponentPos, stats.turnRate, dt)
-    const toOpponent = opponentPos.clone().sub(npcPos).normalize()
+    forward = faceToward(npc, npcPos, opponentPos, stats.turnRate, dt)
+    // Flat bearing to the target. Keeping the vertical component would make the
+    // firing cone below flicker every time either boat rode a crest.
+    const toOpponent = opponentPos.clone().sub(npcPos).setY(0).normalize()
 
     // Coin-flipped once per NPC so only some attackers orbit — the rest keep
     // closing head-on as before, for variety.
@@ -907,10 +906,10 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
     // opponentsFor would otherwise pick (e.g. an alien, if this pirate was
     // truced) — turns and accelerates harder than a normal attack run for a
     // dramatic charge, and destroys itself on impact alongside the damage.
-    forward = faceToward(quat, npcPos, playerPos, stats.turnRate * 1.6, dt)
+    forward = faceToward(npc, npcPos, playerPos, stats.turnRate * 1.6, dt)
     velocity.addScaledVector(forward, stats.accel * 1.6 * dt)
     const hitDistance = getShipCollisionRadius(npcShipClass) + getShipCollisionRadius(getShipClass(gameState.player.ship.classId))
-    if (npcPos.distanceTo(playerPos) < hitDistance) {
+    if (!gameState.player.dockedBodyId && npcPos.distanceTo(playerPos) < hitDistance) {
       applyDamage(gameState.player.ship, RAM_DAMAGE, gameState.simTime, { player: true })
       npc.hull = 0
       npc.destroyed = true
@@ -918,22 +917,26 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
     }
   } else if (npc.aiState === 'flee') {
     const fleeFromPos = opponent ? new THREE.Vector3().fromArray(opponent.position) : playerPos
-    const fleeTarget = npcPos.clone().add(npcPos.clone().sub(fleeFromPos).normalize())
-    forward = faceToward(quat, npcPos, fleeTarget, stats.turnRate, dt)
+    // Run on the surface — flattened, or a boat being shot at from a wave
+    // trough would try to escape upward.
+    const away = npcPos.clone().sub(fleeFromPos).setY(0)
+    if (away.lengthSq() < 1e-8) away.set(0, 0, 1)
+    const fleeTarget = npcPos.clone().add(away.normalize())
+    forward = faceToward(npc, npcPos, fleeTarget, stats.turnRate, dt)
     velocity.addScaledVector(forward, stats.accel * dt)
   } else {
-    // Station police: loiter in a ring outside the station exterior; others wander.
+    // Harbour patrols: circle outside the moles; everything else wanders.
+    // Every waypoint is on the water — the sea decides the height, not the AI.
     if (!npc.patrolTarget || npcPos.distanceTo(new THREE.Vector3().fromArray(npc.patrolTarget)) < 20) {
       if (npc.patrolAnchor && Array.isArray(npc.patrolAnchor)) {
         const minR = Math.max(80, npc.patrolMinRadius ?? npc.patrolRadius ?? 280)
         const maxR = Math.max(minR + 40, npc.patrolMaxRadius ?? minR + 200)
         const a = Math.random() * Math.PI * 2
-        const elev = (Math.random() - 0.5) * 0.5
         const dist = minR + Math.random() * (maxR - minR)
         let target = [
-          npc.patrolAnchor[0] + Math.cos(a) * dist * Math.cos(elev),
-          npc.patrolAnchor[1] + Math.sin(elev) * dist * 0.45,
-          npc.patrolAnchor[2] + Math.sin(a) * dist * Math.cos(elev)
+          npc.patrolAnchor[0] + Math.cos(a) * dist,
+          0,
+          npc.patrolAnchor[2] + Math.sin(a) * dist
         ]
         // Never pick a patrol waypoint inside solid geometry.
         if (combatFrame?.bodies) {
@@ -948,8 +951,9 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
       } else {
         let target = npcPos
           .clone()
-          .add(new THREE.Vector3((Math.random() - 0.5) * 200, (Math.random() - 0.5) * 50, (Math.random() - 0.5) * 200))
+          .add(new THREE.Vector3((Math.random() - 0.5) * 200, 0, (Math.random() - 0.5) * 200))
           .toArray()
+        target[1] = 0
         if (combatFrame?.bodies) {
           target = clearPositionOfBodies(
             target,
@@ -961,11 +965,15 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
         npc.patrolTarget = target
       }
     }
-    forward = faceToward(quat, npcPos, new THREE.Vector3().fromArray(npc.patrolTarget), stats.turnRate * 0.5, dt)
+    forward = faceToward(npc, npcPos, new THREE.Vector3().fromArray(npc.patrolTarget), stats.turnRate * 0.5, dt)
     velocity.addScaledVector(forward, stats.accel * 0.3 * dt)
   }
 
   velocity.multiplyScalar(Math.pow(0.35, dt))
+  // Nothing on the water makes way vertically. Thrust is already flat (see
+  // faceToward), but evade/orbit nudges and the push-out below can still leave
+  // a vertical component — drop it before it integrates into altitude.
+  velocity.y = 0
   if (velocity.length() > stats.speed) velocity.setLength(stats.speed)
   let position = npcPos.clone().addScaledVector(velocity, dt).toArray()
 
@@ -998,7 +1006,10 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
 
   npc.position = position
   npc.velocity = velocity.toArray()
-  npc.quaternion = quat.toArray()
+  // Every mover on the sea goes through the same clamp as the player, so an
+  // NPC can never drift above or below the surface it is supposed to be on.
+  snapToSea(npc, gameState.simTime)
+  applySeaAttitude(npc, headingOf(npc), gameState.simTime)
 }
 
 const _combatFlagPlayer = new THREE.Vector3()

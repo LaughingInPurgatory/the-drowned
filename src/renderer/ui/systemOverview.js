@@ -1,10 +1,7 @@
-import { getSystem } from '../procgen/galaxy.js'
+import { getSystem } from '../procgen/world.js'
 import { missionMarkedBodyIds } from '../game/missions.js'
 import { overviewAnomalies, isDatacoreType } from '../game/systemScan.js'
 import { escapeHtml } from './escapeHtml.js'
-
-// Synthetic waypoint id for the system sun (must match main.js).
-export const SYSTEM_STAR_WAYPOINT_ID = 'system-star'
 
 const STYLE = `
 /* Top right — target panel sits to the left when locked. */
@@ -75,14 +72,14 @@ function dist3(a, b) {
 }
 
 function kindLabel(kind) {
-  if (kind === 'asteroidField') return 'belt'
-  if (kind === 'warpGate') return 'warp gate'
-  if (kind === 'anomaly') return 'anomaly'
-  if (kind === 'alien_incursion') return 'incursion'
+  if (kind === 'wreckField') return 'wrecks'
+  if (kind === 'port') return 'harbour'
+  if (kind === 'anomaly') return 'signal'
+  if (kind === 'alien_incursion') return 'raiders'
   if (kind === 'datacore') return 'datacore'
   if (kind === 'datacore_takeover') return 'takeover'
-  if (kind === 'alien_datacore') return 'alien datacore'
-  if (kind === 'ore_anomaly') return 'rare ore'
+  if (kind === 'alien_datacore') return 'pre-war core'
+  if (kind === 'ore_anomaly') return 'rich salvage'
   return kind
 }
 
@@ -138,14 +135,8 @@ export function createSystemOverview(container, gameState, hooks = {}) {
       anomaly: true
     }))
     const rows = [
-      {
-        id: SYSTEM_STAR_WAYPOINT_ID,
-        name: system.name,
-        kind: 'star',
-        position: [0, 0, 0]
-      },
-      // ore_anomaly owns a synthetic asteroidField body (see systemScan.js) —
-      // it already gets a purple anomaly row above, so skip its plain belt row.
+      // A rich salvage patch owns a synthetic wreckField body (see systemScan.js)
+      // — it already gets a purple anomaly row above, so skip its plain row.
       ...system.bodies.filter((b) => !b.anomalySiteId).map((b) => ({
         id: b.id,
         name: b.name,
@@ -224,11 +215,7 @@ export function createSystemOverview(container, gameState, hooks = {}) {
     if (!id || !gameState?.player) return
     let name = null
     const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    if (id === SYSTEM_STAR_WAYPOINT_ID) {
-      name = system?.name ?? 'Star'
-    } else {
-      name = system?.bodies.find((b) => b.id === id)?.name ?? 'Waypoint'
-    }
+    name = system?.bodies.find((b) => b.id === id)?.name ?? 'Waypoint'
 
     if (gameState.player.waypointBodyId === id) {
       // Clear is always allowed (including during supercruise).
@@ -236,11 +223,10 @@ export function createSystemOverview(container, gameState, hooks = {}) {
       gameState.player.waypointPosition = null
       hooks.onWaypointChange?.({ id: null, name, set: false })
     } else {
-      // Setting a new waypoint can redirect SC autopilot — blocked while cruising.
+      // A new waypoint would redirect the autopilot mid-passage — blocked under way.
       if (hooks.canSetWaypoint && !hooks.canSetWaypoint()) return
       gameState.player.waypointBodyId = id
-      gameState.player.waypointPosition =
-        id === SYSTEM_STAR_WAYPOINT_ID ? [0, 0, 0] : null
+      gameState.player.waypointPosition = null
       hooks.onWaypointChange?.({ id, name, set: true })
     }
     renderFull()

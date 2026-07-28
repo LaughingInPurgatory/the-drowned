@@ -83,32 +83,37 @@ const STYLE = `
 @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 `
 
-/** Light grief + vacuum-grade dad jokes. */
-const SPACE_PUNS = [
-  'Looks like your career just hit peak orbit… and re-entered.',
-  'You weren’t just outgunned — you were out of this world (in the bad way).',
-  'That went supernova faster than your thrusters.',
+/** Light grief + salt-grade dad jokes. */
+const DEATH_PUNS = [
+  'Your career has gone down with all hands.',
+  'You weren’t out of your depth. You are now.',
   'Hull integrity? More like hull “integri-whoops.”',
-  'You played among the stars. The stars played harder.',
-  'Space is big. Your hitbox, unfortunately, was not.',
-  'They say in space no one can hear you scream. Your black box can.',
-  'Congratulations: you’ve achieved escape velocity from the living.',
-  'Your final status: permanently offline, still overdrawn on luck.',
-  'That wasn’t a close shave — it was a full orbital haircut.',
-  'Remember: never bring a cargo barge to a plasma fight. Or… whatever you just did.',
-  'Your ship has left the chat. Permanently.',
-  'Rest in pieces. We’ll scatter the wreck along a nice elliptical orbit.',
-  'Plot twist: the void was the real final boss. Also that pilot.',
-  'You aimed for the stars and scored a crater. Respect the commitment.',
-  'Nav computer says “destination reached.” We disagree on the meaning.',
-  'Shields down, spirits lower. At least the view was cosmic.',
-  'Don’t take it personally — the vacuum is equally cold to everyone.',
-  'Your last log entry: “Hold my thruster fuel.”',
-  'In the end, you weren’t lost in space. Space found you first.'
+  'That’s not a keel over. That’s the keel, over.',
+  'You were told to watch your draught. This is worse.',
+  'The sea is large. Your freeboard, unfortunately, was not.',
+  'They say the ocean keeps what it takes. It has excellent taste.',
+  'Congratulations: you are now officially part of the seabed.',
+  'Final position logged. Salvage rights: pending.',
+  'That wasn’t a close shave — that was a full careening.',
+  'Never bring a trawler to a gunfight. Or… whatever that was.',
+  'Your boat has left the chat. It is going down with it.',
+  'Rest in pieces. We’ll mark the spot on the chart. Roughly.',
+  'Plot twist: the water was the real final boss. Also that skipper.',
+  'You aimed for the horizon and found the bottom. Committed, at least.',
+  'The autopilot says “destination reached.” We disagree on the meaning.',
+  'Armour holed, spirits lower, and now everything else too.',
+  'Don’t take it personally — the sea is equally cold to everyone.',
+  'Your last log entry: “Hold my grog.”',
+  'You didn’t get lost at sea. The sea found you first.',
+  'All hands, abandon — oh. Never mind.',
+  'Somewhere a harbourmaster is quietly crossing you off a list.',
+  'That’s one way to trim the bow down.',
+  'You have joined the rest of the world underwater.',
+  'Water always wins. It has been undefeated since the war.'
 ]
 
 function pickPun() {
-  return SPACE_PUNS[Math.floor(Math.random() * SPACE_PUNS.length)]
+  return DEATH_PUNS[Math.floor(Math.random() * DEATH_PUNS.length)]
 }
 
 function formatFaction(faction) {
@@ -151,7 +156,7 @@ export function createDeathScreen(container, onReturnToMenu) {
       killerFaction = null,
       killerMethod = null
     }) {
-      const name = escapeHtml(characterName || 'Pilot')
+      const name = escapeHtml(characterName || 'Skipper')
 
       const killerEl = root.querySelector('.killer')
       if (killerPilot || killerShip) {
@@ -163,8 +168,8 @@ export function createDeathScreen(container, onReturnToMenu) {
         killerEl.classList.remove('unknown')
         killerEl.innerHTML = `
           <span class="k-tag">Killed by</span>
-          <div class="k-line"><span class="k-name">${escapeHtml(killerPilot || 'Unknown pilot')}</span></div>
-          <div class="k-line">Ship: <span class="k-ship">${escapeHtml(killerShip || 'Unknown vessel')}</span></div>
+          <div class="k-line"><span class="k-name">${escapeHtml(killerPilot || 'Unknown skipper')}</span></div>
+          <div class="k-line">Vessel: <span class="k-ship">${escapeHtml(killerShip || 'Unknown vessel')}</span></div>
           <div class="k-line k-method">${escapeHtml(method)}</div>
           ${faction ? `<span class="k-faction">${escapeHtml(faction)}</span>` : ''}
         `
@@ -174,7 +179,7 @@ export function createDeathScreen(container, onReturnToMenu) {
         killerEl.innerHTML = `
           <span class="k-tag">Killed by</span>
           <div class="k-line"><span class="k-name">Unknown contact</span></div>
-          <div class="k-line">Ship: <span class="k-ship">No positive ID</span></div>
+          <div class="k-line">Vessel: <span class="k-ship">No positive ID</span></div>
         `
         killerEl.style.display = 'inline-block'
       }

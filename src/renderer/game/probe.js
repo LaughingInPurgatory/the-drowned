@@ -6,12 +6,12 @@ import {
 } from './crafting.js'
 import { getBlueprint } from '../data/blueprints.js'
 import { mulberry32, pick } from '../procgen/prng.js'
-import { starTypeForSystem } from '../procgen/starType.js'
-import { oreTierForSystem } from './mining.js'
+import { oreTierForField } from './mining.js'
 import { tryRollProbeSkillbook, getSkillDef, playerSkillBonuses } from './skills.js'
 
+/** Chance a sounding turns up saleable survey data. */
 export const PROBE_FIND_CHANCE = 0.08
-/** Explorer hulls: +5 percentage points to survey-data finds when probing. */
+/** Explorer hulls: +5 percentage points to survey-data finds when sounding. */
 export const EXPLORER_PROBE_LOOT_BONUS = 0.05
 export const MAX_PROBE_ATTEMPTS = 3
 
@@ -42,34 +42,25 @@ export function probeBlueprintChance(shipClass, gameState = null) {
   }
   return Math.min(1, Math.max(0, p))
 }
-/** Shown after the last allowed probe attempt on a body. */
+/** Shown once the water around a place has given up everything it holds. */
 export function probeExhaustedMessage(bodyName) {
-  const name = bodyName?.trim() || 'Target'
-  return `${name} fully scanned.`
+  const name = bodyName?.trim() || 'This water'
+  return `${name} fully sounded.`
 }
 
 /** @deprecated Prefer probeExhaustedMessage(name) — kept for tests / imports. */
-export const PROBE_EXHAUSTED_MESSAGE = 'Target fully scanned.'
+export const PROBE_EXHAUSTED_MESSAGE = 'Fully sounded.'
 export { SURVEY_DATA_GOOD_ID }
 
-// Must match render/planetMesh.js PLANET_ARCHETYPES key order (Object.keys).
-const PLANET_ARCHETYPE_NAMES = ['rocky', 'gasGiant', 'ice', 'lush', 'volcanic']
+// Must match render/islandMesh.js ISLAND_ARCHETYPES key order (Object.keys).
+const ISLAND_ARCHETYPE_NAMES = ['barren', 'scrub', 'drowned', 'industrial', 'volcanic']
 
 const ARCHETYPE_LABEL = {
-  rocky: 'Rocky world',
-  gasGiant: 'Gas giant',
-  ice: 'Ice world',
-  lush: 'Lush / terrestrial',
-  volcanic: 'Volcanic world'
-}
-
-const STAR_TYPE_LABEL = {
-  mainSequence: 'Main-sequence star (yellow–white, G/K class)',
-  redDwarf: 'Red dwarf (M-class)',
-  whiteDwarf: 'White dwarf (compact remnant)',
-  giant: 'Giant / evolved star',
-  binary: 'Binary star system',
-  trinary: 'Trinary star system'
+  barren: 'Bare rock',
+  scrub: 'Scrub and hardwood',
+  drowned: 'Drowned settlement',
+  industrial: 'Pre-war industrial',
+  volcanic: 'Volcanic'
 }
 
 function hashString(str) {
@@ -78,161 +69,107 @@ function hashString(str) {
   return Math.abs(h)
 }
 
-/** Same seeded archetype as buildPlanetMesh (planets only; moons are always rocky). */
+/** Same seeded archetype the island mesh uses, so the report matches the view. */
 export function planetArchetypeForBody(body) {
-  if (!body) return null
-  if (body.kind === 'moon') return 'rocky'
-  if (body.kind !== 'planet') return null
+  if (body?.kind !== 'island') return null
   const rng = mulberry32(hashString(body.id))
-  return pick(rng, PLANET_ARCHETYPE_NAMES)
+  return pick(rng, ISLAND_ARCHETYPE_NAMES)
 }
 
 /**
- * Always-on classification lines for a successful probe return — deterministic
- * from body.id / system id so re-probes (and mesh visuals) agree.
+ * Always-on classification lines for a successful sounding — deterministic from
+ * body.id so repeat surveys (and the mesh you can see) agree.
  * @returns {string[]}
  */
 export function probeSurveyReport(body, system) {
   if (!body) return []
-  const lines = [`Classification: ${body.name}`]
+  const lines = [`Survey: ${body.name}`]
 
-  if (body.kind === 'star') {
-    const type = starTypeForSystem(system ?? { id: body.id })
-    lines.push(`Body type: Star — ${STAR_TYPE_LABEL[type] ?? type}`)
-    if (type === 'binary' || type === 'trinary') {
-      lines.push('Multiple luminous components detected; strong radiation field.')
-    } else if (type === 'redDwarf') {
-      lines.push('Long-lived, cool photosphere; flare activity possible.')
-    } else if (type === 'whiteDwarf') {
-      lines.push('Extremely dense remnant; thin residual atmosphere of stripped metals/helium.')
-    } else if (type === 'giant') {
-      lines.push('Expanded envelope; high luminosity, short remaining main lifetime.')
-    } else {
-      lines.push('Stable fusion core; broad habitable-zone potential for bound worlds.')
-    }
-    lines.push('Surface: N/A (plasma photosphere). Atmosphere: stellar wind / corona only.')
-    lines.push('Biosignatures: none (host star).')
+  if (body.kind === 'wreckField') {
+    const primaryId = body.oreOverride ?? oreTierForField(body)
+    const primary = getGood(primaryId).name
+    const idx = MINED_ORE_GOOD_IDS.indexOf(primaryId)
+    const secondary =
+      idx > 0
+        ? getGood(MINED_ORE_GOOD_IDS[idx - 1]).name
+        : idx < MINED_ORE_GOOD_IDS.length - 1
+          ? getGood(MINED_ORE_GOOD_IDS[idx + 1]).name
+          : null
+    lines.push('Site type: Sunken hulls — a convoy or harbour that went down whole')
+    lines.push('Water: Shallow enough to work; hulks break the surface at low swell')
+    lines.push('Hazards: Shifting plate, snagged cable, no shelter in weather')
+    lines.push(`Primary salvage: ${primary}`)
+    if (secondary) lines.push(`Also present, in smaller quantity: ${secondary}`)
+    lines.push('Method: Cut the hulks open with deck guns, then scoop what floats up.')
     return lines
   }
 
-  if (body.kind === 'asteroidField') {
-    lines.push('Body type: Asteroid field / planetesimal belt')
-    lines.push('Atmosphere: None (vacuum between rocks)')
-    lines.push('Surface: Fractured rock and regolith; no hydrosphere')
-    lines.push('Life / flora / fauna: None detected')
-    if (system) {
-      const primaryId = oreTierForSystem(system)
-      const primary = getGood(primaryId).name
-      const idx = MINED_ORE_GOOD_IDS.indexOf(primaryId)
-      const secondary =
-        idx > 0
-          ? getGood(MINED_ORE_GOOD_IDS[idx - 1]).name
-          : idx < MINED_ORE_GOOD_IDS.length - 1
-            ? getGood(MINED_ORE_GOOD_IDS[idx + 1]).name
-            : null
-      lines.push(`Ore survey: Dominant yield — ${primary}`)
-      if (secondary) lines.push(`Ore survey: Trace / secondary — ${secondary}`)
-      lines.push('Ore survey: Fire weapons at individual rocks to mine (ore hold).')
-    } else {
-      lines.push('Ore survey: Composition unknown (no system context).')
-    }
-    return lines
-  }
-
-  if (body.kind === 'planet' || body.kind === 'moon') {
-    const isMoon = body.kind === 'moon'
+  if (body.kind === 'island') {
     const arch = planetArchetypeForBody(body)
-    // Extra flavor rolls — only after archetype pick so they don't desync mesh rng.
-    // Mesh continues consuming rng for ring/tilt/spin; we use a separate stream.
+    // Extra flavour rolls on a separate stream so they cannot desync the mesh.
     const flavor = mulberry32(hashString(`${body.id}:probe-survey`))
+    lines.push(`Land type: ${ARCHETYPE_LABEL[arch] ?? arch}`)
 
-    lines.push(
-      isMoon
-        ? `Body type: Moon — barren cratered rock (rocky)`
-        : `Body type: Planet — ${ARCHETYPE_LABEL[arch] ?? arch}`
-    )
-
-    if (!isMoon && arch === 'gasGiant') {
-      // Match mesh: all gas giants have cloudy decks; ~38% stormy.
-      const stormy = flavor() < 0.38
+    if (arch === 'drowned') {
+      lines.push('Surface: Rooftops and upper storeys above the waterline; streets below')
+      lines.push('Structures: Substantially intact — much of it never burned, only flooded')
       lines.push(
-        stormy
-          ? 'Atmosphere: Stormy hydrogen–helium envelope — violent cloud decks, oval storms'
-          : 'Atmosphere: Thick cloudy hydrogen–helium envelope with layered cloud bands'
+        flavor() < 0.4
+          ? 'Occupants: Signs of recent habitation — smoke, cleared channels'
+          : 'Occupants: Abandoned; no fires, no cleared moorings'
       )
-      lines.push('Surface: No solid crust (fluid/metallic interior)')
-      const aerial = flavor() < 0.12
+      lines.push('Salvage: Household and light industrial, mostly below the waterline')
+    } else if (arch === 'industrial') {
+      lines.push('Surface: Concrete aprons, collapsed sheds, standing gantry')
+      lines.push('Structures: Heavy plant, seized and stripped of anything portable')
       lines.push(
-        aerial
-          ? 'Life: Possible aerial microfauna in upper cloud decks (unconfirmed)'
-          : 'Life: No confirmed biosignatures'
+        flavor() < 0.3
+          ? 'Contamination: Elevated — do not take on water here'
+          : 'Contamination: Within tolerance for a short stay'
       )
-      lines.push('Flora / fauna: None on a solid surface')
-    } else if (!isMoon && arch === 'lush') {
-      lines.push('Atmosphere: Dense N₂–O₂ mix; greenhouse stable')
-      lines.push('Surface: Continents, oceans or wetlands; weathered crust')
-      lines.push('Life: Supports complex biosphere')
-      const flora = pick(flavor, [
-        'Dense forests and algal mats',
-        'Widespread grasslands and moss fields',
-        'Jungle canopy with fungal understory',
-        'Blooming coastal wetlands'
-      ])
-      const fauna = pick(flavor, [
-        'Diverse fauna (aerial + surface)',
-        'Large grazing herds and predators',
-        'Amphibious coastal fauna',
-        'Insectoid swarms and small vertebrates'
-      ])
-      lines.push(`Flora: ${flora}`)
-      lines.push(`Fauna: ${fauna}`)
-    } else if (!isMoon && arch === 'ice') {
-      lines.push('Atmosphere: Thin CO₂ / N₂ or near-vacuum; cryovolcanic traces')
-      lines.push('Surface: Ice crust over rock; possible subsurface ocean')
-      const life = flavor() < 0.18
-      lines.push(life ? 'Life: Possible chemosynthetic microbes under ice' : 'Life: No confirmed biosignatures')
-      lines.push('Flora / fauna: None on the exposed surface')
-    } else if (!isMoon && arch === 'volcanic') {
-      lines.push('Atmosphere: Thick SO₂ / CO₂ toxic haze; ash layers')
-      lines.push('Surface: Lava plains, calderas, active vents')
-      lines.push('Life: Hostile — no complex life; extremophile microbes unlikely at surface')
-      lines.push('Flora / fauna: None detected')
+      lines.push('Salvage: Structural steel, machine parts, cable runs')
+    } else if (arch === 'volcanic') {
+      lines.push('Surface: Fresh basalt and ash; the sea steams along the south shore')
+      lines.push('Vegetation: None established')
+      lines.push('Hazards: Unstable ground, sudden squalls off the thermal column')
+      lines.push('Note: New land. Nothing pre-war here to recover.')
+    } else if (arch === 'scrub') {
+      lines.push('Surface: Thin soil over rock; wind-shaped hardwood and salt scrub')
+      lines.push(
+        flavor() < 0.55
+          ? 'Fresh water: Standing catchment on the high ground'
+          : 'Fresh water: None found'
+      )
+      lines.push(
+        flavor() < 0.35
+          ? 'Fauna: Seabird colony; the eggs are edible'
+          : 'Fauna: Nothing larger than insects'
+      )
+      lines.push('Salvage: Negligible. This was never built on.')
     } else {
-      // rocky planet or moon
-      const atmoRoll = flavor()
-      if (isMoon) {
-        lines.push(
-          atmoRoll < 0.15
-            ? 'Atmosphere: Trace exosphere only'
-            : 'Atmosphere: None (vacuum)'
-        )
-        lines.push('Surface: Cratered regolith; no open water')
-        lines.push('Life: None detected')
-        lines.push('Flora / fauna: None')
-        if (flavor() < 0.55) lines.push('Tidal: Likely tidally influenced by parent world')
-      } else {
-        if (atmoRoll < 0.25) lines.push('Atmosphere: Thin CO₂ / N₂')
-        else if (atmoRoll < 0.55) lines.push('Atmosphere: Trace only')
-        else lines.push('Atmosphere: None / negligible')
-        lines.push('Surface: Rocky crust, impact basins, limited volatiles')
-        const life = flavor() < 0.08
-        lines.push(life ? 'Life: Marginal — possible microbial niches' : 'Life: No confirmed biosignatures')
-        lines.push('Flora / fauna: None at scale')
-      }
+      lines.push('Surface: Bare rock, scoured clean by weather and swell')
+      lines.push('Vegetation: None')
+      lines.push('Fresh water: None')
+      lines.push('Salvage: Negligible. Useful chiefly as a mark to steer by.')
     }
 
-    // Rings: match ~3% of planets in buildPlanetMesh (separate cosmetic stream there;
-    // report from the same body seed family for a stable answer).
-    if (!isMoon) {
-      const ringRng = mulberry32(hashString(body.id))
-      pick(ringRng, PLANET_ARCHETYPE_NAMES) // consume archetype draw
-      if (ringRng() < 0.03) lines.push('Rings: Dust/ice ring system present')
-    }
-
+    const anchorage = flavor()
+    lines.push(
+      anchorage < 0.3
+        ? 'Anchorage: Good holding in the lee; safe in most weather'
+        : anchorage < 0.7
+          ? 'Anchorage: Passable in settled conditions; exposed to the swell'
+          : 'Anchorage: Poor. Foul ground and a lee shore.'
+    )
     return lines
   }
 
-  lines.push(`Body type: ${body.kind}`)
+  if (body.kind === 'port' || body.kind === 'outpost') {
+    lines.push(body.kind === 'port' ? 'Site type: Working harbour' : 'Site type: Outpost')
+    lines.push('Nothing to survey here — go ashore and ask instead.')
+    return lines
+  }
+
   return lines
 }
 

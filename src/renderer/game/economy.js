@@ -7,7 +7,7 @@ import {
   isBuyableTradeGood
 } from '../data/goods.js'
 import { getShipClass } from '../data/shipClasses.js'
-import { findBody, findSystemOfBody, coreFraction } from '../procgen/galaxy.js'
+import { findBody, findSystemOfBody, remoteness } from '../procgen/world.js'
 import { getWeapon, BASE_WEAPON_ID, ALIEN_BASE_WEAPON_ID, defaultLoadoutFor } from '../data/weapons.js'
 import { playerSkillBonuses } from './skills.js'
 import {
@@ -18,7 +18,6 @@ import {
   effectiveMiningCapacity,
   effectiveCargoCapacity,
   effectiveHardpoints,
-  effectiveMaxShields,
   effectiveMaxArmor
 } from '../data/accessories.js'
 import {
@@ -33,7 +32,7 @@ import { getDrone, DEFAULT_DRONE_ID } from '../data/drones.js'
 import { noteTradePurchase, noteTradeSale } from './missions.js'
 
 const TRADE_PRICE_NUDGE_FACTOR = 0.002
-/** At full rim (coreFraction 1), rare ores are this fraction cheaper. */
+/** Out at the world's edge (remoteness 1), rare salvage is this much cheaper. */
 const RIM_RARE_ORE_DISCOUNT = 0.2
 /** When bay stock is empty vs baseline, price can rise by up to this fraction. */
 const SCARCITY_PRICE_CAP = 0.4
@@ -57,21 +56,24 @@ function stockHash(bodyId, goodId) {
 
 /**
  * Initial market depth for a body/good (before player trades).
- * @param {object|null} system — used for rim/core ore depth (coreFraction)
+ * Depth follows how far out the place is (`remoteness`): home waters are
+ * awash with low-grade scrap and short of anything rare, and the deep is the
+ * other way round. The `system` argument is vestigial — a place's own
+ * position is all this needs.
  */
 export function defaultMarketStock(body, goodId, system = null) {
   if (!body) return 0
   if (goodId === SURVEY_DATA_GOOD_ID) return 0
   if (goodId === SHIP_PARTS_GOOD_ID) return body.hasShipParts ? 6 : 0
 
-  const rim = system?.galaxyPosition ? coreFraction(system) : 0
+  const rim = remoteness(body.position)
   const h = stockHash(body.id, goodId)
 
   if (MINED_ORE_GOOD_IDS.includes(goodId)) {
     const core = ORE_STOCK_CORE[goodId] ?? 20
     const rimDepth = ORE_STOCK_RIM[goodId] ?? 20
     let base = Math.round(core * (1 - rim) + rimDepth * rim)
-    if (body.kind === 'settlement') base = Math.round(base * 0.55)
+    if (body.kind === 'outpost') base = Math.round(base * 0.55)
     const jitter = (h % 17) - 8
     return Math.max(0, base + jitter)
   }
@@ -89,7 +91,7 @@ export function defaultMarketStock(body, goodId, system = null) {
       base = Math.max(2, Math.round(base * (1 - 0.6 * Math.min(1.2, mult))))
     }
   }
-  if (body.kind === 'settlement') base = Math.round(base * 0.45)
+  if (body.kind === 'outpost') base = Math.round(base * 0.45)
   return Math.max(0, base)
 }
 
@@ -144,8 +146,8 @@ export function getPrice(gameState, bodyId, goodId, tradeSide = null) {
   }
 
   // Rim ore pricing — rare ores discount toward the rim; low-grade stays low.
-  if (MINED_ORE_GOOD_IDS.includes(goodId) && system?.galaxyPosition) {
-    const rim = coreFraction(system)
+  if (MINED_ORE_GOOD_IDS.includes(goodId) && body?.position) {
+    const rim = remoteness(body.position)
     if (RARE_ORE_IDS.has(goodId)) {
       price *= 1 - RIM_RARE_ORE_DISCOUNT * rim
     }
@@ -236,7 +238,7 @@ export function sellGood(gameState, bodyId, goodId, quantity) {
 
 /**
  * Permanently destroy cargo from ship hold or station bay.
- * @param {'ship'|'station'} where
+ * @param {'ship'|'port'} where
  * @returns {number} quantity discarded
  */
 export function discardCargo(gameState, goodId, quantity, where = 'ship', bodyId = null) {
@@ -251,7 +253,7 @@ export function discardCargo(gameState, goodId, quantity, where = 'ship', bodyId
     if (cargo[goodId] <= 0) delete cargo[goodId]
     return qty
   }
-  if (where === 'station') {
+  if (where === 'port') {
     if (!bodyId) throw new Error('Station required')
     const cargo = storageFor(gameState, bodyId).cargo
     const have = cargo[goodId] ?? 0
@@ -265,7 +267,7 @@ export function discardCargo(gameState, goodId, quantity, where = 'ship', bodyId
 
 /**
  * Permanently destroy ore from ship mining hold or station ore bay.
- * @param {'ship'|'station'} where
+ * @param {'ship'|'port'} where
  * @returns {number} quantity discarded
  */
 export function discardOre(gameState, goodId, quantity, where = 'ship', bodyId = null) {
@@ -282,7 +284,7 @@ export function discardOre(gameState, goodId, quantity, where = 'ship', bodyId =
     if (hold[goodId] <= 0) delete hold[goodId]
     return qty
   }
-  if (where === 'station') {
+  if (where === 'port') {
     if (!bodyId) throw new Error('Station required')
     const hold = storageFor(gameState, bodyId).miningHold
     const have = hold[goodId] ?? 0
@@ -326,8 +328,7 @@ export function buyMinedOre(gameState, bodyId, goodId, quantity) {
   nudgePrice(gameState, bodyId, goodId, qty)
 }
 
-// Shields already regenerate on their own over time (see combat.js's
-// regenShields) — only hull and armor persist damage indefinitely, so
+// Nothing repairs itself out here — hull and armour both stay damaged, so
 // repairing just tops those back up. Cost scales with both how damaged the
 // ship is (missing points) and how big it is (hull.length relative to the
 // starter ship, so a Hold Runner costs meaningfully more per point than a Light Runner)
@@ -344,7 +345,7 @@ export function repairCost(gameState, body = null) {
   const missing = shipClass.stats.hull - ship.hull + (shipClass.stats.armor - ship.armor)
   const sizeFactor = shipClass.hull.length / REPAIR_SIZE_REFERENCE_LENGTH
   let cost = missing * REPAIR_COST_PER_POINT * sizeFactor
-  if (body?.kind === 'settlement') cost *= 1 + SETTLEMENT_REPAIR_SURCHARGE
+  if (body?.kind === 'outpost') cost *= 1 + SETTLEMENT_REPAIR_SURCHARGE
   return Math.max(0, Math.round(cost))
 }
 
@@ -486,7 +487,6 @@ export function purchaseShip(gameState, bodyId, newClassId, instanceName) {
     classId: newClassId,
     instanceName,
     hull: newClass.stats.hull,
-    shields: newClass.stats.shields,
     armor: newClass.stats.armor,
     cargo: {},
     miningHold: {},
@@ -538,7 +538,6 @@ export function activateStoredShip(gameState, bodyId, index) {
     classId: current.classId,
     instanceName: current.instanceName,
     hull: current.hull,
-    shields: current.shields,
     armor: current.armor,
     cargo: current.cargo,
     miningHold: current.miningHold,
@@ -561,7 +560,6 @@ export function activateStoredShip(gameState, bodyId, index) {
     classId: stored.classId,
     instanceName: stored.instanceName,
     hull: stored.hull,
-    shields: stored.shields,
     armor: stored.armor,
     cargo: stored.cargo ?? {},
     miningHold: stored.miningHold ?? {},
@@ -912,8 +910,7 @@ export function equipAccessory(gameState, bodyId, slotIndex, accessoryId) {
   }
   ship.equippedAccessories[idx] = wantId
 
-  // Clamp defensive pools if shield/armour upgrades were removed.
-  ship.shields = Math.min(ship.shields ?? 0, effectiveMaxShields(ship, shipClass))
+  // Clamp armour if the plate upgrade was removed.
   ship.armor = Math.min(ship.armor ?? 0, effectiveMaxArmor(ship, shipClass))
 
   // Accessory hardpoints add mounts (even types the hull never had). They do
@@ -1009,29 +1006,21 @@ export function storageHasAssets(storage) {
 }
 
 /**
- * System ids (other than the player's current system) where the player has
- * parked ships, stored cargo/ore/parts/weapons/blueprints, or an in-progress
- * craft job. Used by the galaxy map green asset rings.
+ * Harbours where the player has boats laid up, goods ashore, or work in the
+ * yard. Marked on the sea chart so a full hold left three ports back is not
+ * quietly forgotten.
  */
-export function playerAssetSystemIds(gameState) {
+export function playerAssetBodyIds(gameState) {
   const ids = new Set()
-  const currentId = gameState.player?.currentSystemId
-  const galaxy = gameState.galaxy
-  if (!galaxy) return ids
+  if (!gameState?.galaxy) return ids
 
   for (const [bodyId, storage] of Object.entries(gameState.stationStorage ?? {})) {
-    if (!storageHasAssets(storage)) continue
-    const system = findSystemOfBody(galaxy, bodyId)
-    if (!system || system.id === currentId) continue
-    ids.add(system.id)
+    if (storageHasAssets(storage)) ids.add(String(bodyId))
   }
 
-  // In-progress crafts (finished jobs are removed by updateCraftingJobs).
+  // In-progress work (finished jobs are removed by updateCraftingJobs).
   for (const job of gameState.craftingJobs ?? []) {
-    if (!job?.bodyId) continue
-    const system = findSystemOfBody(galaxy, job.bodyId)
-    if (!system || system.id === currentId) continue
-    ids.add(system.id)
+    if (job?.bodyId) ids.add(String(job.bodyId))
   }
 
   return ids

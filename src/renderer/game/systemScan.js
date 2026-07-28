@@ -9,7 +9,7 @@ import {
   tryRollAlienBlueprintDrop
 } from './crafting.js'
 import { tryRollSkillbookDrop, getSkillDef } from './skills.js'
-import { oreTierForSystem } from './mining.js'
+import { oreTierForField } from './mining.js'
 
 export const SYSTEM_SCAN_PROBE_COUNT = 4
 /** Base seconds of “lock” progress needed at full strength (explorer reduces). */
@@ -40,9 +40,9 @@ export function isDatacoreType(type) {
   return type === 'datacore' || type === 'datacore_takeover' || type === 'alien_datacore'
 }
 
-/** One tier rarer than the system's normal ore, capped at the top tier. */
-export function rareOreTierForSystem(system) {
-  const base = MINED_ORE_GOOD_IDS.indexOf(oreTierForSystem(system))
+/** One grade better than the surrounding water normally gives, capped at the top. */
+export function rareOreTierForSystem(site) {
+  const base = MINED_ORE_GOOD_IDS.indexOf(oreTierForField(site))
   const idx = Math.min(MINED_ORE_GOOD_IDS.length - 1, Math.max(0, base) + 1)
   return MINED_ORE_GOOD_IDS[idx]
 }
@@ -152,8 +152,8 @@ function bodyClearanceRadius(body) {
   // Prefer explicit radius; stations/settlements may be small on body.radius.
   const r = Number(body.radius)
   if (Number.isFinite(r) && r > 0) return r
-  if (body.kind === 'station') return 3400
-  if (body.kind === 'settlement') return 200
+  if (body.kind === 'port') return 3400
+  if (body.kind === 'outpost') return 200
   if (body.kind === 'warpGate') return 140
   return 500
 }
@@ -407,7 +407,7 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
       system.bodies.push({
         id: fieldId,
         name: 'Rare Ore Deposit',
-        kind: 'asteroidField',
+        kind: 'wreckField',
         position: [...position],
         radius: ORE_ANOMALY_FIELD_RADIUS,
         economyTags: [],

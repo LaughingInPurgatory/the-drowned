@@ -9,8 +9,7 @@ export const DRONES = [
     id: 'stinger_light',
     name: 'Stinger Light Combat',
     // Compact escort fighter stats (pulse laser only).
-    shields: 50,
-    armor: 50,
+    armor: 100,
     hull: 40,
     weaponId: 'pulse_laser',
     speed: 145,

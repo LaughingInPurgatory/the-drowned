@@ -797,21 +797,31 @@ export function playDockThrusterPulse() {
   noiseBurst({ duration: 0.22, filterFreq: 700, peak: 0.1 })
 }
 
-// Probe launch (one-shot whoosh) + continuous scan warble + soft return chirp.
-export function playProbeLaunch() {
+/**
+ * The sonar ping: a hard transient, a long descending tail, and a wash of
+ * reverb-ish repeats for the water it went out across. Pure synthesis — no
+ * sample, because the classic ping is easier to hit with an oscillator than to
+ * source, and it has to sit in the mix without stepping on the engines.
+ */
+export function playSonarPing(index = 0) {
   ensureSfx()
-  const s = playSample('rocket.ogg', { volume: 0.32, rate: 1.55 })
-  tone({ type: 'sine', freq: 420, freqEnd: 980, duration: 0.35, peak: 0.1 })
-  if (s) return
-  tone({ type: 'sawtooth', freq: 280, freqEnd: 90, duration: 0.4, peak: 0.14 })
-  noiseBurst({ duration: 0.3, filterFreq: 2200, peak: 0.16 })
+  // Each ring in a sounding drops a little in pitch, so a burst of three reads
+  // as one instrument rather than three copies of the same sound.
+  const base = 1180 - index * 130
+  // The strike.
+  tone({ type: 'sine', freq: base, freqEnd: base * 0.55, duration: 1.5, peak: 0.16 })
+  // A touch of harmonic on the attack — this is what makes it read as metal.
+  tone({ type: 'triangle', freq: base * 2.02, freqEnd: base * 1.1, duration: 0.35, peak: 0.05 })
+  // The tail coming back off the water.
+  tone({ type: 'sine', freq: base * 0.52, freqEnd: base * 0.34, duration: 2.1, peak: 0.07, delay: 0.18 })
+  tone({ type: 'sine', freq: base * 0.5, freqEnd: base * 0.3, duration: 1.6, peak: 0.04, delay: 0.52 })
 }
 
-export function playProbeReturn() {
+/** Whatever came back. Two notes, up — you found something. */
+export function playSonarReturn() {
   ensureSfx()
-  playSample('engine_engage.ogg', { volume: 0.2, rate: 1.35 })
-  tone({ type: 'sine', freq: 720, freqEnd: 360, duration: 0.28, peak: 0.09 })
-  tone({ type: 'sine', freq: 980, duration: 0.1, peak: 0.07, delay: 0.2 })
+  tone({ type: 'sine', freq: 640, freqEnd: 880, duration: 0.3, peak: 0.1 })
+  tone({ type: 'sine', freq: 1180, duration: 0.22, peak: 0.07, delay: 0.16 })
 }
 
 let probeScanOsc = null
@@ -819,7 +829,7 @@ let probeScanGain = null
 let probeScanLFO = null
 let probeScanPing = null
 
-// Continuous scanning hum + soft radar pings while the probe surveys a body.
+// Low hum under an active sounding, between the pings.
 export function setProbeScanActive(active) {
   const audio = getContext()
   if (active && !probeScanOsc) {

@@ -22,7 +22,7 @@ import {
 } from './uiTheme.js'
 
 /**
- * Full Station Services / Undock chrome (copied from dockingUI).
+ * Full Harbour Services / Undock chrome (copied from dockingUI).
  * !important so #main-menu / #pause-menu button rules cannot strip the fill/glow.
  */
 export const UI_ACTION_BTN_CSS = `

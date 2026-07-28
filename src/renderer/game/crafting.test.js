@@ -31,7 +31,7 @@ import {
   PROBE_BLUEPRINT_DROP_CHANCE
 } from './crafting.js'
 import { createGameState } from './state.js'
-import { TEST_GALAXY_OPTS } from '../procgen/galaxy.js'
+import { TEST_WORLD_OPTS } from '../procgen/world.js'
 import { STARTER_SHIP_CLASS_ID } from '../data/shipClasses.js'
 import { WEAPONS } from '../data/weapons.js'
 import { ACCESSORIES } from '../data/accessories.js'
@@ -42,7 +42,7 @@ function freshState() {
     shipInstanceName: 'Rig',
     shipClassId: STARTER_SHIP_CLASS_ID,
     seed: 42,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
 }
 
@@ -113,8 +113,8 @@ test('manufacture cost is ~75% of list; 65% of that is ore value, 35% bay fee', 
   }
 })
 
-test('Autopilot and Extra Ore Storage prices and craft budgets', () => {
-  assert.equal(getBlueprint(blueprintIdForAccessory('autopilot')).listPrice, 10000)
+test('accessory prices and craft budgets', () => {
+  assert.equal(getBlueprint(blueprintIdForAccessory('cargo_upgrade')).listPrice, 14000)
   assert.equal(getBlueprint(blueprintIdForAccessory('extra_ore_storage')).listPrice, 12000)
   // 75% of list
   assert.equal(manufactureBudget(10000), 7500)
@@ -123,7 +123,7 @@ test('Autopilot and Extra Ore Storage prices and craft budgets', () => {
   assert.equal(oreBudgetForBlueprint(10000), Math.round(7500 * 0.65)) // 4875
   assert.equal(oreBudgetForBlueprint(12000), Math.round(9000 * 0.65)) // 5850
   // 35% bay fee
-  assert.equal(creditCostForBlueprint(blueprintIdForAccessory('autopilot')), Math.round(7500 * 0.35)) // 2625
+  assert.equal(creditCostForBlueprint(blueprintIdForAccessory('cargo_upgrade')), Math.round(10500 * 0.35))
   assert.equal(creditCostForBlueprint(blueprintIdForAccessory('extra_ore_storage')), Math.round(9000 * 0.35)) // 3150
 })
 
@@ -189,7 +189,7 @@ test('startCraft consumes station BP+ore+credits and delivers after wall-clock d
   ensureBlueprintMaps(gs)
   const station = gs.galaxy.systems
     .flatMap((s) => s.bodies)
-    .find((b) => b.kind === 'station')
+    .find((b) => b.kind === 'port')
   assert.ok(station)
   gs.player.currentSystemId = gs.galaxy.systems.find((s) => s.bodies.some((b) => b.id === station.id)).id
 
@@ -221,9 +221,9 @@ test('startCraft consumes station BP+ore+credits and delivers after wall-clock d
 test('crafting an accessory delivers into station accessories storage', () => {
   const gs = freshState()
   ensureBlueprintMaps(gs)
-  const station = gs.galaxy.systems.flatMap((s) => s.bodies).find((b) => b.kind === 'station')
+  const station = gs.galaxy.systems.flatMap((s) => s.bodies).find((b) => b.kind === 'port')
   gs.player.currentSystemId = gs.galaxy.systems.find((s) => s.bodies.some((b) => b.id === station.id)).id
-  const bpId = blueprintIdForAccessory('autopilot')
+  const bpId = blueprintIdForAccessory('cargo_upgrade')
   const cost = oreCostForBlueprint(bpId)
   const fee = creditCostForBlueprint(bpId)
   const storage = (gs.stationStorage[station.id] ??= {
@@ -234,7 +234,7 @@ test('crafting an accessory delivers into station accessories storage', () => {
   gs.player.credits = fee + 5000
   const job = startCraft(gs, station.id, bpId, 2_000_000)
   updateCraftingJobs(gs, job.completesAtWallMs)
-  assert.equal(storage.accessories.autopilot, 1)
+  assert.equal(storage.accessories.cargo_upgrade, 1)
 })
 
 test('blueprint transfer helpers and drop chances stay sensible', () => {
@@ -242,7 +242,7 @@ test('blueprint transfer helpers and drop chances stay sensible', () => {
   assert.ok(PROBE_BLUEPRINT_DROP_CHANCE > 0 && PROBE_BLUEPRINT_DROP_CHANCE < 0.05)
   const gs = freshState()
   ensureBlueprintMaps(gs)
-  const station = gs.galaxy.systems.flatMap((s) => s.bodies).find((b) => b.kind === 'station')
+  const station = gs.galaxy.systems.flatMap((s) => s.bodies).find((b) => b.kind === 'port')
   gs.player.ship.blueprints[blueprintIdForShip(STARTER_SHIP_CLASS_ID)] = 2
   storeBlueprints(gs, station.id)
   assert.equal(gs.player.ship.blueprints[blueprintIdForShip(STARTER_SHIP_CLASS_ID)], undefined)

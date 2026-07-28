@@ -36,6 +36,9 @@ function loadMap(url, { srgb = false, repeatU, repeatV } = {}) {
 function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {}) {
   const key = `${prefix}|${repeatU}x${repeatV}|m${withMetalness ? 1 : 0}`
   if (cache[key]) return cache[key]
+  // Headless (node --test): there is no image pipeline to load into. Return no
+  // maps rather than throwing, so mesh builders stay callable in tests.
+  if (typeof document === 'undefined') return undefined
   loader ??= new THREE.TextureLoader()
   const opts = { repeatU, repeatV }
   const map = loadMap(`textures/${prefix}_color.jpg`, { ...opts, srgb: true })
@@ -50,20 +53,115 @@ function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {
 }
 
 // CC0 (public domain, no attribution required) PBR photo textures from
-// ambientCG (ambientcg.com) — tiled across each body's low-poly sphere via
-// RepeatWrapping rather than a single fixed equirectangular image, so four
-// source textures can cover every rocky/ice/lush/volcanic planet, every
-// moon and asteroid (all reuse `rocky`), and every star's surface (reuses
-// `volcanic`) in the galaxy. Gas giants use free procedural cloud-band
-// maps (no third-party license) that tile the same way.
-// Returns undefined only when an archetype has no maps and we are in a
-// headless context that cannot build canvas textures.
+// ambientCG (ambientcg.com), tiled via RepeatWrapping so a handful of source
+// sets cover every surface on the sea. `sand` is generated instead (see above).
+// Returns undefined only in a headless context with no canvas.
+//
+// These are island *surfaces*, not island archetypes. An island mixes two of these (see
+// render/islandMesh.js), so a rocky headland can have a sandy beach and a
+// grassy top without needing a texture per combination.
 const ARCHETYPE_PREFIX = {
   rocky: 'rock',
-  ice: 'ice',
-  lush: 'lush',
-  volcanic: 'lava'
-  // gasGiant → makeGasGiantTextureSet() (procedural)
+  barren: 'rock',
+  grass: 'lush',
+  scrub: 'lush',
+  ruin: 'plates',
+  drowned: 'plates',
+  works: 'darkmetal',
+  industrial: 'darkmetal',
+  volcanic: 'lava',
+  ash: 'lava'
+}
+
+/**
+ * Sand. There is no CC0 sand set in the pack, and every shore wants one, so it
+ * is generated: fine grain, a few shell flecks, and the ripple the tide leaves.
+ * Cheap enough to bake once at boot and share across every beach on the sea.
+ */
+function makeSandTextureSet() {
+  const key = 'sand|proc|v1'
+  if (cache[key]) return cache[key]
+  const hasDom = typeof document !== 'undefined' && typeof document.createElement === 'function'
+  const hasOffscreen = typeof OffscreenCanvas !== 'undefined'
+  if (!hasDom && !hasOffscreen) return undefined
+
+  const S = 512
+  const make = () => {
+    const c = hasDom ? document.createElement('canvas') : new OffscreenCanvas(S, S)
+    c.width = S
+    c.height = S
+    return c
+  }
+
+  const albedo = make()
+  const ac = albedo.getContext('2d', { willReadFrequently: true })
+  if (!ac) return undefined
+  const img = ac.createImageData(S, S)
+  const d = img.data
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const i = (y * S + x) * 4
+      // Fine grain, plus a long low ripple across the beach.
+      const grain = (Math.random() - 0.5) * 26
+      const ripple = Math.sin(x * 0.09 + Math.sin(y * 0.021) * 2.2) * 7
+      const v = 196 + grain + ripple
+      d[i] = Math.max(0, Math.min(255, v))
+      d[i + 1] = Math.max(0, Math.min(255, v - 12))
+      d[i + 2] = Math.max(0, Math.min(255, v - 42))
+      d[i + 3] = 255
+    }
+  }
+  ac.putImageData(img, 0, 0)
+  // Shell and pebble flecks.
+  for (let i = 0; i < 900; i++) {
+    const x = Math.random() * S
+    const y = Math.random() * S
+    const r = 0.4 + Math.random() * 1.5
+    ac.fillStyle = Math.random() < 0.6 ? 'rgba(238,232,214,0.7)' : 'rgba(120,104,84,0.55)'
+    ac.beginPath()
+    ac.arc(x, y, r, 0, Math.PI * 2)
+    ac.fill()
+  }
+
+  // Normal map from the albedo's luminance — the grain is the relief.
+  const normal = make()
+  const nc = normal.getContext('2d', { willReadFrequently: true })
+  const src = ac.getImageData(0, 0, S, S).data
+  const nImg = nc.createImageData(S, S)
+  const nd = nImg.data
+  const lum = (x, y) => {
+    const i = ((((y % S) + S) % S) * S + (((x % S) + S) % S)) * 4
+    return src[i] / 255
+  }
+  for (let y = 0; y < S; y++) {
+    for (let x = 0; x < S; x++) {
+      const i = (y * S + x) * 4
+      const dx = lum(x + 1, y) - lum(x - 1, y)
+      const dy = lum(x, y + 1) - lum(x, y - 1)
+      nd[i] = Math.max(0, Math.min(255, 128 - dx * 300))
+      nd[i + 1] = Math.max(0, Math.min(255, 128 - dy * 300))
+      nd[i + 2] = 255
+      nd[i + 3] = 255
+    }
+  }
+  nc.putImageData(nImg, 0, 0)
+
+  const wrap = (src, srgb = false) => {
+    const tex = new THREE.CanvasTexture(src)
+    if (srgb) tex.colorSpace = THREE.SRGBColorSpace
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    tex.repeat.set(1, 1)
+    tex.anisotropy = 8
+    tex.minFilter = THREE.LinearMipmapLinearFilter
+    tex.magFilter = THREE.LinearFilter
+    tex.generateMipmaps = true
+    tex.needsUpdate = true
+    return tex
+  }
+
+  const set = { map: wrap(albedo, true), normalMap: wrap(normal, false) }
+  cache[key] = set
+  return set
 }
 
 /**
@@ -231,7 +329,7 @@ function makeGasGiantTextureSet() {
 }
 
 export function getSurfaceTextures(archetype) {
-  if (archetype === 'gasGiant') return makeGasGiantTextureSet()
+  if (archetype === 'sand') return makeSandTextureSet()
   const prefix = ARCHETYPE_PREFIX[archetype]
   return prefix ? loadSet(prefix) : undefined
 }

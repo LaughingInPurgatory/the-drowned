@@ -1,17 +1,17 @@
 import { spawnNpc, spawnNpcWithClass, clearPositionOfBodies } from './spawner.js'
 import { pick } from '../procgen/prng.js'
-import { coreFraction, findBody, getSystem, systemsWithinJumps } from '../procgen/galaxy.js'
+import { remoteness, findBody, getSystem } from '../procgen/world.js'
 import { getGood } from '../data/goods.js'
 
-const PROBEABLE_KINDS = ['planet', 'moon', 'asteroidField']
+const PROBEABLE_KINDS = ['island', 'wreckField']
 // ponytail: hard cap so a lead chain always terminates; raise only if trails feel short
 const MAX_INVESTIGATION_LEADS = 2
 const LEAD_REWARD_MULT = 1.05
-// Keep leads within the same "reasonable trip" radius missionTemplates.js uses
-// for the initial giver→target placement — each lead hops off the PREVIOUS
-// target, so without re-checking against the original giver system a chain of
-// hops could drift arbitrarily far from where the contract was picked up.
-const MAX_LEAD_JUMP_DISTANCE = 4
+// Keep leads within the same "reasonable voyage" radius missionTemplates.js
+// uses for the initial giver→target placement. Each lead hops off the PREVIOUS
+// target, so without re-checking against the harbour that posted the contract a
+// chain of hops could walk the player clean across the sea.
+const MAX_LEAD_DISTANCE = 14000
 
 /** @type {null|((info: object) => void)} */
 let missionCompletedHandler = null
@@ -338,40 +338,39 @@ function pickInvestigationLead(gameState, mission, rng) {
   const currentSystem = getSystem(gameState.galaxy, mission.target.systemId)
   if (!currentSystem) return null
 
-  // Anchor every lead to the ORIGINAL giver system, not just the previous hop —
-  // a chain of "spill to one neighbor" moves could otherwise drift well past
-  // MAX_LEAD_JUMP_DISTANCE jumps from where the contract was picked up.
-  const giverSystemId = mission.giverSystemId ?? currentSystem.id
-  const reachable = new Set(
-    systemsWithinJumps(gameState.galaxy, giverSystemId, MAX_LEAD_JUMP_DISTANCE).map((s) => s.id)
-  )
+  // Anchor every lead to where the contract was picked up, not to the previous
+  // hop — a chain of "spill to somewhere nearby" moves could otherwise walk the
+  // player clean across the sea one lead at a time.
+  const anchorBody = findBody(gameState.galaxy, mission.giverStationId)
+  const anchor = anchorBody?.position ?? gameState.player.ship.position
+  const withinLeadRange = (body) =>
+    Math.hypot(body.position[0] - anchor[0], body.position[2] - anchor[2]) <= MAX_LEAD_DISTANCE
 
   const candidates = []
+  const spares = []
   for (const body of currentSystem.bodies) {
-    // Anomaly-owned bodies (e.g. a Rare Ore Deposit's synthetic asteroidField —
+    // Anomaly-owned bodies (e.g. a rich salvage patch's synthetic wreck field —
     // see systemScan.js) are scan-only finds, never a mission destination, and
-    // can vanish on the next epoch reshuffle while a mission still points at it.
+    // one can vanish on the next epoch reshuffle while a mission still points
+    // at it.
     if (body.anomalySiteId) continue
     if (!PROBEABLE_KINDS.includes(body.kind)) continue
     if (body.id === mission.target.bodyId) continue
-    candidates.push({ system: currentSystem, body })
+    if (withinLeadRange(body)) candidates.push({ system: currentSystem, body })
+    else spares.push({ system: currentSystem, body })
   }
 
-  // Same-system trail first; spill into neighbors only if this system is dry.
+  // Nothing in range of the posting harbour — rather than drop the trail, take
+  // the nearest thing outside it.
   if (!candidates.length) {
-    for (const neighborId of currentSystem.neighborIds) {
-      if (!reachable.has(neighborId)) continue
-      const system = getSystem(gameState.galaxy, neighborId)
-      if (!system) continue
-      for (const body of system.bodies) {
-        if (body.anomalySiteId) continue
-        if (!PROBEABLE_KINDS.includes(body.kind)) continue
-        candidates.push({ system, body })
-      }
-    }
+    if (!spares.length) return null
+    spares.sort(
+      (a, b) =>
+        Math.hypot(a.body.position[0] - anchor[0], a.body.position[2] - anchor[2]) -
+        Math.hypot(b.body.position[0] - anchor[0], b.body.position[2] - anchor[2])
+    )
+    return spares[0]
   }
-
-  if (!candidates.length) return null
   return pick(rng, candidates)
 }
 
@@ -443,7 +442,7 @@ export function resolveInvestigationProbe(gameState, bodyId, rng) {
     const npc = spawnNpc(rng, {
       position,
       faction: 'pirate',
-      coreFraction: system ? coreFraction(system) : 0,
+      coreFraction: remoteness(position),
       bodies: system?.bodies
     })
     npc.missionId = mission.id

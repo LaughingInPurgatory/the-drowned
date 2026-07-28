@@ -3,7 +3,7 @@
  * Opened from the radar "System Scan" button.
  */
 import * as THREE from 'three'
-import { getSystem } from '../procgen/galaxy.js'
+import { getSystem } from '../procgen/world.js'
 import {
   SYSTEM_SCAN_PROBE_COUNT,
   ensureSystemAnomalies,
@@ -437,16 +437,16 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       }
       let r = 2400
       let color = 0x9ac0e8
-      if (b.kind === 'planet') {
+      if (b.kind === 'island') {
         r = Math.min(10000, Math.max(3200, (b.radius ?? 2000) * 0.3))
         color = 0xb8d8ff
-      } else if (b.kind === 'moon') {
+      } else if (b.kind === 'island') {
         r = 2000
         color = 0xd0d8e8
-      } else if (b.kind === 'station' || b.kind === 'settlement') {
+      } else if (b.kind === 'port' || b.kind === 'outpost') {
         r = 2400
         color = 0x70ffff
-      } else if (b.kind === 'asteroidField') {
+      } else if (b.kind === 'wreckField') {
         r = 4500
         color = 0xc8b8a0
       }
@@ -454,15 +454,15 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         new THREE.SphereGeometry(r, 16, 12),
         new THREE.MeshBasicMaterial({
           color,
-          wireframe: b.kind === 'asteroidField',
-          transparent: b.kind === 'asteroidField',
-          opacity: b.kind === 'asteroidField' ? 0.85 : 1
+          wireframe: b.kind === 'wreckField',
+          transparent: b.kind === 'wreckField',
+          opacity: b.kind === 'wreckField' ? 0.85 : 1
         })
       )
       m.position.fromArray(b.position)
       bodyGroup.add(m)
       // Halo so small bodies stay visible at long range
-      if (b.kind === 'planet' || b.kind === 'station' || b.kind === 'settlement') {
+      if (b.kind === 'island' || b.kind === 'port' || b.kind === 'outpost') {
         const halo = new THREE.Mesh(
           new THREE.SphereGeometry(r * 1.5, 12, 10),
           new THREE.MeshBasicMaterial({

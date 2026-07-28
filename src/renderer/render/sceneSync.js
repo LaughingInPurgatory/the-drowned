@@ -1,8 +1,12 @@
 import * as THREE from 'three'
+import { headingOf } from '../game/flight.js'
 
-// Default chase seat: behind and above the ship (local +Z forward).
+// Default chase seat: astern and above the boat (local +Z forward).
 // Elevated so the hull sits low in frame and the reticle is clear above it.
-const CHASE_OFFSET = new THREE.Vector3(0, 12, -46)
+const CHASE_OFFSET = new THREE.Vector3(0, 14, -38)
+// How fast the seat height chases the waterline. Low enough to smooth the
+// swell, high enough that cresting a wave is still felt.
+const SEAT_HEAVE_SMOOTHING = 2.4
 // Slightly tighter seat in supercruise so we don't read as "pulling way out".
 const CRUISE_SEAT_SCALE = 0.88
 /**
@@ -25,6 +29,10 @@ let freeLookPitch = 0
 let freeLookBlend = 0
 const FREE_LOOK_BLEND_SPEED = 4.5 // ~0.25s ease toward target
 
+const _worldUp = new THREE.Vector3(0, 1, 0)
+const _headingQ = new THREE.Quaternion()
+// Smoothed seat height, so the view rides the swell instead of every ripple.
+let smoothedSeatY = 0
 const _shipUp = new THREE.Vector3()
 const _shipFwd = new THREE.Vector3()
 const _lookAt = new THREE.Vector3()
@@ -71,6 +79,9 @@ export function resetChaseCameraState() {
   freeLookYaw = 0
   freeLookPitch = 0
   freeLookBlend = 0
+  // Force the next frame to seat at the real waterline rather than easing up
+  // from wherever the previous view left it.
+  smoothedSeatY = Number.NaN
 }
 
 export function setChaseFreeLook(active) {
@@ -206,7 +217,10 @@ export function orientCameraToward(camera, target, preferredUp) {
  * @param {{ cruising?: boolean, forceSnap?: boolean, dt?: number }} [opts]
  */
 export function syncChaseCamera(camera, shipState, { cruising = false, forceSnap = false, dt = 1 / 60 } = {}) {
-  const quat = new THREE.Quaternion().fromArray(shipState.quaternion).normalize()
+  // Heading only. The hull's own quaternion carries wave pitch and heel, and
+  // riding those would shake the camera with every swell and heel it over in
+  // every turn — the seat follows where the boat is *pointed*, nothing else.
+  _headingQ.setFromAxisAngle(_worldUp, headingOf(shipState))
   const shipPos = new THREE.Vector3().fromArray(shipState.position)
   // Cruise: don't pull the seat further out — stay near normal zoom (or slightly closer).
   const seat = chaseZoom * (cruising ? CRUISE_SEAT_SCALE : 1)
@@ -234,8 +248,13 @@ export function syncChaseCamera(camera, shipState, { cruising = false, forceSnap
       idleOrbitYaw = 0
     }
   }
-  _offset.applyQuaternion(quat)
+  _offset.applyQuaternion(_headingQ)
   const desiredPos = shipPos.clone().add(_offset)
+  // Ride a smoothed waterline rather than the hull's instantaneous height, so
+  // the view does not bob a metre and a half with every crest.
+  if (!Number.isFinite(smoothedSeatY) || forceSnap) smoothedSeatY = desiredPos.y
+  else smoothedSeatY += (desiredPos.y - smoothedSeatY) * Math.min(1, dt * SEAT_HEAVE_SMOOTHING)
+  desiredPos.y = smoothedSeatY
 
   // Always snap to the ideal chase seat — soft lerp lagged behind mouse turns
   // and biased the view left/right instead of staying centered aft.
@@ -247,16 +266,15 @@ export function syncChaseCamera(camera, shipState, { cruising = false, forceSnap
     camera.position.lerp(desiredPos, cruising ? 0.9 : 0.4)
   }
 
-  // Bank with the ship so local mouse axes stay screen-correct through loops.
-  _shipUp.set(0, 1, 0).applyQuaternion(quat)
-  if (_shipUp.lengthSq() < 1e-8) _shipUp.set(0, 1, 0)
-  else _shipUp.normalize()
+  // The horizon stays level. A boat heels; the camera does not go with it.
+  _shipUp.copy(_worldUp)
 
   // Free-look (and idle orbit) frame the hull; combat frames aim ahead. Blend
   // the look target so engage/release eases instead of snapping the pitch —
   // without this the idle drift would orbit around the ship while still aiming
   // at the forward point, so the hull would slide out of frame as it turned.
   getShipAimPoint(shipState, _lookAt, AIM_LOOK_AHEAD)
+  _lookAt.y = smoothedSeatY - CHASE_OFFSET.y * chaseZoom
   _lookHull.copy(shipPos)
   const blendTarget = freeLookActive ? 1 : idleOrbitBlend
   if (forceSnap) {

@@ -1,5 +1,5 @@
 import { mulberry32, intRange, range } from '../procgen/prng.js'
-import { coreFraction } from '../procgen/galaxy.js'
+import { remoteness, inHomeWaters } from '../procgen/world.js'
 import { MINED_ORE_GOOD_IDS, getGood } from '../data/goods.js'
 import { effectiveMiningCapacity } from '../data/accessories.js'
 import { getWeapon, BASE_WEAPON_ID } from '../data/weapons.js'
@@ -104,20 +104,20 @@ export function isRockAlive(gameState, fieldId, index) {
   return true
 }
 
-// Ore tier is picked by how far the current system sits from the galaxy's
-// core — systems near the center only yield raw ore, while systems out
-// toward the rim can yield increasingly rare (and valuable) ore types. Every
-// rock in a field shares its system's tier (mining any of them already gave
-// the same ore regardless of which rock), so this also doubles as the name
-// every rock in that field displays (see rockDisplayName).
-export function oreTierForSystem(system) {
-  const t = coreFraction(system)
+// Salvage grade is set by how far out the wreck lies. Picked-over hulks in
+// home waters give up scrap and little else; the deep still holds warship
+// plate and intact pre-war cores, which is the whole reason to sail out
+// there. Every wreck in a field shares its field's grade (stripping any of
+// them already gave the same material regardless of which), so this also
+// names every hulk the field displays (see rockDisplayName).
+export function oreTierForField(field) {
+  const t = remoteness(field?.position)
   const index = Math.min(MINED_ORE_GOOD_IDS.length - 1, Math.floor(t * MINED_ORE_GOOD_IDS.length))
   return MINED_ORE_GOOD_IDS[index]
 }
 
-export function rockDisplayName(system, oreOverride = null) {
-  return `${getGood(oreOverride ?? oreTierForSystem(system)).name} Deposit`
+export function rockDisplayName(field, oreOverride = null) {
+  return `${getGood(oreOverride ?? oreTierForField(field)).name} Wreck`
 }
 
 /** Remaining mineable ore on a rock (lazy-inits state if needed). */
@@ -198,8 +198,8 @@ export function formatRespawnTime(seconds) {
 // scoopedAmount: units actually scooped
 // amount: units stripped from the rock
 // destroyed: this hit emptied the rock
-export function mineRock(gameState, shipClass, system, fieldId, index, amount = 1, oreOverride = null) {
-  const goodId = oreOverride ?? oreTierForSystem(system)
+export function mineRock(gameState, shipClass, field, fieldId, index, amount = 1, oreOverride = null) {
+  const goodId = oreOverride ?? oreTierForField(field)
   if (!isRockAlive(gameState, fieldId, index)) {
     return { goodId, mined: false, scooped: false, scoopedAmount: 0, amount: 0, destroyed: false }
   }
@@ -243,11 +243,9 @@ export function mineRock(gameState, shipClass, system, fieldId, index, amount = 
 export function rollMiningPirateAmbush(rng, gameState, system) {
   if (!gameState || !system) return false
   if (getSystemSecurity(system) > MINING_PIRATE_MAX_SECURITY) return false
-  // Same peace rule as ambient hostiles: home system stays quiet until broken.
-  if (
-    gameState.player?.currentSystemId === gameState.player?.startingSystemId &&
-    !gameState.flags?.startingSystemPeaceBroken
-  ) {
+  // Same peace rule as ambient hostiles: Haven Reach's waters stay quiet until
+  // the player starts something there.
+  if (inHomeWaters(gameState.player?.ship?.position) && !gameState.flags?.startingSystemPeaceBroken) {
     return false
   }
   const last = gameState.flags?.lastMiningPirateAmbushAt

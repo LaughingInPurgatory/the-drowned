@@ -22,7 +22,7 @@ Join the Discord Server:
 https://discord.gg/vJqnRUYRfT
 
 -------------------------------------------------------
-Used in Whispers In The Void:
+Used in Drowned World:
 Quaternius "Modular Sci-Fi MegaKit" (Standard/free tier), CC0 1.0.
 Source: https://quaternius.com/packs/modularscifimegakit.html
 Subset: Props / Columns / Platforms / Walls (glTF).

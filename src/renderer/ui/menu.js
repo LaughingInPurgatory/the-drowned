@@ -122,7 +122,7 @@ const STYLE = `
   color: transparent; -webkit-text-fill-color: transparent;
   animation: titleShift 6s linear infinite, titleGlow 5s ease-in-out infinite;
 }
-/* Second line sits under WHISPERS a bit smaller so the hierarchy reads clearly. */
+/* Second line sits under DROWNED a bit smaller so the hierarchy reads clearly. */
 #main-menu h1 .line.line-sub {
   font-size: 42px; letter-spacing: 8px; margin-top: 6px;
   opacity: 1;
@@ -490,12 +490,12 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
       <div class="corner tl"></div><div class="corner tr"></div>
       <div class="corner bl"></div><div class="corner br"></div>
     </div>
-    <div class="footer">DEEP-SPACE NAVIGATION INTERFACE // SIGNAL ACQUIRED</div>
+    <div class="footer">HARBOURMASTER TERMINAL // CHARTS LOADED</div>
     <div class="copyright">© Laughing In Purgatory 2026</div>
     <div class="panel main-view">
       <div class="title-block">
-        <h1><span class="line" data-text="WHISPERS">WHISPERS</span><span class="line line-sub" data-text="IN THE VOID">IN THE VOID</span></h1>
-        <div class="subtitle">A PROCEDURALLY GENERATED GALAXY</div>
+        <h1><span class="line" data-text="DROWNED">DROWNED</span><span class="line line-sub" data-text="WORLD">WORLD</span></h1>
+        <div class="subtitle">A PROCEDURALLY GENERATED SEA</div>
       </div>
       <div class="menu-links">
         <button class="new-game menu-link"><span class="glitch-text" data-text="New Game">New Game</span></button>

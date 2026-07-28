@@ -7,7 +7,7 @@
  */
 import { skillLevel } from '../data/skills.js'
 import { ensureSkills } from './skills.js'
-import { getSystem, findBody, findSystemOfBody } from '../procgen/galaxy.js'
+import { getSystem, findBody, findSystemOfBody } from '../procgen/world.js'
 
 export const CLONE_CREATE_COST = 10_000
 export const CLONE_JUMP_COST = 100_000
@@ -187,7 +187,7 @@ export function stationHasCloneBay(stationId) {
 
 /** Ensure body.hasCloneBay is set (stations only); preserves existing true/false. */
 export function ensureStationCloneBayFlag(body) {
-  if (!body || body.kind !== 'station') return false
+  if (!body || body.kind !== 'port') return false
   if (typeof body.hasCloneBay === 'boolean') return body.hasCloneBay
   body.hasCloneBay = stationHasCloneBay(body.id)
   return body.hasCloneBay
@@ -197,7 +197,7 @@ export function ensureGalaxyCloneBays(galaxy) {
   if (!galaxy?.systems) return
   for (const sys of galaxy.systems) {
     for (const b of sys.bodies ?? []) {
-      if (b.kind === 'station') ensureStationCloneBayFlag(b)
+      if (b.kind === 'port') ensureStationCloneBayFlag(b)
     }
   }
 }

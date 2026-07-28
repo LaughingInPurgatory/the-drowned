@@ -1,14 +1,14 @@
 /**
- * Docking-bay interior backdrop.
+ * Harbour interior — the shed you tie up inside.
  *
- * Themes:
- *  - core / mid  — polished station bays (neon, busy)
- *  - outer       — rusty / gritty rim stations
- *  - palace      — SerNub's Pleasure Palace (fanciest)
- *  - settlement  — slightly dirty outpost bays
+ * Themes track how far out the harbour is (see main.js `resolveInteriorTheme`):
+ *  - palace      — Port Haven: the last place with working lights and paint
+ *  - core        — home waters: maintained, busy, lit
+ *  - mid         — the middle sea: workmanlike, patched, still trading
+ *  - outer       — the deep: rusted through, lit by whatever still burns
+ *  - settlement  — an outpost: a shed, a lamp, and someone who wants paying
  *
- * Geometry: procedural shell + Kenney Space Station Kit dressing +
- * Quaternius Ultimate Space Kit props/activity when preloaded.
+ * Geometry: procedural shell + kit dressing/props when preloaded.
  */
 import * as THREE from 'three'
 import { stationMaterialMaps, retileUVsTriplanar } from './textures.js'
@@ -39,52 +39,58 @@ const BAY_HEIGHT = 48
 const BAY_LENGTH = 150
 const FLOOR_Y = -BAY_HEIGHT / 2
 
+// Palettes are lamplight and rust, not neon. Everything indoors here is lit by
+// sodium floods and worklamps hung off the rafters, because that is what a shed
+// over the water has after the grid stopped.
 const THEMES = {
   core: {
-    wall: 0x4a5d78,
-    floor: 0x2e3848,
-    beam: 0x5a6e88,
-    accent: 0x4fc3d9,
-    hazard: 0xc45a18,
-    panel: 0x2a3548,
-    ambient: 0x5080a8,
-    ambientI: 0.32,
-    bayLight: 0xa8c8ff,
-    bayI: 3.0,
-    padLight: 0x6fe0ff,
-    padI: 2.2,
-    doorLight: 0x7ab0c8,
-    doorI: 1.7,
-    neon: true,
+    // Home waters: painted steel, still maintained, still busy.
+    wall: 0x53544a,
+    floor: 0x3b3a33,
+    beam: 0x5f5c50,
+    accent: 0xc9a227,
+    hazard: 0xc4531c,
+    panel: 0x40403a,
+    ambient: 0x6a6a5c,
+    ambientI: 0.34,
+    bayLight: 0xffd9a0,
+    bayI: 2.8,
+    padLight: 0xffc27a,
+    padI: 2.0,
+    doorLight: 0xd9b98a,
+    doorI: 1.6,
+    neon: false,
     luxury: false,
-    grit: 0,
+    grit: 0.2,
     activity: 'busy',
-    propTint: { roughness: 0.45, metalness: 0.55 },
+    propTint: { roughness: 0.7, metalness: 0.45 },
     shipScale: 1.15
   },
   mid: {
-    wall: 0x3a4a62,
-    floor: 0x2a3038,
-    beam: 0x4a5a70,
-    accent: 0x4fc3d9,
-    hazard: 0xc45a18,
-    panel: 0x2a3548,
-    ambient: 0x406080,
+    // The middle sea: patched plate, more rust than paint, still trading.
+    wall: 0x4a453c,
+    floor: 0x33302a,
+    beam: 0x554e42,
+    accent: 0xb5761f,
+    hazard: 0xa8461a,
+    panel: 0x3a352e,
+    ambient: 0x565044,
     ambientI: 0.3,
-    bayLight: 0x8fb3ff,
-    bayI: 2.7,
-    padLight: 0x4fc3d9,
-    padI: 1.9,
-    doorLight: 0x6a9aaa,
-    doorI: 1.5,
-    neon: true,
+    bayLight: 0xffc98a,
+    bayI: 2.4,
+    padLight: 0xffb066,
+    padI: 1.8,
+    doorLight: 0xc79a64,
+    doorI: 1.4,
+    neon: false,
     luxury: false,
-    grit: 0.15,
+    grit: 0.55,
     activity: 'busy',
-    propTint: { roughness: 0.55, metalness: 0.5 },
+    propTint: { roughness: 0.8, metalness: 0.38 },
     shipScale: 1.05
   },
   outer: {
+    // The deep: holed roof, standing water, whatever still burns.
     wall: 0x3a342c,
     floor: 0x2a241c,
     beam: 0x4a4035,
@@ -92,62 +98,65 @@ const THEMES = {
     hazard: 0x8a4010,
     panel: 0x32281e,
     ambient: 0x403828,
-    ambientI: 0.2,
-    bayLight: 0xb08050,
-    bayI: 1.85,
+    ambientI: 0.18,
+    bayLight: 0xd08040,
+    bayI: 1.7,
     padLight: 0xff8844,
-    padI: 1.35,
+    padI: 1.25,
     doorLight: 0x886040,
-    doorI: 1.1,
+    doorI: 1.0,
     neon: false,
     luxury: false,
     grit: 1,
     activity: 'sparse',
-    propTint: { color: 0xccaa88, roughness: 0.88, metalness: 0.25 },
+    propTint: { color: 0xccaa88, roughness: 0.9, metalness: 0.22 },
     shipScale: 0.95
   },
   palace: {
-    wall: 0x3a2a55,
-    floor: 0x1a1228,
-    beam: 0x6a4a8a,
-    accent: 0xff66cc,
-    hazard: 0xffd700,
-    panel: 0x2a1a40,
-    ambient: 0x7040a8,
-    ambientI: 0.42,
-    bayLight: 0xe0b0ff,
-    bayI: 3.5,
-    padLight: 0xff88ee,
-    padI: 2.6,
-    doorLight: 0xffaaee,
-    doorI: 2.0,
-    neon: true,
+    // Port Haven. Swept, painted, properly lit — and the only place on the sea
+    // that still is, which is why it reads as luxury here.
+    wall: 0x5c5f56,
+    floor: 0x43443c,
+    beam: 0x6d6b5e,
+    accent: 0x2f8f7a,
+    hazard: 0xc9a227,
+    panel: 0x4a4b43,
+    ambient: 0x8a8c78,
+    ambientI: 0.44,
+    bayLight: 0xfff0d0,
+    bayI: 3.2,
+    padLight: 0xffe0a8,
+    padI: 2.4,
+    doorLight: 0xffe8c0,
+    doorI: 1.9,
+    neon: false,
     luxury: true,
     grit: 0,
     activity: 'party',
-    propTint: { roughness: 0.35, metalness: 0.65, emissive: 0x220033, emissiveIntensity: 0.15 },
+    propTint: { roughness: 0.55, metalness: 0.5 },
     shipScale: 1.25
   },
   settlement: {
-    wall: 0x3a4238,
-    floor: 0x2a3028,
-    beam: 0x4a5448,
-    accent: 0x7aaa5a,
+    // An outpost: timber, tarpaulin, one working lamp.
+    wall: 0x4a4437,
+    floor: 0x38332a,
+    beam: 0x554b3c,
+    accent: 0x7a8a4a,
     hazard: 0xb07030,
-    panel: 0x2e362c,
-    ambient: 0x384838,
-    ambientI: 0.26,
-    bayLight: 0x90a880,
-    bayI: 2.05,
-    padLight: 0xa0c070,
-    padI: 1.5,
-    doorLight: 0x6a8860,
-    doorI: 1.2,
+    panel: 0x3e382e,
+    ambient: 0x4a4838,
+    ambientI: 0.24,
+    bayLight: 0xe0c088,
+    bayI: 1.9,
+    padLight: 0xd8b070,
+    padI: 1.4,
+    doorLight: 0x9a8258,
+    doorI: 1.1,
     neon: false,
     luxury: false,
-    grit: 0.55,
+    grit: 0.7,
     activity: 'modest',
-    propTint: { color: 0xb0b098, roughness: 0.78, metalness: 0.35 },
+    propTint: { color: 0xb0a888, roughness: 0.85, metalness: 0.28 },
     shipScale: 1.0
   }
 }
@@ -402,7 +411,7 @@ export function buildStationInteriorMesh(options = {}) {
   makeBox(BAY_WIDTH, 2, BAY_LENGTH, floor, 0, BAY_HEIGHT / 2, 0, group)
   makeBox(2.5, BAY_HEIGHT, BAY_LENGTH, wall, -BAY_WIDTH / 2, 0, 0, group)
   makeBox(2.5, BAY_HEIGHT, BAY_LENGTH, wall, BAY_WIDTH / 2, 0, 0, group)
-  // Far end (+Z): open observation window — no solid bulkhead (starfield shows through).
+  // Far end (+Z): the harbour mouth stands open to the sea — no bulkhead.
   // Near end (−Z): docking bay doors (built below).
 
   // Side catwalks
@@ -433,7 +442,7 @@ export function buildStationInteriorMesh(options = {}) {
     }
   }
 
-  // —— Far end (+Z): sci-fi observation viewport (starfield through clear glass) ——
+  // —— Far end (+Z): the open harbour mouth, looking out over the water ——
   const windowZ = BAY_LENGTH / 2 - 0.8
   const winFrame = 3.6
   const edgeCol = theme.luxury ? 0xff88ee : theme.grit > 0.5 ? 0xffb060 : 0x6ee0ff
@@ -514,7 +523,7 @@ export function buildStationInteriorMesh(options = {}) {
     }
   }
 
-  // —— Near end (−Z): closed docking-bay doors (entry from space) ——
+  // —— Near end (−Z): the shed doors you came in through ——
   const doorZ = -BAY_LENGTH / 2 + 2.5
   // Heavy outer frame / bulkhead
   makeBox(BAY_WIDTH, 5, 4, beam, 0, BAY_HEIGHT / 2 - 2.5, doorZ, group)
@@ -765,7 +774,7 @@ export function buildStationInteriorMesh(options = {}) {
         emissive: theme.accent,
         emissiveIntensity: 0.4
       })
-      // Keep the far +Z wall clear for the space window — put displays on the side.
+      // Keep the far +Z end clear for the harbour mouth — boards go on the sides.
       if (hasInteriorModule('display-wall-wide')) {
         placeProp(
           group,
@@ -945,7 +954,7 @@ export function buildStationInteriorMesh(options = {}) {
     group.add(holo)
     anim.holograms.push({ mesh: holo, phase: i * 1.7 })
   }
-  // Status holoboards on the side walls — never on the +Z space window.
+  // Cargo boards on the side walls — never across the harbour mouth.
   for (const side of [-1, 1]) {
     const board = new THREE.Mesh(
       new THREE.PlaneGeometry(10, 5),

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  oreTierForSystem,
+  oreTierForField,
   mineRock,
   isRockAlive,
   rockDisplayName,
@@ -13,28 +13,32 @@ import {
   MINING_PIRATE_CHANCE,
   MINING_PIRATE_SPAWN_COOLDOWN_S
 } from './mining.js'
-import { GALAXY_MAX_RADIUS } from '../procgen/galaxy.js'
 import { MINED_ORE_GOOD_IDS } from '../data/goods.js'
 import { getWeapon } from '../data/weapons.js'
+import { WORLD_RADIUS } from '../procgen/world.js'
 
+/** A wreck field this far out from Haven Reach. */
 function systemAtRadius(radius) {
-  return { galaxyPosition: [radius, 0, 0] }
+  return { id: 'wf-test', kind: 'wreckField', position: [radius, 0, 0] }
 }
 
-test('systems near the galactic core only yield raw ore', () => {
-  assert.equal(oreTierForSystem(systemAtRadius(0)), 'raw_ore')
+test('wrecks in home waters have already been picked over — scrap only', () => {
+  assert.equal(oreTierForField(systemAtRadius(0)), 'raw_ore')
 })
 
-test('systems out toward the rim yield the most valuable ore tier', () => {
-  assert.equal(oreTierForSystem(systemAtRadius(GALAXY_MAX_RADIUS)), MINED_ORE_GOOD_IDS[MINED_ORE_GOOD_IDS.length - 1])
+test('wrecks out in the deep still hold the best material', () => {
+  assert.equal(
+    oreTierForField(systemAtRadius(WORLD_RADIUS)),
+    MINED_ORE_GOOD_IDS[MINED_ORE_GOOD_IDS.length - 1]
+  )
 })
 
-test('ore tier increases monotonically with distance from the core', () => {
-  const tierIndex = (r) => MINED_ORE_GOOD_IDS.indexOf(oreTierForSystem(systemAtRadius(r)))
+test('salvage grade never drops as you work further from home', () => {
+  const tierIndex = (r) => MINED_ORE_GOOD_IDS.indexOf(oreTierForField(systemAtRadius(r)))
   let last = -1
-  for (let r = 0; r <= GALAXY_MAX_RADIUS; r += GALAXY_MAX_RADIUS / 20) {
+  for (let r = 0; r <= WORLD_RADIUS; r += WORLD_RADIUS / 20) {
     const idx = tierIndex(r)
-    assert.ok(idx >= last, 'tier index should never decrease as distance grows')
+    assert.ok(idx >= last, 'grade should never decrease as distance grows')
     last = idx
   }
 })
@@ -127,8 +131,8 @@ test('full mining hold can still exhaust a rock to destruction', () => {
   assert.equal(Object.keys(gameState.player.ship.miningHold).length, 0)
 })
 
-test('rockDisplayName names the deposit after the ore it yields', () => {
-  assert.equal(rockDisplayName(systemAtRadius(0)), 'Raw Ore Deposit')
+test('rockDisplayName names the hulk after what can be stripped from it', () => {
+  assert.equal(rockDisplayName(systemAtRadius(0)), 'Raw Ore Wreck')
 })
 
 test('destroyed rocks revive after offline simTime catch-up', () => {
@@ -167,12 +171,25 @@ test('isFieldDepleted and fieldRespawnRemainingS track a fully mined belt', () =
   assert.equal(formatRespawnTime(90), '1m 30s')
 })
 
+test('Haven Reach stays quiet — no salvage ambush in home waters until you start it', () => {
+  const atHome = {
+    simTime: 100,
+    flags: {},
+    player: { ship: { position: [500, 0, 500] } }
+  }
+  assert.equal(rollMiningPirateAmbush(() => 0, atHome, { securityRating: 0 }), false)
+  // Once the peace is broken it stays broken, even at home.
+  atHome.flags.startingSystemPeaceBroken = true
+  assert.equal(rollMiningPirateAmbush(() => 0, atHome, { securityRating: 0 }), true)
+})
+
 test('mining pirate ambush only rolls in security 0–3', () => {
   const always = () => 0 // always succeed the 10% roll
+  // Well out from Haven Reach — home waters have their own suppression rule.
   const base = {
     simTime: 100,
     flags: {},
-    player: { currentSystemId: 'a', startingSystemId: 'home' }
+    player: { ship: { position: [25000, 0, 0] } }
   }
   assert.equal(rollMiningPirateAmbush(always, base, { securityRating: 0 }), true)
   base.flags = {}
@@ -188,7 +205,7 @@ test('mining pirate ambush is 10% and stamps cooldown on success', () => {
   const gs = {
     simTime: 50,
     flags: {},
-    player: { currentSystemId: 'rim', startingSystemId: 'home' }
+    player: { ship: { position: [25000, 0, 0] } }
   }
   const system = { securityRating: 1 }
   assert.equal(rollMiningPirateAmbush(() => 0.099, gs, system), true)

@@ -5,7 +5,6 @@ import {
   fireProjectile,
   updateProjectiles,
   updateNpcAI,
-  regenShields,
   PLAYER_DAMAGE_TAKEN_MULT,
   rollShipBounty,
   applyShipBounty
@@ -23,55 +22,45 @@ function step(gameState, times, fn) {
   }
 }
 
-test('applyDamage layers shields then armor then hull', () => {
-  const entity = { shields: 10, armor: 5, hull: 100, destroyed: false }
+test('applyDamage takes armour first, then the hull', () => {
+  // No shields on this sea, and nothing grows back — armour is a one-time
+  // buffer that has to be welded on again at a yard.
+  const entity = { armor: 15, hull: 100, destroyed: false }
   applyDamage(entity, 8)
-  assert.equal(entity.shields, 2)
-  assert.equal(entity.armor, 5)
+  assert.equal(entity.armor, 7)
   assert.equal(entity.hull, 100)
 
   applyDamage(entity, 10)
-  assert.equal(entity.shields, 0)
   assert.equal(entity.armor, 0)
   assert.equal(entity.hull, 97)
 })
 
+test('armour does not come back on its own', () => {
+  const entity = { armor: 0, hull: 50, destroyed: false, lastHitAt: 0 }
+  applyDamage(entity, 5, 0)
+  const before = { armor: entity.armor, hull: entity.hull }
+  // Plenty of quiet time later, nothing has changed.
+  applyDamage(entity, 0, 600)
+  assert.deepEqual({ armor: entity.armor, hull: entity.hull }, before)
+})
+
 test('applyDamage marks entity destroyed when hull drops to zero or below', () => {
-  const entity = { shields: 0, armor: 0, hull: 5, destroyed: false }
+  const entity = { armor: 0, hull: 5, destroyed: false }
   applyDamage(entity, 20)
   assert.ok(entity.hull <= 0)
   assert.equal(entity.destroyed, true)
 })
 
 test('player takes 25% less damage than an NPC for the same hit', () => {
-  const npc = { shields: 0, armor: 0, hull: 100, destroyed: false }
-  const player = { shields: 0, armor: 0, hull: 100, destroyed: false }
+  const npc = { armor: 0, hull: 100, destroyed: false }
+  const player = { armor: 0, hull: 100, destroyed: false }
   applyDamage(npc, 40)
   applyDamage(player, 40, null, { player: true })
   assert.equal(npc.hull, 60)
   assert.equal(player.hull, 100 - 40 * PLAYER_DAMAGE_TAKEN_MULT)
 })
 
-test('player shields regen ~1% of max per 10s out of combat', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const max = shipClass.stats.shields
-  const ship = { shields: 0, lastHitAt: -Infinity }
-  // 10 seconds of sim time
-  for (let i = 0; i < 600; i++) {
-    regenShields(ship, shipClass, 100 + i * DT, DT, { player: true, inCombat: false })
-  }
-  const expected = max * 0.01
-  assert.ok(Math.abs(ship.shields - expected) < 0.05, `got ${ship.shields}, expected ~${expected}`)
-})
 
-test('player shields do not regen while in combat', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const ship = { shields: 0, lastHitAt: -Infinity }
-  for (let i = 0; i < 600; i++) {
-    regenShields(ship, shipClass, 100 + i * DT, DT, { player: true, inCombat: true })
-  }
-  assert.equal(ship.shields, 0)
-})
 
 test('fireProjectile spawns a projectile per hardpoint that travels and can hit a target', () => {
   const shipClass = getShipClass('needle_dart')
@@ -80,7 +69,7 @@ test('fireProjectile spawns a projectile per hardpoint that travels and can hit 
     simTime: 0,
     projectiles: [],
     npcs: [],
-    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 50], quaternion: [0, 0, 0, 1], destroyed: false, shields: 0, armor: 0, hull: 100 } }
+    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 50], quaternion: [0, 0, 0, 1], destroyed: false, armor: 0, hull: 100 } }
   }
   fireProjectile(gameState, shooter, shipClass, 'enemy-1')
   assert.equal(gameState.projectiles.length, shipClass.hardpoints.length)
@@ -253,7 +242,7 @@ test('a player laser hitting an asteroid field mines ore instead of dealing dama
   // straight-ahead flight path (matching the starter ship's single, centered
   // hardpoint), since per-rock hit detection needs actual alignment rather
   // than the old field-wide bounding sphere.
-  const asteroidField = { id: fieldId, kind: 'asteroidField', position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]], radius: 90 }
+  const asteroidField = { id: fieldId, kind: 'wreckField', position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]], radius: 90 }
   const shooter = { position: [0, 0, 0], quaternion: [0, 0, 0, 1], lastFireAt: -Infinity }
   const gameState = {
     simTime: 0,
@@ -281,7 +270,7 @@ test('a nearby hostile NPC suppresses mining on a normal field (ship-combat disa
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const fieldId = 'field-test-2'
   const rock = getAsteroidRocks({ id: fieldId, radius: 90 })[0]
-  const asteroidField = { id: fieldId, kind: 'asteroidField', position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]], radius: 90 }
+  const asteroidField = { id: fieldId, kind: 'wreckField', position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]], radius: 90 }
   const shooter = { position: [0, 0, 0], quaternion: [0, 0, 0, 1], lastFireAt: -Infinity }
   // Off to the side (not on the flight path) but well within the mining/combat
   // skip radius of the player.
@@ -309,7 +298,7 @@ test('an ore_anomaly-tagged field keeps mining even with a hostile NPC nearby (a
   const rock = getAsteroidRocks({ id: fieldId, radius: 90 })[0]
   const asteroidField = {
     id: fieldId,
-    kind: 'asteroidField',
+    kind: 'wreckField',
     position: [-rock.position[0], -rock.position[1], 100 - rock.position[2]],
     radius: 90,
     anomalySiteId: 'anomaly-1'
@@ -336,7 +325,7 @@ test('an ore_anomaly-tagged field keeps mining even with a hostile NPC nearby (a
 test('destroying an NPC with a player projectile leaves a lootable wreck at the impact point', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const shooter = { position: [0, 0, 0], quaternion: [0, 0, 0, 1], lastFireAt: -Infinity }
-  const npc = { id: 'npc-9', shipClassId: 'light_runner', faction: 'trader', position: [0, 0, 50], hull: 1, shields: 0, armor: 0, destroyed: false }
+  const npc = { id: 'npc-9', shipClassId: 'light_runner', faction: 'trader', position: [0, 0, 50], hull: 1, armor: 0, destroyed: false }
   const gameState = {
     simTime: 0,
     projectiles: [],
@@ -383,7 +372,7 @@ test('NPC AI: a pirate close to the player transitions from patrol to attack', (
   const npc = {
     id: 'npc-0', shipClassId: 'raider_mk1', faction: 'pirate',
     position: [0, 0, 50], velocity: [0, 0, 0], quaternion: [0, 0, 0, 1],
-    hull: 90, shields: 60, armor: 25, aiState: 'patrol', patrolTarget: null,
+    hull: 90, armor: 25, aiState: 'patrol', patrolTarget: null,
     lastHitAt: -Infinity, lastFireAt: -Infinity, destroyed: false
   }
   const gameState = {
@@ -399,13 +388,13 @@ test('NPC AI: an attacking pirate closes distance on the player and eventually f
   const npc = {
     id: 'npc-2', shipClassId: 'raider_mk1', faction: 'pirate',
     position: [15, 0, 120], velocity: [0, 0, 0], quaternion: [0, 0, 0, 1],
-    hull: 90, shields: 60, armor: 25, aiState: 'patrol', patrolTarget: null,
+    hull: 90, armor: 25, aiState: 'patrol', patrolTarget: null,
     lastHitAt: -Infinity, lastFireAt: -Infinity, destroyed: false
   }
   const gameState = {
     simTime: 0,
     npcs: [npc], projectiles: [],
-    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], destroyed: false, shields: 0, armor: 0, hull: 100 } }
+    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], destroyed: false, armor: 0, hull: 100 } }
   }
   const startDistance = Math.hypot(...npc.position)
 
@@ -425,13 +414,13 @@ test('NPC AI: low hull fraction forces flee (or, rarely, a suicide ram)', () => 
   const npc = {
     id: 'npc-1', shipClassId: 'raider_mk1', faction: 'pirate',
     position: [0, 0, 50], velocity: [0, 0, 0], quaternion: [0, 0, 0, 1],
-    hull: 10, shields: 0, armor: 0, aiState: 'attack', patrolTarget: null,
+    hull: 10, armor: 0, aiState: 'attack', patrolTarget: null,
     lastHitAt: -Infinity, lastFireAt: -Infinity, destroyed: false
   }
   const gameState = {
     simTime: 0,
     npcs: [npc], projectiles: [],
-    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 100, shields: 0, armor: 0 } }
+    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 100, armor: 0 } }
   }
   updateNpcAI(npc, gameState, DT)
   assert.ok(['flee', 'ram'].includes(npc.aiState))
@@ -443,13 +432,13 @@ test('NPC AI: a desperate ship almost always flees, but sometimes commits to a s
     const npc = {
       id: `npc-${i}`, shipClassId: 'raider_mk1', faction: 'pirate',
       position: [0, 0, 50], velocity: [0, 0, 0], quaternion: [0, 0, 0, 1],
-      hull: 10, shields: 0, armor: 0, aiState: 'attack', patrolTarget: null,
+      hull: 10, armor: 0, aiState: 'attack', patrolTarget: null,
       lastHitAt: -Infinity, lastFireAt: -Infinity, destroyed: false
     }
     const gameState = {
       simTime: 0,
       npcs: [npc], projectiles: [],
-      player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 100, shields: 0, armor: 0 } }
+      player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 100, armor: 0 } }
     }
     updateNpcAI(npc, gameState, DT)
     outcomes[npc.aiState]++
@@ -462,15 +451,104 @@ test('NPC AI: a ramming ship charges the player and deals damage (and destroys i
   const npc = {
     id: 'npc-3', shipClassId: 'raider_mk1', faction: 'pirate',
     position: [0, 0, 5], velocity: [0, 0, 0], quaternion: [0, 0, 0, 1],
-    hull: 10, shields: 0, armor: 0, aiState: 'ram', patrolTarget: null,
+    hull: 10, armor: 0, aiState: 'ram', patrolTarget: null,
     lastHitAt: -Infinity, lastFireAt: -Infinity, destroyed: false
   }
   const gameState = {
     simTime: 0,
     npcs: [npc], projectiles: [],
-    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 100, shields: 0, armor: 0 } }
+    player: { ship: { classId: STARTER_SHIP_CLASS_ID, position: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 100, armor: 0 } }
   }
   updateNpcAI(npc, gameState, DT)
   assert.ok(gameState.player.ship.hull < 100, 'ramming into contact range should damage the player')
   assert.equal(npc.destroyed, true, 'the rammer destroys itself on impact')
+})
+
+// --- NPCs are boats: they cannot climb, dive, or aim their bow at the sky ---
+
+function seaState(npcs, playerPos = [0, 0, 0]) {
+  return {
+    simTime: 0,
+    projectiles: [],
+    npcs,
+    player: {
+      combatEngagedNpcIds: {},
+      ship: { classId: STARTER_SHIP_CLASS_ID, position: playerPos, velocity: [0, 0, 0], quaternion: [0, 0, 0, 1], hull: 200, armor: 20 }
+    }
+  }
+}
+
+function pirate(position, extra = {}) {
+  const cls = getShipClass('raider_mk1')
+  return {
+    id: 'npc-sea', shipClassId: 'raider_mk1', faction: 'pirate',
+    position, velocity: [0, 0, 0], quaternion: [0, 0, 0, 1],
+    hull: cls.stats.hull, armor: cls.stats.armor,
+    aiState: 'patrol', patrolTarget: null, lastHitAt: -Infinity, lastFireAt: -Infinity,
+    destroyed: false, equippedWeapons: [], hostileToPlayer: true, ...extra
+  }
+}
+
+test('NPC AI: an attacking boat never leaves the surface, however high the target', () => {
+  // The player used to be able to climb away; nothing on the water can follow.
+  const npc = pirate([0, 0, 120])
+  const gameState = seaState([npc], [0, 400, 0])
+  step(gameState, 400, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
+  assert.ok(Math.abs(npc.position[1]) < 6, `boat reached altitude ${npc.position[1]}`)
+  assert.equal(npc.velocity[1], 0, 'no vertical way may accumulate')
+})
+
+test('NPC AI: a fleeing boat runs across the water, not upward', () => {
+  const cls = getShipClass('raider_mk1')
+  const npc = pirate([0, 0, 60], { hull: cls.stats.hull * 0.1, aiState: 'flee' })
+  const gameState = seaState([npc], [0, -300, 0])
+  step(gameState, 300, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
+  assert.ok(Math.abs(npc.position[1]) < 6, `fled to altitude ${npc.position[1]}`)
+  assert.ok(Math.hypot(npc.position[0], npc.position[2] - 60) > 1, 'it should actually get away')
+})
+
+test('NPC AI: a patrolling boat stays on the water', () => {
+  const npc = pirate([500, 0, 500], { hostileToPlayer: false })
+  const gameState = seaState([npc], [40000, 0, 40000])
+  step(gameState, 600, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
+  assert.ok(Math.abs(npc.position[1]) < 6, `patrol drifted to ${npc.position[1]}`)
+  assert.ok(npc.patrolTarget, 'it should have picked somewhere to go')
+  assert.equal(npc.patrolTarget[1], 0, 'patrol waypoints are on the surface')
+})
+
+test('NPC AI: the bow stays level — a boat aims by heading, not by pitching', () => {
+  const npc = pirate([0, 0, 150])
+  const gameState = seaState([npc], [0, 250, 0])
+  step(gameState, 200, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
+  const q = npc.quaternion
+  // Recover the hull's forward axis and check it is close to horizontal; wave
+  // tilt is allowed, pointing the gun at the sky is not.
+  const fy = 2 * (q[1] * q[2] + q[3] * q[0])
+  assert.ok(Math.abs(fy) < 0.35, `bow pitched to ${fy}`)
+})
+
+test('a moored boat cannot be attacked', () => {
+  // Tied up under a harbour's guns: raiders lose interest, shots already in the
+  // air pass through, and a ram run cannot connect.
+  const npc = pirate([0, 0, 40])
+  const gameState = seaState([npc])
+  gameState.player.dockedBodyId = 'body-1'
+  const cls = getShipClass(STARTER_SHIP_CLASS_ID)
+  gameState.player.ship.hull = cls.stats.hull
+
+  step(gameState, 400, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
+  assert.notEqual(npc.aiState, 'attack', 'a moored boat is not a target')
+
+  // A shot already in flight, aimed at the player, must not land.
+  gameState.projectiles.push({
+    id: 'p1', ownerId: npc.id, position: [0, 0, 6], velocity: [0, 0, -400],
+    damage: 50, ttl: 2, weaponType: 'laser', targetRef: { kind: 'player' }
+  })
+  step(gameState, 20, () => updateProjectiles(gameState, DT, () => {}))
+  assert.equal(gameState.player.ship.hull, cls.stats.hull, 'no damage while moored')
+
+  // Slip the mooring and the same pirate engages again.
+  gameState.player.dockedBodyId = null
+  step(gameState, 200, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
+  assert.equal(npc.aiState, 'attack', 'once under way it is fair game again')
 })

@@ -1,20 +1,27 @@
 import * as THREE from 'three'
+import { waveNormal } from '../world/sea.js'
 
-const YAW_AXIS = new THREE.Vector3(0, 1, 0)
-const PITCH_AXIS = new THREE.Vector3(1, 0, 0)
-const ROLL_AXIS = new THREE.Vector3(0, 0, 1)
 const FORWARD = new THREE.Vector3(0, 0, 1)
-const RIGHT = new THREE.Vector3(1, 0, 0)
-const UP = new THREE.Vector3(0, 1, 0)
-// Coast decay when not thrusting (no Shift boost — full throttle already hits max).
+const WORLD_UP = new THREE.Vector3(0, 1, 0)
+const ROLL_AXIS = new THREE.Vector3(0, 0, 1)
+const PITCH_AXIS = new THREE.Vector3(1, 0, 0)
+// Coast decay when off the throttle — a hull carries way, it does not stop dead.
 const DAMPING_PER_SECOND = 0.35
 const THROTTLE_RATE = 0.6 // fraction of full throttle gained/lost per second while W/S is held
 const THROTTLE_DECAY = 0.55 // throttle returns toward 0 per second when W/S released
-const THROTTLE_MIN = -1 // S can ramp throttle negative for reverse thrust
-const REVERSE_SPEED_FRACTION = 0.25 // reverse speed never exceeds this fraction of the class's forward max speed
-const MOUSE_SENSITIVITY = 0.0022 // radians per pixel of mouse movement, scaled by the ship's turnRate
-// Side/vertical thrusters hit harder than main-engine lateral was — 6DOF feel.
-const STRAFE_MULTIPLIER = 3
+const THROTTLE_MIN = -1 // S can ramp throttle negative for astern
+const REVERSE_SPEED_FRACTION = 0.25 // astern speed never exceeds this fraction of the hull's forward max
+const MOUSE_SENSITIVITY = 0.0022 // radians per pixel of mouse movement, scaled by the hull's turnRate
+// A rudder only bites against water flowing past it. Below this fraction of top
+// speed steering authority tapers off, so a stopped boat cannot spin on the spot.
+const STEER_AUTHORITY_SPEED_FRACTION = 0.25
+// How much of the wave normal the hull adopts. Full normal is far too lively —
+// a hull spans several metres and averages the slope it sits across.
+const WAVE_TILT = 0.7
+const MAX_BANK = 0.42 // radians of heel into a hard turn
+const BANK_PER_TURN_RATE = 0.55 // heel per radian/sec of yaw
+const BANK_SMOOTHING = 3.5 // per-second approach rate toward target heel
+const TRIM_PITCH = 0.09 // bow rise under power, radians at full throttle
 
 export function createInputState() {
   const keys = new Set()
@@ -35,40 +42,69 @@ export function createMouseAimState() {
   return state
 }
 
+const _q = new THREE.Quaternion()
+const _fwd = new THREE.Vector3()
+const _up = new THREE.Vector3()
+const _right = new THREE.Vector3()
+const _basis = new THREE.Matrix4()
+const _spin = new THREE.Quaternion()
+
+/**
+ * Heading (radians, yaw about world Y) is the authoritative attitude for a
+ * surface vessel — pitch and roll are consequences of the sea and the turn,
+ * never inputs. Older state (and everything that only stored a quaternion)
+ * gets its heading recovered from the hull's forward axis.
+ */
+export function headingOf(shipState) {
+  if (typeof shipState.heading === 'number') return shipState.heading
+  _fwd.copy(FORWARD).applyQuaternion(_q.fromArray(shipState.quaternion))
+  shipState.heading = Math.atan2(_fwd.x, _fwd.z)
+  return shipState.heading
+}
+
+/**
+ * Build the hull's visual orientation: heading yaw, tilted onto the local wave
+ * slope, heeled into the turn, trimmed bow-up under power. Written back to
+ * `shipState.quaternion` so every downstream consumer — mesh sync, chase
+ * camera, muzzle offsets, radar — keeps reading the same field it always did.
+ */
+export function applySeaAttitude(shipState, heading, t, bank = 0, trim = 0) {
+  const pos = shipState.position
+  const n = waveNormal(pos[0], pos[2], t)
+  // Blend toward world up: the hull averages the slope it spans, and the full
+  // normal makes small craft twitch on the short chop.
+  _up.set(n.x * WAVE_TILT, n.y * WAVE_TILT + (1 - WAVE_TILT), n.z * WAVE_TILT).normalize()
+  _fwd.set(Math.sin(heading), 0, Math.cos(heading))
+  // Orthogonalize the heading against the tilted up so the basis stays rigid.
+  _fwd.addScaledVector(_up, -_fwd.dot(_up))
+  if (_fwd.lengthSq() < 1e-8) _fwd.set(Math.sin(heading), 0, Math.cos(heading))
+  _fwd.normalize()
+  _right.crossVectors(_up, _fwd).normalize()
+  _basis.makeBasis(_right, _up, _fwd)
+  _q.setFromRotationMatrix(_basis)
+  if (bank) _q.multiply(_spin.setFromAxisAngle(ROLL_AXIS, bank))
+  if (trim) _q.multiply(_spin.setFromAxisAngle(PITCH_AXIS, -trim))
+  shipState.quaternion = _q.toArray()
+}
+
 /**
  * @param {object} [skillOpts] player-only skill mults: { speedMult, turnMult }
  */
-export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts = null) {
+export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts = null, t = 0) {
   const speedMult = skillOpts?.speedMult ?? 1
   const turnMult = skillOpts?.turnMult ?? 1
-  // skillOpts.maxSpeed overrides base hull speed (e.g. Speed Upgrade accessory).
+  // skillOpts.maxSpeed overrides base hull speed (e.g. Engine Upgrade accessory).
   const baseSpeed = skillOpts?.maxSpeed ?? shipClass.stats.speed
   const speed = baseSpeed * speedMult
   const turnRate = shipClass.stats.turnRate * turnMult
   const { accel } = shipClass.stats
-  const quat = new THREE.Quaternion().fromArray(shipState.quaternion)
   const velocity = new THREE.Vector3().fromArray(shipState.velocity)
+  velocity.y = 0 // the sea owns vertical motion; thrust is horizontal only
 
-  // Ship-local pitch/yaw — full loops past any attitude (no zenith stop).
-  // Chase cam banks with the ship so local axes stay screen-aligned.
-  // Camera sits behind the ship with lookAt: ship local +X is screen-left
-  // (same reason radar negates x). +yaw around Y sends the nose to local +X
-  // (screen-left), so mouse-right (dx>0) needs -yaw to turn screen-right.
-  // Pitch: mouse up (dy<0) → nose up.
-  const yawAmount = -mouseAim.dx * MOUSE_SENSITIVITY * turnRate
-  const pitchAmount = mouseAim.dy * MOUSE_SENSITIVITY * turnRate
-  quat.multiply(new THREE.Quaternion().setFromAxisAngle(YAW_AXIS, yawAmount))
-  quat.multiply(new THREE.Quaternion().setFromAxisAngle(PITCH_AXIS, pitchAmount))
-  mouseAim.dx = 0
-  mouseAim.dy = 0
-
-  const rollTurn = turnRate * dt
-  if (keys.has('KeyQ')) quat.multiply(new THREE.Quaternion().setFromAxisAngle(ROLL_AXIS, -rollTurn))
-  if (keys.has('KeyE')) quat.multiply(new THREE.Quaternion().setFromAxisAngle(ROLL_AXIS, rollTurn))
-  quat.normalize()
+  let heading = headingOf(shipState)
 
   // W/S ramp throttle while held; release slowly bleeds throttle back to 0
-  // so forward/reverse both coast down instead of holding a set speed.
+  // so ahead and astern both coast down instead of holding a set speed.
   shipState.throttle ??= 0
   if (keys.has('KeyW')) {
     shipState.throttle = Math.min(1, shipState.throttle + THROTTLE_RATE * dt)
@@ -80,29 +116,30 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
     shipState.throttle = Math.min(0, shipState.throttle + THROTTLE_DECAY * dt)
   }
 
+  // Rudder: mouse X and A/D both steer. Authority scales with way through the
+  // water, so a dead-stopped hull will not pivot in place.
+  const wayFraction = Math.min(1, velocity.length() / Math.max(1e-3, speed * STEER_AUTHORITY_SPEED_FRACTION))
+  // Camera sits astern looking forward, so hull local +X is screen-left (the
+  // same reason radar negates x). Mouse-right must therefore yaw negative.
+  let rudder = -mouseAim.dx * MOUSE_SENSITIVITY
+  if (keys.has('KeyA')) rudder += turnRate * dt
+  if (keys.has('KeyD')) rudder -= turnRate * dt
+  mouseAim.dx = 0
+  mouseAim.dy = 0 // no pitch input on the water — consume it so it cannot pile up
+
+  const yawDelta = rudder * turnRate * wayFraction
+  heading += yawDelta
+  shipState.heading = heading
+
+  const forward = _fwd.set(Math.sin(heading), 0, Math.cos(heading)).clone()
+
   // Thrust response > 1 so we settle on stats.speed quickly; terminal speed
-  // is still exactly `speed` (dragK scales with the same factor). No Shift boost.
+  // is still exactly `speed` (dragK scales with the same factor).
   const thrustResponse = 2.5
-  const forward = FORWARD.clone().applyQuaternion(quat)
   velocity.addScaledVector(forward, accel * thrustResponse * shipState.throttle * dt)
 
-  // Full translation triad: A/D lateral, X/Z vertical (local ship axes).
-  // Chase cam: ship +X is screen-left — A (left) thrusts +X, D (right) -X.
-  const right = RIGHT.clone().applyQuaternion(quat)
-  const up = UP.clone().applyQuaternion(quat)
-  const strafeAccel = accel * STRAFE_MULTIPLIER
-  let strafeX = 0
-  let strafeY = 0
-  if (keys.has('KeyA')) { velocity.addScaledVector(right, strafeAccel * dt); strafeX += 1 }
-  if (keys.has('KeyD')) { velocity.addScaledVector(right, -strafeAccel * dt); strafeX -= 1 }
-  if (keys.has('KeyX')) { velocity.addScaledVector(up, strafeAccel * dt); strafeY += 1 }
-  if (keys.has('KeyZ')) { velocity.addScaledVector(up, -strafeAccel * dt); strafeY -= 1 }
-  // Exposed for thruster VFX/SFX (main.js).
-  shipState.strafeX = strafeX
-  shipState.strafeY = strafeY
-
   // Implicit drag: equilibrium at full throttle is stats.speed.
-  const thrusting = Math.abs(shipState.throttle) > 0.01 || strafeX !== 0 || strafeY !== 0
+  const thrusting = Math.abs(shipState.throttle) > 0.01
   if (thrusting) {
     const dragK = (accel * thrustResponse) / Math.max(1e-3, speed)
     velocity.multiplyScalar(1 / (1 + dragK * dt))
@@ -112,9 +149,9 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
 
   if (velocity.length() > speed) velocity.setLength(speed)
 
-  // Cap reverse (backward-facing) speed to a small fraction of the forward
-  // max — the maxSpeed clamp above only bounds overall magnitude, not
-  // direction, so it wouldn't stop the ship reversing at full speed.
+  // Cap astern speed to a small fraction of the ahead max — the speed clamp
+  // above only bounds magnitude, not direction, so it would not stop a hull
+  // making full speed in reverse.
   const forwardSpeed = velocity.dot(forward)
   const maxReverseSpeed = speed * REVERSE_SPEED_FRACTION
   if (forwardSpeed < -maxReverseSpeed) velocity.addScaledVector(forward, -(forwardSpeed + maxReverseSpeed))
@@ -123,5 +160,19 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
 
   shipState.position = position.toArray()
   shipState.velocity = velocity.toArray()
-  shipState.quaternion = quat.toArray()
+
+  // Heel into the turn, eased so a flicked rudder does not snap the hull over.
+  const targetBank = THREE.MathUtils.clamp(
+    (dt > 0 ? yawDelta / dt : 0) * BANK_PER_TURN_RATE,
+    -MAX_BANK,
+    MAX_BANK
+  )
+  shipState.bank ??= 0
+  shipState.bank += (targetBank - shipState.bank) * Math.min(1, BANK_SMOOTHING * dt)
+  applySeaAttitude(shipState, heading, t, shipState.bank, TRIM_PITCH * Math.max(0, shipState.throttle))
+
+  // Exposed for wake/spray VFX + SFX (main.js). strafeX carries rudder side so
+  // the wake kicks out of the turn; there is no vertical thruster on a boat.
+  shipState.strafeX = Math.sign(yawDelta)
+  shipState.strafeY = 0
 }

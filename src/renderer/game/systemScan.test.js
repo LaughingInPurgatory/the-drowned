@@ -16,7 +16,7 @@ import {
   SYSTEM_SCAN_PROBE_COUNT,
   ANOMALY_REFRESH_INTERVAL_S
 } from './systemScan.js'
-import { oreTierForSystem } from './mining.js'
+import { oreTierForField } from './mining.js'
 import { MINED_ORE_GOOD_IDS } from '../data/goods.js'
 
 function fakeSystem(id = 'sys-test', securityRating = 1) {
@@ -71,7 +71,7 @@ test('all 5 anomaly types roll across a large sample, each shaped per spec', () 
         assert.equal(typeof a.ambush, 'boolean')
         const field = s.bodies.find((b) => b.id === a.oreFieldId)
         assert.ok(field, 'ore_anomaly should register a synthetic asteroidField body')
-        assert.equal(field.kind, 'asteroidField')
+        assert.equal(field.kind, 'wreckField')
         assert.equal(field.anomalySiteId, a.id)
         assert.ok(field.rockCount >= 6 && field.rockCount <= 15, `rockCount ${field.rockCount}`)
         assert.equal(field.oreOverride, rareOreTierForSystem(s))
@@ -84,16 +84,15 @@ test('all 5 anomaly types roll across a large sample, each shaped per spec', () 
   )
 })
 
-test('rareOreTierForSystem is one tier above the system default, capped at the top tier', () => {
-  const core = fakeSystem('sys-core')
-  core.galaxyPosition = [0, 0, 0]
-  const base = MINED_ORE_GOOD_IDS.indexOf(oreTierForSystem(core))
-  const rare = MINED_ORE_GOOD_IDS.indexOf(rareOreTierForSystem(core))
+test('a rich patch grades one better than the water around it, capped at the top', () => {
+  const homeWaters = { id: 'site-home', kind: 'wreckField', position: [0, 0, 0] }
+  const base = MINED_ORE_GOOD_IDS.indexOf(oreTierForField(homeWaters))
+  const rare = MINED_ORE_GOOD_IDS.indexOf(rareOreTierForSystem(homeWaters))
   assert.equal(rare, Math.min(MINED_ORE_GOOD_IDS.length - 1, base + 1))
 
-  const rim = fakeSystem('sys-rim')
-  rim.galaxyPosition = [1e9, 0, 1e9] // far out — already at the top tier
-  assert.equal(rareOreTierForSystem(rim), MINED_ORE_GOOD_IDS[MINED_ORE_GOOD_IDS.length - 1])
+  // Already the best grade the sea offers — a rich patch cannot beat the cap.
+  const deep = { id: 'site-deep', kind: 'wreckField', position: [1e9, 0, 1e9] }
+  assert.equal(rareOreTierForSystem(deep), MINED_ORE_GOOD_IDS[MINED_ORE_GOOD_IDS.length - 1])
 })
 
 test('tickGalaxyAnomalies also sweeps synthetic ore_anomaly bodies on reshuffle', () => {

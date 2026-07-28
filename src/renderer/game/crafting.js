@@ -10,7 +10,7 @@ import {
 import { getShipClass } from '../data/shipClasses.js'
 import { defaultLoadoutFor } from '../data/weapons.js'
 import { defaultAccessoriesFor } from '../data/accessories.js'
-import { getSystem, findBody } from '../procgen/galaxy.js'
+import { getSystem, findBody } from '../procgen/world.js'
 import { MINED_ORE_GOOD_IDS } from '../data/goods.js'
 import { playerSkillBonuses, scaleOreCost } from './skills.js'
 
@@ -138,7 +138,7 @@ function consumeOre(hold, cost) {
 export function startCraft(gameState, bodyId, blueprintId, nowMs = Date.now()) {
   ensureBlueprintMaps(gameState)
   const body = findBody(gameState.galaxy, bodyId)
-  if (!body || (body.kind !== 'station' && body.kind !== 'settlement')) {
+  if (!body || (body.kind !== 'port' && body.kind !== 'outpost')) {
     throw new Error('Industry only available at stations and settlements')
   }
   const storage = storageFor(gameState, bodyId)
@@ -204,7 +204,6 @@ function deliverProduct(gameState, job) {
     classId: shipClass.id,
     instanceName: shipClass.name,
     hull: shipClass.stats.hull,
-    shields: shipClass.stats.shields,
     armor: shipClass.stats.armor,
     cargo: {},
     miningHold: {},

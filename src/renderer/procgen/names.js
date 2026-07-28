@@ -46,7 +46,10 @@ const NAME_MID = [
 const NAME_SUFFIX = [
   'ain', 'os', 'ara', 'ell', 'ion', 'oth', 'yn', 'ade', 'ora', 'ex',
   'ius', 'arae', 'holm', 'mere', 'reach', 'gate', 'spire', 'well', 'ridge', 'fall',
-  'port', 'haven', 'march', 'watch', 'deep', 'crest', 'shard', 'veil', 'prime', 'nexus'
+  'port', 'haven', 'march', 'watch', 'deep', 'crest', 'shard', 'veil', 'prime', 'nexus',
+  // Coastal roots — the drowned world names itself after what is left above water.
+  'strand', 'skerry', 'sound', 'bight', 'quay', 'shoal', 'cay', 'ness', 'firth', 'wharf',
+  'barrow', 'tide', 'reef', 'scar', 'drift', 'landing'
 ]
 /** Convert a positive integer to Roman numerals (enough for multi-planet systems). */
 export function toRoman(n) {
@@ -141,27 +144,21 @@ export function generateUniqueMoonName(rng, used) {
   return claimUniqueName(rng, used, (r, attempt) => generateNameRoot(r, attempt))
 }
 
-/** Station / settlement / belt labels with unique roots. */
+const PORT_FORMS = ['Port %', '% Harbour', '% Quay', '% Landing', '% Docks']
+const OUTPOST_FORMS = ['% Fort', '% Anchorage', '% Light', '% Watch', '% Station']
+const WRECK_FORMS = ['% Shoal', 'The % Wreck', '% Graves', '% Scatter', '% Reef']
+
+/** Harbour / outpost / wreck-field labels with unique roots. */
 export function generateBodyName(rng, kind, used = null) {
-  const root = () => generateNameRoot(rng)
-  if (kind === 'station') {
-    return claimUniqueName(rng, used ?? new Set(), (r, attempt) => `${generateNameRoot(r, attempt)} Station`)
-  }
-  if (kind === 'settlement') {
-    return claimUniqueName(rng, used ?? new Set(), (r, attempt) => `${generateNameRoot(r, attempt)} Settlement`)
-  }
-  if (kind === 'asteroidField') {
-    return claimUniqueName(rng, used ?? new Set(), (r, attempt) => `${generateNameRoot(r, attempt)} Belt`)
-  }
-  if (kind === 'system') {
-    return generateSystemName(rng, used ?? new Set())
-  }
-  // Proper names only — no numerals (use sequentialPlanetName for catalog planets).
-  if (kind === 'planet' || kind === 'moon') {
-    return claimUniqueName(rng, used ?? new Set(), (r, attempt) => generateNameRoot(r, attempt))
-  }
-  if (used) {
-    return claimUniqueName(rng, used, (r, attempt) => generateNameRoot(r, attempt))
-  }
-  return root()
+  const set = used ?? new Set()
+  const fromForms = (forms) =>
+    claimUniqueName(rng, set, (r, attempt) =>
+      pick(r, forms).replace('%', generateNameRoot(r, attempt))
+    )
+  if (kind === 'port') return fromForms(PORT_FORMS)
+  if (kind === 'outpost') return fromForms(OUTPOST_FORMS)
+  if (kind === 'wreckField') return fromForms(WRECK_FORMS)
+  if (kind === 'archipelago') return generateSystemName(rng, set)
+  // Islands and everything else take a bare root — no numerals.
+  return claimUniqueName(rng, set, (r, attempt) => generateNameRoot(r, attempt))
 }

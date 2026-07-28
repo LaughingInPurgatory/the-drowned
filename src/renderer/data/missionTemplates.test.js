@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mulberry32 } from '../procgen/prng.js'
 import { createGameState } from '../game/state.js'
-import { TEST_GALAXY_OPTS } from '../procgen/galaxy.js'
+import { TEST_WORLD_OPTS } from '../procgen/world.js'
 import { acceptMission, dropMission, finishMission } from '../game/missions.js'
 import { STARTER_SHIP_CLASS_ID } from './shipClasses.js'
 import {
@@ -21,7 +21,7 @@ function freshState(seed = 42) {
     shipInstanceName: 'Ship',
     shipClassId: STARTER_SHIP_CLASS_ID,
     seed,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
 }
 
@@ -69,7 +69,7 @@ test('missions never target an anomaly-owned synthetic body', () => {
   const decoy = {
     id: 'decoy-anomaly-field',
     name: 'Rare Ore Deposit',
-    kind: 'asteroidField',
+    kind: 'wreckField',
     position: [1000, 0, 500],
     radius: 260,
     anomalySiteId: 'anomaly-test'

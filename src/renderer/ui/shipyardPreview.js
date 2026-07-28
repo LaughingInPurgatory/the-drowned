@@ -4,7 +4,7 @@
  */
 import * as THREE from 'three'
 import { buildShipMesh } from '../render/shipMesh.js'
-import { createSpaceEnvironment } from '../render/scene.js'
+import { createSkyEnvironment } from '../render/scene.js'
 import { getShipClass } from '../data/shipClasses.js'
 
 const STYLE = `
@@ -115,7 +115,7 @@ export function createShipyardPreview(container) {
 
   const scene = new THREE.Scene()
   // Same IBL as the world, or hulls read flat here and shiny in flight.
-  scene.environment = createSpaceEnvironment(renderer)
+  scene.environment = createSkyEnvironment(renderer)
   const camera = new THREE.PerspectiveCamera(40, 1, 0.2, 500)
   camera.position.set(0, 0, 40)
 

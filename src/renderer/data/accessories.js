@@ -14,22 +14,14 @@ export const CARGO_UPGRADE_BONUS_FRAC = 2
 export const EXTRA_DRONE_BAY_ID = 'extra_drone_bay'
 export const EXTRA_TURRET_HP_ID = 'extra_turret_hardpoint'
 export const EXTRA_LAUNCHER_HP_ID = 'extra_launcher_hardpoint'
-export const SHIELD_UPGRADE_ID = 'shield_upgrade'
 export const ARMOUR_UPGRADE_ID = 'armour_upgrade'
 export const SPEED_UPGRADE_ID = 'speed_upgrade'
 
-/** Fraction added to base shield/armor/speed while upgrade is fitted. */
+/** Fraction added to base armour/speed while an upgrade is fitted. */
 export const DEFENSE_UPGRADE_FRAC = 0.25
 export const SPEED_UPGRADE_FRAC = 0.15
 
 export const ACCESSORIES = [
-  {
-    id: 'autopilot',
-    name: 'Autopilot',
-    description:
-      'When a multi-hop route is plotted, supercruises to each warp gate, jumps, and continues the chain until you arrive.',
-    price: 10000
-  },
   {
     id: EXTRA_ORE_STORAGE_ID,
     name: 'Extra Ore Storage',
@@ -63,15 +55,9 @@ export const ACCESSORIES = [
     price: 24000
   },
   {
-    id: SHIELD_UPGRADE_ID,
-    name: 'Shield Upgrade',
-    description: 'Raises max shields by 25% of the hull’s base while equipped.',
-    price: 16000
-  },
-  {
     id: ARMOUR_UPGRADE_ID,
     name: 'Armour Upgrade',
-    description: 'Raises max armour by 25% of the hull’s base while equipped.',
+    description: 'Bolts on extra plate — 25% over the hull’s base armour while fitted.',
     price: 16000
   },
   {
@@ -123,10 +109,6 @@ export function shipHasAccessory(ship, accessoryId) {
   return eq.includes(accessoryId)
 }
 
-export function shipHasAutopilot(ship) {
-  return shipHasAccessory(ship, 'autopilot')
-}
-
 /**
  * Ore hold capacity with accessories applied.
  * Extra Ore Storage: +200% of base while equipped (3× total).
@@ -148,13 +130,6 @@ export function effectiveCargoCapacity(ship, shipClass) {
   return base
 }
 
-export function effectiveMaxShields(ship, shipClass) {
-  const base = shipClass?.stats?.shields ?? 0
-  if (shipHasAccessory(ship, SHIELD_UPGRADE_ID)) {
-    return Math.round(base * (1 + DEFENSE_UPGRADE_FRAC))
-  }
-  return base
-}
 
 export function effectiveMaxArmor(ship, shipClass) {
   const base = shipClass?.stats?.armor ?? 0

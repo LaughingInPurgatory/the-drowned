@@ -18,7 +18,7 @@ import {
 } from './probe.js'
 import { PROBE_BLUEPRINT_DROP_CHANCE } from './crafting.js'
 import { getShipClass, STARTER_SHIP_CLASS_ID, SHIP_CLASSES } from '../data/shipClasses.js'
-import { generateGalaxy, TEST_GALAXY_OPTS } from '../procgen/galaxy.js'
+import { generateWorld, TEST_WORLD_OPTS } from '../procgen/world.js'
 
 function freshShip() {
   return { cargo: {} }
@@ -66,8 +66,8 @@ test('each body can be probed at most MAX_PROBE_ATTEMPTS times', () => {
   assert.equal(gameState.probeCounts['body-1'], MAX_PROBE_ATTEMPTS)
   assert.equal(canProbeBody(gameState, 'body-1'), false)
   assert.equal(canProbeBody(gameState, 'body-2'), true)
-  assert.match(probeExhaustedMessage('Nyxara'), /Nyxara fully scanned/)
-  assert.match(probeExhaustedMessage(''), /Target fully scanned/)
+  assert.match(probeExhaustedMessage('Nyxara'), /Nyxara fully sounded/)
+  assert.match(probeExhaustedMessage(''), /fully sounded/)
 })
 
 test('forceFind always yields a survey-data find when cargo has room', () => {
@@ -171,35 +171,27 @@ test('mission re-probe is blocked once the probe contract is complete', () => {
   assert.equal(isMissionOnlyReprobe(gameState, 'body-1'), false)
 })
 
-test('probeSurveyReport classifies planets, moons, stars, and asteroid fields', () => {
-  const galaxy = generateGalaxy(42, TEST_GALAXY_OPTS)
-  const system = galaxy.systems.find((s) => s.bodies.some((b) => b.kind === 'planet')) ?? galaxy.systems[0]
-  const planet = system.bodies.find((b) => b.kind === 'planet')
-  const moon = system.bodies.find((b) => b.kind === 'moon')
-  const field = galaxy.systems.flatMap((s) => s.bodies).find((b) => b.kind === 'asteroidField')
+test('a survey describes islands and wreck fields, and repeats itself exactly', () => {
+  const galaxy = generateWorld(42, TEST_WORLD_OPTS)
+  const world = galaxy.systems[0]
+  const island = world.bodies.find((b) => b.kind === 'island')
+  const field = world.bodies.find((b) => b.kind === 'wreckField')
 
-  const planetLines = probeSurveyReport(planet, system)
-  assert.ok(planetLines.some((l) => /Body type: Planet/.test(l)))
-  assert.ok(planetLines.some((l) => /Atmosphere:/.test(l)))
-  assert.ok(planetLines.some((l) => /Life:|Flora|Fauna|biosignatures/i.test(l)))
-  assert.equal(planetArchetypeForBody(planet), planetArchetypeForBody(planet))
+  const islandLines = probeSurveyReport(island, world)
+  assert.ok(islandLines.some((l) => /^Survey: /.test(l)))
+  assert.ok(islandLines.some((l) => /Land type:/.test(l)))
+  assert.ok(islandLines.some((l) => /Anchorage:/.test(l)), 'a skipper wants to know if it can be laid alongside')
+  // Deterministic from body id, so a repeat survey never contradicts the first.
+  assert.deepEqual(probeSurveyReport(island, world), islandLines)
+  assert.equal(planetArchetypeForBody(island), planetArchetypeForBody(island))
 
-  if (moon) {
-    const moonLines = probeSurveyReport(moon, system)
-    assert.ok(moonLines.some((l) => /Moon/.test(l)))
-    assert.equal(planetArchetypeForBody(moon), 'rocky')
-  }
+  assert.ok(field, 'the test world should contain a wreck field')
+  const fieldLines = probeSurveyReport(field, world)
+  assert.ok(fieldLines.some((l) => /Site type: Sunken hulls/.test(l)))
+  assert.ok(fieldLines.some((l) => /Primary salvage:/.test(l)))
 
-  const starLines = probeSurveyReport(
-    { id: `${system.id}:star`, name: system.name, kind: 'star' },
-    system
-  )
-  assert.ok(starLines.some((l) => /Star/.test(l)))
-
-  if (field) {
-    const fieldSys = galaxy.systems.find((s) => s.bodies.includes(field))
-    const fieldLines = probeSurveyReport(field, fieldSys)
-    assert.ok(fieldLines.some((l) => /Asteroid/.test(l)))
-    assert.ok(fieldLines.some((l) => /Ore survey:/.test(l)))
-  }
+  // Harbours have nothing to sound — you go ashore and ask.
+  const port = world.bodies.find((b) => b.kind === 'port')
+  assert.ok(probeSurveyReport(port, world).some((l) => /go ashore/.test(l)))
+  assert.equal(planetArchetypeForBody(port), null)
 })

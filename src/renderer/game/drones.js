@@ -7,8 +7,6 @@ import { effectiveDroneBayCount } from '../data/accessories.js'
 // Combat drones are **player-only**. NPCs never summon, carry, or fire drones —
 // even if they fly a hull class that has droneBays for the player shipyard.
 
-const SHIELD_REGEN_DELAY_S = 4
-const SHIELD_REGEN_RATE = 6 // points per second
 /** Out-of-combat escort orbit radius (metres from player ship). */
 export const ORBIT_DIST = 20
 /** Seconds for one full escort orbit. */
@@ -120,10 +118,8 @@ export function makeDroneState(def, bayIndex) {
     typeId: def.id,
     bayIndex,
     hull: def.hull,
-    shields: def.shields,
     armor: def.armor,
     maxHull: def.hull,
-    maxShields: def.shields,
     maxArmor: def.armor,
     /** bay | launching | escort | combat | returning */
     mode: 'bay',
@@ -253,7 +249,7 @@ export function teleportDronesToBay(ship) {
 }
 
 /**
- * Station repair restores drone hull/armor/shields (destroyed drones revived).
+ * Yard repair restores escort hull and armour (lost escorts rebuilt).
  * Ship parts do NOT repair drones.
  */
 export function repairDrones(ship) {
@@ -262,10 +258,8 @@ export function repairDrones(ship) {
   for (const d of ship.drones) {
     const def = getDrone(d.typeId)
     d.maxHull = def.hull
-    d.maxShields = def.shields
     d.maxArmor = def.armor
     d.hull = def.hull
-    d.shields = def.shields
     d.armor = def.armor
     d.destroyed = false
     d.deployed = false
@@ -276,7 +270,7 @@ export function repairDrones(ship) {
 }
 
 /**
- * Apply damage to a drone (shields → armor → hull). Returns true if destroyed.
+ * Apply damage to an escort (armour → hull). Returns true if it is lost.
  */
 export function damageDrone(drone, amount, simTime) {
   if (!drone || drone.destroyed) return true
@@ -284,11 +278,6 @@ export function damageDrone(drone, amount, simTime) {
   if (drone.mode === 'launching' || drone.mode === 'bay') return false
   let rem = amount
   drone.lastHitAt = simTime
-  if (drone.shields > 0) {
-    const take = Math.min(drone.shields, rem)
-    drone.shields -= take
-    rem -= take
-  }
   if (rem > 0 && drone.armor > 0) {
     const take = Math.min(drone.armor, rem)
     drone.armor -= take
@@ -460,14 +449,6 @@ export function updateDrones(gameState, dt, hooks = {}) {
         d.launchTo = null
       }
       continue
-    }
-
-    // Shield regen (escort / combat only)
-    if (d.shields < d.maxShields) {
-      const sinceHit = d.lastHitAt == null ? Infinity : simTime - d.lastHitAt
-      if (sinceHit >= SHIELD_REGEN_DELAY_S) {
-        d.shields = Math.min(d.maxShields, d.shields + SHIELD_REGEN_RATE * dt)
-      }
     }
 
     // Only engage ships that exchanged fire with the player (not mere Tab-lock).

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createGameState } from './state.js'
-import { TEST_GALAXY_OPTS } from '../procgen/galaxy.js'
+import { TEST_WORLD_OPTS } from '../procgen/world.js'
 import { serializeGameState, deserializeGameState } from './save.js'
 import { STARTER_SHIP_CLASS_ID } from '../data/shipClasses.js'
 import { acceptMission } from './missions.js'
@@ -9,10 +9,10 @@ import { acceptMission } from './missions.js'
 test('serialize then deserialize round-trips player, galaxy, and missions, and drops ephemeral encounter state', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
   gameState.player.credits = 4321
-  gameState.player.ship.position = [10, 20, 30]
+  gameState.player.ship.position = [10, 0, 30]
   gameState.player.ship.quaternion = [0, 0.1, 0, 0.995]
   gameState.player.ship.velocity = [1, 0, -5]
   gameState.player.dockedBodyId = null
@@ -21,7 +21,7 @@ test('serialize then deserialize round-trips player, galaxy, and missions, and d
   const restored = deserializeGameState(json)
 
   assert.equal(restored.player.credits, 4321)
-  assert.deepEqual(restored.player.ship.position, [10, 20, 30])
+  assert.deepEqual(restored.player.ship.position, [10, 0, 30])
   assert.deepEqual(restored.player.ship.velocity, [1, 0, -5])
   assert.equal(restored.player.dockedBodyId, null)
   assert.equal(restored.galaxy.systems.length, gameState.galaxy.systems.length)
@@ -29,14 +29,34 @@ test('serialize then deserialize round-trips player, galaxy, and missions, and d
   assert.equal(restored.inCombat, false)
 })
 
+test('a saved altitude is discarded — the sea decides where the hull sits', () => {
+  const gameState = createGameState({
+    characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
+    galaxyOpts: TEST_WORLD_OPTS
+  })
+  gameState.player.ship.position = [10, 900, 30]
+  const restored = deserializeGameState(JSON.parse(JSON.stringify(serializeGameState(gameState))))
+  assert.equal(restored.player.ship.position[1], 0)
+})
+
+test('heading survives a save so a loaded boat still points where it was left', () => {
+  const gameState = createGameState({
+    characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
+    galaxyOpts: TEST_WORLD_OPTS
+  })
+  gameState.player.ship.heading = 2.35
+  const restored = deserializeGameState(JSON.parse(JSON.stringify(serializeGameState(gameState))))
+  assert.equal(restored.player.ship.heading, 2.35)
+})
+
 test('docked pose fields round-trip through save', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
   const station = gameState.galaxy.systems
     .flatMap((s) => s.bodies)
-    .find((b) => b.kind === 'station')
+    .find((b) => b.kind === 'port')
   assert.ok(station)
   gameState.player.currentSystemId = gameState.galaxy.systems.find((s) =>
     s.bodies.some((b) => b.id === station.id)
@@ -55,7 +75,7 @@ test('docked pose fields round-trip through save', () => {
 test('load clears hardpoint cooldowns so weapons work after a docked save', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
   // Simulate a long session that fired recently: readyAt is far ahead of
   // the post-load simTime (near zero — see the tolerance note below).
@@ -77,7 +97,7 @@ test('load clears hardpoint cooldowns so weapons work after a docked save', () =
 test('loading a save repairs mission id collisions from the old counter-based scheme', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
   const bounty = gameState.missions.available.find((m) => m.type === 'bounty')
   acceptMission(gameState, bounty.id, Math.random)
@@ -106,7 +126,7 @@ test('loading a save repairs mission id collisions from the old counter-based sc
 test('an active, incomplete bounty mission respawns its target npc on load', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
   const bounty = gameState.missions.available.find((m) => m.type === 'bounty')
   acceptMission(gameState, bounty.id, Math.random)

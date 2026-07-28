@@ -1,30 +1,13 @@
 import * as THREE from 'three'
 import { createScene } from './render/scene.js'
-import { createStarfield, updateStarfield, setStarfieldStarTint } from './render/starfield.js'
-import { createMotionEffects, updateStarfieldMotion } from './render/motionFx.js'
-import { createHyperspaceTunnel } from './render/hyperspaceTunnel.js'
-import {
-  buildWarpGateMesh,
-  updateWarpGateMesh,
-  orientWarpGateTowardOrigin
-} from './render/warpGateMesh.js'
-import { createNebula, updateNebula } from './render/nebula.js'
 import { buildShipMesh, updatePoliceLights, getEngineNozzleLocals } from './render/shipMesh.js'
-import { buildStationMeshForBody, updateStationMesh } from './render/stationMesh.js'
-import { preloadStationModels, stationModelsReady } from './render/stationModels.js'
-import { buildPlanetMesh, updatePlanetAtmosphere } from './render/planetMesh.js'
-import { buildStarMesh, updateStarMesh } from './render/starMesh.js'
-import { createLensFlare } from './render/lensFlare.js'
+import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
+import { buildIslandMesh } from './render/islandMesh.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
 import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from './render/projectileMesh.js'
-import {
-  buildStationInteriorMesh,
-  updateStationInterior,
-  INTERIOR_WORLD_SCALE
-} from './render/stationInterior.js'
-import { preloadInteriorModels } from './render/interiorModels.js'
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
-import { buildProbeMesh, updateProbeMesh } from './render/probeMesh.js'
+import { createSonarPulse } from './render/sonarPulse.js'
+import { createSprayOverlay } from './render/spray.js'
 import {
   syncMeshToEntity,
   syncChaseCamera,
@@ -51,17 +34,20 @@ import {
 import { spawnHitImpact, updateHitImpact, disposeHitImpact, preloadHitImpactFx } from './render/hitImpactFx.js'
 import { createMissileTrailSystem } from './render/missileTrailFx.js'
 import { createGameState } from './game/state.js'
-import {
-  CANONICAL_GALAXY_SEED,
-  WHISPERS_SYSTEM_NAME,
-  generateGalaxy
-} from './procgen/galaxy.js'
+import { CANONICAL_WORLD_SEED, generateWorld } from './procgen/world.js'
 import { DEV_TEST_SETUP, createDevTestGameState } from './game/devTestSetup.js'
 
 import { advanceGameClock, reanchorGameClock } from './game/gameClock.js'
-import { createInputState, createMouseAimState, updateFlight } from './game/flight.js'
-import { effectiveMaxSpeed, effectiveMaxShields, effectiveMaxArmor } from './data/accessories.js'
-import { updateSupercruise, ignoreBodyAsCruiseObstacle } from './game/supercruise.js'
+import {
+  createInputState,
+  createMouseAimState,
+  updateFlight,
+  headingOf,
+  applySeaAttitude
+} from './game/flight.js'
+import { waveHeight, snapToSea, SEA_MAX_AMPLITUDE } from './world/sea.js'
+import { effectiveMaxSpeed, effectiveMaxArmor } from './data/accessories.js'
+import { updateAutopilot, ignoreBodyAsCruiseObstacle } from './game/autopilot.js'
 import {
   spawnEncounterNear,
   spawnPoliceResponse,
@@ -76,7 +62,6 @@ import {
   updateNpcAI,
   updateCombatFlag,
   prepareCombatFrame,
-  regenShields,
   getShipCollisionRadius,
   truceActive,
   pruneCombatEngagement,
@@ -89,12 +74,12 @@ import {
   policeHostileToPlayer,
   civiliansHostileToPlayer,
   getSystemSecurity,
+  applyLocalSecurity,
   policeResponseDelayS,
   flushPendingToasts
 } from './game/security.js'
 import {
   resolveBodyCollisions,
-  trySupercruiseTunnel,
   collisionRadiusFor,
   exteriorRadiusFor,
   rockCollisionRadius
@@ -134,32 +119,22 @@ import {
 } from './game/probe.js'
 import { saveGame as persistSaveGame, loadGame as persistLoadGame, hasSave } from './game/save.js'
 import {
-  hyperspaceJump,
-  warpArrivalNearExitGate,
-  warpGateOutwardDir,
-  quatFacingSun as quatFacingFromTo
-} from './game/hyperspace.js'
-import {
   getSystem,
+  getWorld,
   findBody,
   findSystemOfBody,
-  coreFraction,
-  canJumpTo,
-  ensureSystemSecurity,
-  ensureWarpGates,
-  findWarpGateTo,
-  findNearbyWarpGate,
-  isNearWarpGate,
-  WARP_GATE_ACTIVATION_RANGE,
-  WHISPERS_STATION_NAME
-} from './procgen/galaxy.js'
+  remoteness,
+  inHomeWaters,
+  isDockable,
+  WORLD_RADIUS
+} from './procgen/world.js'
 import { createHud } from './ui/hud.js'
 import { createDockingUI } from './ui/dockingUI.js'
 import { createMenu } from './ui/menu.js'
 import { createPauseMenu } from './ui/pauseMenu.js'
-import { createNavMap } from './ui/navMap.js'
 import { createSystemOverview } from './ui/systemOverview.js'
 import { createSystemScanMap } from './ui/systemScanMap.js'
+import { createSeaChart } from './ui/seaChart.js'
 import { createDatacoreMinigame } from './ui/datacoreMinigame.js'
 import { createInventoryUI } from './ui/inventoryUI.js'
 import { createMissionsUI } from './ui/missionsUI.js'
@@ -194,7 +169,6 @@ import { gameConfirm, gameNotice } from './ui/gameDialog.js'
 import { getShipClass, STARTER_SHIP_CLASS_ID } from './data/shipClasses.js'
 import { getGood } from './data/goods.js'
 import { getWeapon, WEAPONS } from './data/weapons.js'
-import { shipHasAutopilot } from './data/accessories.js'
 import {
   ensureDrones,
   summonDrones,
@@ -225,22 +199,19 @@ applyLocalSoundCache()
 // UI accent colour (localStorage) before first menu paint.
 applyLocalUiThemeCache()
 
-// Docking approach range for stations/settlements (metres from body origin).
-// Docking approach range for stations/settlements (metres from body origin).
-const DOCK_RANGE = 4000
+// How close you must come alongside before a harbour will take a line (metres).
+const DOCK_RANGE = 900
 const DOCK_RANGE_COLLISION_MARGIN = 12
-// Probe "in orbit" shells (fixed body layout — no orbital carry/drag).
-// Beyond collision shell for Tab-target planet/moon orbit probes (was 900 — too tight on large worlds).
-const PROBE_ORBIT_MARGIN = 12000
-const STAR_ORBITAL_CARRY_RADIUS = 168000
-// Stations/settlements +50% on prior 11.25 scale; collision.js matches.
-// Free-model stations are normalized to ~26–30 local units, then this
-// multiplies them into world space. Large behemoths next to ships.
-const STATION_SCALE = 190
-// Settlements stay small surface bases (pre-behemoth station scale × 0.55).
-const SETTLEMENT_SCALE = 16.875 * 0.55
-// Surface-distance for flyby / belt probes (was 150 — required hugging the crust).
-const PROBE_RANGE = 6000
+// How far offshore a sonar drone can still work an island from.
+const PROBE_ORBIT_MARGIN = 1200
+// Harbour meshes are built at roughly 34–52 local units across (see
+// render/harbourMesh.js); this brings them into world scale beside a ~20-unit
+// boat, so a quay is something you come alongside rather than a landmass.
+const STATION_SCALE = 1.7
+// Outposts are a jetty and a shed — far smaller than a working harbour.
+const SETTLEMENT_SCALE = 1.5
+// Standoff for sounding a wreck field or running past a coast.
+const PROBE_RANGE = 900
 const MINING_TOAST_DURATION_S = 1.6
 const FACTION_TOAST_DURATION_S = 4
 // Title-screen-style chromatic glitch for floating HUD text (no soft fades).
@@ -394,21 +365,9 @@ function getFloatHudBandTopPx() {
 }
 const IMPACT_FLASH_TTL = 0.25
 // Warp-gate jump: fly into origin aperture → spool/tunnel → emerge from dest aperture.
-const JUMP_ENTER_GATE_S = 1.55
-const JUMP_WINDUP_S = 1.15
-const JUMP_STREAK_S = 3.6
-const JUMP_EXIT_GATE_S = 1.45
-const JUMP_TUNNEL_DURATION_S = JUMP_WINDUP_S + JUMP_STREAK_S
-// Black veil: fade in before the system swap (streak s = 0–1), then hold until
-// tunnel end — reveal during exit-gate flight, then arrival flash.
-const JUMP_BLACK_FADE_IN_START = 0.28
-const JUMP_BLACK_FADE_IN_END = 0.4
-// Arrival flash (white/cyan) after the ship clears the destination gate.
-const JUMP_ARRIVAL_FLASH_PEAK = 0.85
-const JUMP_ARRIVAL_FLASH_DECAY_S = 0.55
 const BASE_FOV = 60
-// Supercruise FOV (degrees) — wider than base for speed read.
-const CRUISE_FOV = 100
+/** Extra FOV at full speed — enough to feel the boat come up on the plane. */
+const SPEED_FOV_MAX = 5
 
 const CROSSHAIR_DISTANCE = 80
 
@@ -418,37 +377,38 @@ const DOCK_ANIM_DURATION_S = 4.4
 // point — the old flat 18 was deep *inside* station/planet radii (~100–200+).
 const DOCK_EXTERIOR_MARGIN = 28
 const UNDOCK_BACKOFF_MARGIN = 70
-const DOCK_FLASH_FADE_S = 0.65
 const HYPERSPACE_FLASH_COLOR = '#c8f0ff'
 const DOCK_FLASH_COLOR = 'var(--ui-glow)'
 // Min standoff past the collision shell when the dock bubble is large enough
 // (stations/settlements have +2000m). Avoids bouncing off the body on drop-out.
-const SUPERCRUISE_ARRIVAL_MIN_CLEAR = 220
+const AUTOPILOT_ARRIVAL_MIN_CLEAR = 220
 // How far inside the dock shell to still count as "in range" after SC drop.
-const SUPERCRUISE_DOCK_INNER_SLACK = 120
+const AUTOPILOT_DOCK_INNER_SLACK = 120
 // A dedicated coordinate region for the docking-bay interior, far enough
 // from any system-local coordinates (which top out around 2200) that it can
 // never overlap real flight space.
-const DOCKING_BAY_ORIGIN = new THREE.Vector3(2_000_000, 0, 0)
-// Match stationInterior INTERIOR_WORLD_SCALE so park/entry stay inside the bay.
-const BAY_ENTRY_OFFSET = new THREE.Vector3(0, 0, -55 * INTERIOR_WORLD_SCALE)
-const BAY_PARK_OFFSET = new THREE.Vector3(0, 0, 20 * INTERIOR_WORLD_SCALE)
+/** How far off the harbour's shell a moored boat lies. */
+const MOORING_STANDOFF = 14
 // Probe flight: fly out → scan 10s → return → yield results.
-const PROBE_OUTBOUND_S = 2.6
-const PROBE_SCAN_S = 10
-const PROBE_RETURN_S = 2.4
-const PROBE_SCAN_STANDOFF = 18
+/** How long a sounding takes from first ping to reading the return. */
+const PROBE_SCAN_S = 6.5
+/** Pings per sounding, and the gap between them. Matches render/sonarPulse.js. */
+const SONAR_PING_COUNT = 3
+const SONAR_PING_INTERVAL_S = 0.85
 
 const appEl = document.getElementById('app')
-const { scene, camera, renderer, render, setSunColor, setPostOverlay } = createScene(appEl)
-const starfield = createStarfield()
-scene.add(starfield)
-const motionFx = createMotionEffects(appEl)
-scene.add(motionFx.group)
-const hyperspaceTunnel = createHyperspaceTunnel()
-scene.add(hyperspaceTunnel.group)
-const nebula = createNebula()
-scene.add(nebula)
+const { scene, camera, renderer, render, updateEnvironment, setPostOverlay } = createScene(appEl)
+// Sonar rings — the boat sounds from where it is; there is nothing to launch.
+const sonarPulse = createSonarPulse()
+scene.add(sonarPulse.group)
+
+// Water on the lens. An artifact of the camera, so it is drawn over the formed
+// image rather than into the world (see render/scene.js setPostOverlay).
+const spray = createSprayOverlay()
+setPostOverlay((r) => {
+  if (!spray.visible) return
+  r.render(spray.scene, spray.camera)
+})
 
 // Ortho HUD in NDC (-1..1). Circle must be scaled by aspect or it looks
 // squashed wide on landscape viewports (equal NDC ≠ equal pixels).
@@ -470,67 +430,6 @@ hudReticleDot.position.z = -1
 hudScene.add(hudReticleRing, hudReticleDot)
 hudReticleRing.visible = false
 hudReticleDot.visible = false
-
-// Screen-space lens flare for the local sun, drawn after bloom/tone mapping
-// (render/lensFlare.js explains why it is an overlay and not scene geometry).
-const lensFlare = createLensFlare()
-const _flareStarPos = new THREE.Vector3()
-const _flareToStar = new THREE.Vector3()
-const _flareToBody = new THREE.Vector3()
-
-/**
- * 0 = sun fully blocked, 1 = clear line of sight. A ray/sphere test against the
- * system's own bodies, which is both cheaper and steadier than the GPU
- * occlusion probe the old three.js Lensflare did every frame.
- */
-function starFlareOcclusion(starPos) {
-  const toStar = _flareToStar.copy(starPos).sub(camera.position)
-  const starDist = toStar.length()
-  if (starDist < 1e-3) return 1
-  toStar.divideScalar(starDist)
-  let visibility = 1
-  for (const [id, mesh] of bodyMeshes) {
-    const body = findBody(gameState.galaxy, id)
-    const radius = body?.radius
-    if (!radius) continue
-    const toBody = _flareToBody.copy(mesh.position).sub(camera.position)
-    const along = toBody.dot(toStar)
-    // Behind us, or further than the sun — cannot block it.
-    if (along <= 0 || along >= starDist) continue
-    const perp = Math.sqrt(Math.max(0, toBody.lengthSq() - along * along))
-    // Soft edge so the flare fades across a limb instead of popping off.
-    visibility = Math.min(visibility, THREE.MathUtils.smoothstep(perp, radius * 0.85, radius * 1.25))
-    if (visibility <= 0) break
-  }
-  return visibility
-}
-
-function updateLensFlareOverlay() {
-  const primary = starMesh?.userData?.stars?.[0]
-  if (!primary || docked) {
-    lensFlare.setVisible(false)
-    return
-  }
-  primary.group.getWorldPosition(_flareStarPos)
-  const el = renderer.domElement
-  const aspect = Math.max(0.01, el.clientWidth / Math.max(1, el.clientHeight))
-  lensFlare.update(
-    _flareStarPos,
-    camera,
-    aspect,
-    primary.color ?? null,
-    gameState ? starFlareOcclusion(_flareStarPos) : 1
-  )
-}
-
-// Recomputed inside the overlay rather than up in animate() so it always uses
-// the exact camera pose this frame was rendered with — updating it earlier
-// leaves the flare a frame behind and it visibly swims during fast turns.
-setPostOverlay((r) => {
-  updateLensFlareOverlay()
-  if (!lensFlare.visible) return
-  r.render(lensFlare.scene, lensFlare.camera)
-})
 
 // Escape while pointer-locked often only unlocks the cursor (keydown may not
 // fire). Suppress auto-pause when we exit lock ourselves (menus / Space).
@@ -578,11 +477,10 @@ function canPlayerFire() {
     !dockEffect &&
     !cruising &&
     !paused &&
-    !navMapOpen &&
+    !chartOpen &&
     !inventoryOpen &&
     !missionsOpen &&
-    !characterOpen &&
-    !jumpEffect
+    !characterOpen 
   )
 }
 
@@ -689,7 +587,7 @@ document.addEventListener('pointercancel', (e) => {
 window.addEventListener('contextmenu', (e) => e.preventDefault())
 
 function canUseFlightMode() {
-  if (!gameState || paused || navMapOpen || inventoryOpen || missionsOpen || characterOpen || jumpEffect) return false
+  if (!gameState || paused || chartOpen || inventoryOpen || missionsOpen || characterOpen) return false
   // Parked at the docking UI: no flight. Mid undock animation is fine —
   // pointer lock is requested on the Undock click (needs a live gesture).
   if (docked && !dockEffect) return false
@@ -709,7 +607,7 @@ function exitFlightMode() {
   if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
   if (targetDirEl) targetDirEl.style.display = 'none'
   // Free mouse → overview HUD accepts waypoint clicks.
-  if (!docked && !navMapOpen && !inventoryOpen && !missionsOpen && !characterOpen && !paused) {
+  if (!docked && !chartOpen && !inventoryOpen && !missionsOpen && !characterOpen && !paused) {
     systemOverview?.setInteractive(true)
   }
   if (document.pointerLockElement === renderer.domElement) {
@@ -902,9 +800,8 @@ function resumeFlightAfterPause() {
 /** Shut every gameplay overlay so pause is the only UI on top. */
 function dismissOpenPanelsForPause() {
   // Galaxy map
-  if (navMapOpen) {
-    navMapOpen = false
-    navMap?.hide()
+  if (chartOpen) {
+    chartOpen = false
   }
   // Inventory
   if (inventoryOpen) {
@@ -930,7 +827,7 @@ function dismissOpenPanelsForPause() {
   if (datacoreMinigame?.isOpen?.()) {
     datacoreMinigame.hide()
   }
-  // Station Services (docked) — keep docked chrome, just close the services panel
+  // Harbour Services (docked) — keep docked chrome, just close the services panel
   if (dockingUI?.isServicesOpen?.()) {
     dockingUI.toggleServices()
   }
@@ -1046,7 +943,7 @@ document.addEventListener('pointerlockchange', () => {
   }
 
   // Lost lock while still wanting flight.
-  if (paused || characterOpen || navMapOpen || inventoryOpen || missionsOpen || docked) {
+  if (paused || characterOpen || chartOpen || inventoryOpen || missionsOpen || docked) {
     flightMode = false
     hidePointerLockBridge()
     return
@@ -1065,7 +962,7 @@ document.addEventListener('pointerlockchange', () => {
     flightModeWanted &&
     !docked &&
     !dockEffect &&
-    !navMapOpen &&
+    !chartOpen &&
     !inventoryOpen &&
     !missionsOpen &&
     !characterOpen
@@ -1084,7 +981,7 @@ document.addEventListener('pointerlockchange', () => {
   }
   if (
     !docked &&
-    !navMapOpen &&
+    !chartOpen &&
     !inventoryOpen &&
     !missionsOpen &&
     !characterOpen &&
@@ -1141,7 +1038,7 @@ window.addEventListener('keydown', (e) => {
     return
   }
   if (!isAltKey(e.code)) return
-  if (!gameState || paused || docked || jumpEffect || navMapOpen || inventoryOpen || missionsOpen || characterOpen) {
+  if (!gameState || paused || docked || chartOpen || inventoryOpen || missionsOpen || characterOpen) {
     clearChaseFreeLook()
     return
   }
@@ -1168,7 +1065,7 @@ renderer.domElement.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return
   if (!gameState) return
   // Docked hangar: drag to orbit the parked ship.
-  if (docked && !dockEffect && !paused && !navMapOpen && !inventoryOpen && !missionsOpen && !characterOpen) {
+  if (docked && !dockEffect && !paused && !chartOpen && !inventoryOpen && !missionsOpen && !characterOpen) {
     dockOrbit.dragging = true
     dockOrbit.lastX = e.clientX
     dockOrbit.lastY = e.clientY
@@ -1222,7 +1119,7 @@ renderer.domElement.addEventListener('lostpointercapture', () => {
 // Chase-camera zoom (works with or without pointer lock). Scroll up = closer.
 // Docked: orbit look-around only (click-drag) — no zoom.
 window.addEventListener('wheel', (e) => {
-  if (!gameState || dockEffect || jumpEffect || paused || navMapOpen || inventoryOpen || missionsOpen || characterOpen) return
+  if (!gameState || dockEffect || paused || chartOpen || inventoryOpen || missionsOpen || characterOpen) return
   if (docked) return
   e.preventDefault()
   adjustChaseZoom(e.deltaY)
@@ -1240,9 +1137,9 @@ let missileTrail = null
 let hud = null
 let dockingUI = null
 let pauseMenu = null
-let navMap = null
 let systemOverview = null
 let systemScanMap = null
+let seaChart = null
 let datacoreMinigame = null
 let inventoryUI = null
 let missionsUI = null
@@ -1296,13 +1193,9 @@ let targetDirEl = null
 // (see cycleTarget); never persisted (see resolveTarget).
 let currentTarget = null
 let cruiseIndicatorEl = null
-let jumpFlashEl = null
 /** Full-screen black overlay for hyperspace system-change fade. */
-let jumpBlackEl = null
-let jumpEffect = null
 let dockEffect = null
 let dockedApproach = null
-let interiorMesh = null
 const npcMeshes = new Map()
 const bodyMeshes = new Map()
 const wreckMeshes = new Map()
@@ -1387,59 +1280,69 @@ function updateNpcThrusters(mesh, npc, dt) {
     nozzles: mesh.userData.engineNozzles
   })
 }
-// Surface settlements ride a fixed offset on their parent (parents themselves
-// are static — no orbital motion for planets/moons/fields/stations).
+// Coastal harbours ride a fixed offset from their island.
 const surfaceSettlements = new Map()
-let starMesh = null
 const projectileMeshes = new Map()
 const impactFlashes = []
 const rockExplosions = []
 const hitImpacts = []
 
-function buildBodyMesh(body, system = null) {
-  if (body.kind === 'planet' || body.kind === 'moon') return buildPlanetMesh(body)
-  // Pass system so belt rocks tint by ore tier (coreFraction → raw/rich/exotic/quantum).
-  if (body.kind === 'asteroidField') return buildAsteroidFieldMesh(body, system)
-  if (body.kind === 'warpGate') {
-    const mesh = buildWarpGateMesh(body)
-    orientWarpGateTowardOrigin(mesh, body.position)
-    return mesh
-  }
-  const mesh = buildStationMeshForBody(body)
-  // Settlements keep a modest pre-behemoth size; only orbital stations are huge.
-  const baseScale = body.kind === 'settlement' ? SETTLEMENT_SCALE : STATION_SCALE
-  // Reuses the existing per-body hash (see hashStringForOrbit below) for a
-  // touch of +/-15% size variety, so stations aren't all uniformly sized.
+function buildBodyMesh(body) {
+  if (body.kind === 'island') return buildIslandMesh(body)
+  // Hulk grade (and so its tint) comes from where the field lies — see
+  // game/mining.js oreTierForField.
+  if (body.kind === 'wreckField') return buildAsteroidFieldMesh(body)
+  // Harbours are authored with the waterline at y = 0 already, so they need no
+  // lifting — see render/harbourMesh.js.
+  const mesh = buildHarbourMesh(body)
+  const baseScale = body.kind === 'outpost' ? SETTLEMENT_SCALE : STATION_SCALE
+  // Per-body hash for +/-15% size variety, so harbours aren't all one plan.
   const variance = 0.85 + (hashStringForOrbit(body.id) % 1000) / 1000 * 0.3
   mesh.scale.setScalar(baseScale * variance)
   return mesh
 }
 
-// Removes/clears whatever the previous system's bodies were, so this is
-// safe to call on its own — callers don't have to remember to tear down the
-// old system first (a caller that forgot was exactly how two systems' worth
-// of stars/bodies could end up stacked in the same scene at once).
+/**
+ * Sit a structure on the water rather than through it. Harbour modules were
+ * authored centred on the origin for a station hanging in space; dropped at sea
+ * level as-is, half of every jetty is underwater. Lift so the base rides just
+ * below the surface, with enough draught that the swell never exposes a gap.
+ */
+const _floatBounds = new THREE.Box3()
+const _floatSize = new THREE.Vector3()
+function floatOnWaterline(mesh) {
+  _floatBounds.setFromObject(mesh)
+  if (!Number.isFinite(_floatBounds.min.y)) return
+  _floatBounds.getSize(_floatSize)
+  // Draught scales with the structure, floored at the wave amplitude so a small
+  // jetty still never lifts clear of a trough.
+  const draught = Math.max(SEA_MAX_AMPLITUDE * 1.5, _floatSize.y * 0.18)
+  mesh.position.y = -_floatBounds.min.y - draught
+}
+
+/**
+ * Build the whole world's meshes once. One sea, so this runs on New Game and on
+ * load and never again — there is no region to swap. Everything past the fog
+ * wall is hidden per-frame by updateBodyVisibility rather than unloaded.
+ */
 function loadBodiesForCurrentSystem() {
-  if (starMesh) scene.remove(starMesh)
   for (const mesh of bodyMeshes.values()) scene.remove(mesh)
   bodyMeshes.clear()
   surfaceSettlements.clear()
   currentTarget = null
 
-  const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  starMesh = buildStarMesh(currentSystem)
-  scene.add(starMesh)
-  // Whisper of local-sun hue on the starfield (and a dimmer scene backdrop).
-  applySystemStarAmbient()
+  const currentSystem = getWorld(gameState.galaxy)
   for (const body of currentSystem.bodies) {
-    const mesh = buildBodyMesh(body, currentSystem)
-    mesh.position.fromArray(body.position)
+    const mesh = buildBodyMesh(body)
+    // buildBodyMesh already set Y for structures that float; only place in XZ.
+    mesh.position.set(body.position[0], mesh.position.y, body.position[2])
     bodyMeshes.set(body.id, mesh)
     scene.add(mesh)
 
-    // Bodies stay at their generated positions (fixed orbits — no animation).
-    // Settlements keep a surface offset + upright orientation on the host.
-    if (body.kind === 'settlement' && body.parentId && body.surfaceOffset) {
+    // A coastal harbour keeps a fixed offset from its island and faces seaward.
+    // Nothing in the world moves, so this is set once here rather than
+    // re-derived every frame.
+    if (body.parentId && body.surfaceOffset) {
       surfaceSettlements.set(body.id, {
         body,
         parentId: body.parentId,
@@ -1448,8 +1351,25 @@ function loadBodiesForCurrentSystem() {
       orientSettlementOnSurface(mesh, body.surfaceOffset)
     }
   }
-  // Sec 3–6 station patrols; Sec 4–6 also cover warp gates.
   refreshStationPolicePatrols()
+}
+
+/**
+ * Everything is in one coordinate space, so the whole world is in the scene at
+ * once. Hiding what the fog has already swallowed keeps the draw-call count to
+ * the handful of places actually in sight.
+ */
+const BODY_CULL_DISTANCE = 9000
+const _cullPos = new THREE.Vector3()
+function updateBodyVisibility() {
+  for (const [id, mesh] of bodyMeshes) {
+    const body = findBody(gameState.galaxy, id)
+    if (!body) continue
+    _cullPos.fromArray(body.position)
+    const d = Math.hypot(_cullPos.x - camera.position.x, _cullPos.z - camera.position.z)
+    // Big islands are visible from further off than a buoy is.
+    mesh.visible = d < BODY_CULL_DISTANCE + (body.radius ?? 0) * 1.5
+  }
 }
 
 /** Spawn / top-up police patrols (stations Sec 3–6, warp gates Sec 4–6). */
@@ -1457,19 +1377,16 @@ function refreshStationPolicePatrols() {
   if (!gameState) return
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   if (!system) return
-  ensureSystemSecurity(system)
   ensureStationPolicePatrols(Math.random, gameState, system, getSystemSecurity(system))
 }
 
-// Settlement meshes are built "upright" in local +Y; rotate so that axis
-// points along the surface normal (away from the host center).
-const _settlementUp = new THREE.Vector3()
-const _worldUp = new THREE.Vector3(0, 1, 0)
+// Harbours are built upright and stay upright — the sea is flat, so the only
+// thing worth orienting is which way the jetties face, which is out to sea.
 function orientSettlementOnSurface(mesh, surfaceOffset) {
-  _settlementUp.set(surfaceOffset[0], surfaceOffset[1], surfaceOffset[2])
-  if (_settlementUp.lengthSq() < 1e-8) return
-  _settlementUp.normalize()
-  mesh.quaternion.setFromUnitVectors(_worldUp, _settlementUp)
+  const x = surfaceOffset[0]
+  const z = surfaceOffset[2]
+  if (x * x + z * z < 1e-8) return
+  mesh.rotation.set(0, Math.atan2(x, z), 0)
 }
 
 function hashStringForOrbit(str) {
@@ -1478,93 +1395,22 @@ function hashStringForOrbit(str) {
   return Math.abs(h)
 }
 
-/**
- * Pick docking-bay theme from body + current system location.
- * - SerNub's Pleasure Palace → palace (fanciest)
- * - settlements → slightly dirty
- * - core stations (coreFraction < 0.3) → polished core
- * - mid stations → decent fancy
- * - outer rim stations (coreFraction ≥ 0.9) → rusty / gritty
- */
-function resolveInteriorTheme(body) {
-  if (body?.name === WHISPERS_STATION_NAME) return 'palace'
-  if (body?.kind === 'settlement') return 'settlement'
-  if (body?.kind !== 'station') return 'settlement'
-  let f = 0.5
-  if (gameState) {
-    const system =
-      findSystemOfBody(gameState.galaxy, body.id) ||
-      getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    if (system) f = coreFraction(system)
-  }
-  if (f >= 0.9) return 'outer'
-  if (f < 0.3) return 'core'
-  return 'mid'
-}
-
-/** Rebuild bay mesh when theme or interior layout revision changes. */
-const INTERIOR_MESH_REV = 8 // bump when hangar geometry changes mid-session
-function ensureInteriorMesh(theme = 'mid') {
-  if (
-    !interiorMesh ||
-    interiorMesh.userData.theme !== theme ||
-    interiorMesh.userData.meshRev !== INTERIOR_MESH_REV
-  ) {
-    if (interiorMesh) {
-      scene.remove(interiorMesh)
-      interiorMesh.traverse((obj) => {
-        if (obj.geometry) obj.geometry.dispose?.()
-      })
-    }
-    interiorMesh = buildStationInteriorMesh({ theme })
-    interiorMesh.userData.meshRev = INTERIOR_MESH_REV
-    interiorMesh.position.copy(DOCKING_BAY_ORIGIN)
-  }
-  return interiorMesh
-}
-
-// Docking swaps the whole exterior scene out for the bay interior (and back).
-function swapToInterior(body) {
-  for (const mesh of bodyMeshes.values()) scene.remove(mesh)
-  for (const mesh of npcMeshes.values()) {
-    scene.remove(mesh)
-    if (mesh.userData?.thrusters?.group) scene.remove(mesh.userData.thrusters.group)
-  }
-  for (const mesh of projectileMeshes.values()) scene.remove(mesh)
-  for (const mesh of wreckMeshes.values()) scene.remove(mesh)
-  for (const flash of impactFlashes) scene.remove(flash.mesh)
-  if (starMesh) scene.remove(starMesh)
-  if (thrusterEffects?.group) scene.remove(thrusterEffects.group)
-  scene.add(ensureInteriorMesh(resolveInteriorTheme(body)))
-}
-
-function swapToExterior() {
-  if (interiorMesh) scene.remove(interiorMesh)
-  for (const mesh of bodyMeshes.values()) scene.add(mesh)
-  for (const mesh of npcMeshes.values()) {
-    scene.add(mesh)
-    if (mesh.userData?.thrusters?.group) scene.add(mesh.userData.thrusters.group)
-  }
-  for (const mesh of projectileMeshes.values()) scene.add(mesh)
-  for (const mesh of wreckMeshes.values()) scene.add(mesh)
-  for (const flash of impactFlashes) scene.add(flash.mesh)
-  if (starMesh) scene.add(starMesh)
-  if (thrusterEffects?.group) scene.add(thrusterEffects.group)
-}
+const _dockPos = new THREE.Vector3()
+const _dockCamFrom = new THREE.Vector3()
 
 function quatFacing(fromPos, towardPos) {
   // Matrix4.lookAt follows the camera convention (local +Z points away from
   // the target), but ship forward is +Z, so eye/target are swapped here —
-  // same convention used in combat.js and supercruise.js.
+  // same convention used in combat.js and autopilot.js.
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(towardPos, fromPos, new THREE.Vector3(0, 1, 0)))
 }
 
 let docked = false
-/** Hangar camera orbit around the parked ship (click-drag on the view). */
+/** Camera orbit around the moored boat (click-drag on the view). */
 const dockOrbit = {
   yaw: 0.55,
-  pitch: 0.32,
-  dist: 30,
+  pitch: 0.28,
+  dist: 46,
   dragging: false,
   lastX: 0,
   lastY: 0,
@@ -1572,43 +1418,56 @@ const dockOrbit = {
 }
 const DOCK_ORBIT_PITCH_MIN = 0.08
 const DOCK_ORBIT_PITCH_MAX = 1.25
-const DOCK_ORBIT_DIST_MIN = 14
-const DOCK_ORBIT_DIST_MAX = 70
+const DOCK_ORBIT_DIST_MIN = 18
+const DOCK_ORBIT_DIST_MAX = 140
 const DOCK_ORBIT_SENS = 0.005
 
-function resetDockOrbit() {
-  dockOrbit.yaw = 0.55
-  dockOrbit.pitch = 0.32
-  dockOrbit.dist = 30
+/**
+ * Reset the berth camera. `facing` is the bearing from the boat toward the
+ * harbour — the seat swings round to put the quay behind the boat, because a
+ * berth view that does not show what you are tied up to is just a boat.
+ */
+function resetDockOrbit(facing = null) {
+  dockOrbit.yaw = facing != null ? Math.atan2(-facing.x, -facing.z) : 0.55
+  dockOrbit.pitch = 0.34
+  dockOrbit.dist = 52
   dockOrbit.dragging = false
   dockOrbit.pointerId = null
 }
 
+/**
+ * While moored, the camera orbits the boat where it actually lies — alongside
+ * the harbour, on the water. Drag to swing round it; the harbour, the swell and
+ * whatever else is in the anchorage all stay in shot, which is the whole point
+ * of berthing outside instead of cutting to an interior.
+ */
+const _dockLook = new THREE.Vector3()
 function applyDockOrbitCamera() {
-  if (!interiorMesh?.parent) return
-  const park = DOCKING_BAY_ORIGIN.clone().add(BAY_PARK_OFFSET)
-  const s = INTERIOR_WORLD_SCALE
-  const dist = dockOrbit.dist * s
+  if (!gameState) return
+  _dockLook.fromArray(gameState.player.ship.position)
+  const dist = dockOrbit.dist
   const cp = Math.cos(dockOrbit.pitch)
   const sp = Math.sin(dockOrbit.pitch)
   const sy = Math.sin(dockOrbit.yaw)
   const cy = Math.cos(dockOrbit.yaw)
-  // Spherical orbit: yaw around Y, pitch above the deck.
   camera.position.set(
-    park.x + dist * cp * sy,
-    park.y + Math.max(2 * s, dist * sp + 1.5 * s),
-    park.z + dist * cp * cy
+    _dockLook.x + dist * cp * sy,
+    // Never drop the eye below the waterline — you would be looking up through
+    // the sea, which renders as a solid wall of water.
+    Math.max(SEA_MAX_AMPLITUDE + 2, _dockLook.y + dist * sp + 3),
+    _dockLook.z + dist * cp * cy
   )
-  camera.lookAt(park.x, park.y + 1.2 * s, park.z)
+  camera.lookAt(_dockLook.x, _dockLook.y + 2.5, _dockLook.z)
+  camera.updateMatrixWorld(true)
 }
 
 let paused = false
-let navMapOpen = false
+let chartOpen = false
 let inventoryOpen = false
 let missionsOpen = false
 let characterOpen = false
 let cruising = false
-// Edge-detected in animate() to fire the supercruise engage/disengage voice
+// Edge-detected in animate() to fire the autopilot engage/disengage voice
 // callout exactly once per transition, regardless of whether cruising flips
 // via the KeyC handler (manual) or the cruising block below (auto-arrival/
 // combat-interrupt) — one check covers every trigger source.
@@ -1623,27 +1482,28 @@ const _droneShotDir = new THREE.Vector3()
 const _droneShotQuat = new THREE.Quaternion()
 let nextAmbientSpawnAt = 0
 
-let menuStarMesh = null
 /** @type {THREE.Object3D[]} */
 let menuBodyMeshes = []
 let menuAnimT = 0
 let menuActive = false
-/** Cached Whispers system from CANONICAL_GALAXY_SEED (same layout as New Game). */
-let menuWhispersSystem = null
-// Camera frames the real-scale system (companions + SerNub can sit ~0.5M out).
-let menuOrbitRadius = 900000
-let menuOrbitHeight = 180000
+/** Cached world from CANONICAL_WORLD_SEED (same layout as New Game). */
+let menuWorld = null
 
-const MENU_ORBIT_PERIOD_S = 72
+// The title view drifts over the water off Haven Reach — the same sea the
+// player is about to sail, at the same scale, rather than a separate showpiece.
+const MENU_ORBIT_RADIUS = 2600
+const MENU_ORBIT_HEIGHT = 190
+const MENU_ORBIT_PERIOD_S = 96
 const MENU_LOOK_AT = new THREE.Vector3(0, 0, 0)
+/** How far from the title camera a body is worth building at all. */
+const MENU_BODY_RANGE = 9000
 
-function getMenuWhispersSystem() {
-  if (menuWhispersSystem) return menuWhispersSystem
-  // Same seed / layout as createGameState — star id and bodies match in-game Whispers.
-  const galaxy = generateGalaxy(CANONICAL_GALAXY_SEED)
-  menuWhispersSystem =
-    galaxy.systems.find((s) => s.name === WHISPERS_SYSTEM_NAME) ?? galaxy.systems[0]
-  return menuWhispersSystem
+function getMenuWorld() {
+  if (menuWorld) return menuWorld
+  // Same seed / layout as createGameState — the islands on the title screen are
+  // the islands you sail past in the first ten minutes.
+  menuWorld = getWorld(generateWorld(CANONICAL_WORLD_SEED))
+  return menuWorld
 }
 
 function clearMenuBodies() {
@@ -1651,166 +1511,58 @@ function clearMenuBodies() {
   menuBodyMeshes = []
 }
 
-function applyMenuStarAmbient() {
-  const starColor = menuStarMesh?.userData?.stars?.[0]?.color
-  setStarfieldStarTint(starfield, starColor ?? null)
-  if (starColor?.clone) {
-    const bg = starColor.clone().lerp(new THREE.Color(0x05070d), 0.94)
-    bg.multiplyScalar(0.42)
-    scene.background = bg
-  } else {
-    scene.background = new THREE.Color(0x05070d)
-  }
-}
-
-/** Real-scale Whispers trinary + planets / moons / palace / gates for the title. */
-function buildMenuSystemVisuals(system) {
-  if (!system || !menuActive || gameState) return
-
-  if (menuStarMesh) scene.remove(menuStarMesh)
+/** Haven Reach and its neighbours, for the title. */
+function buildMenuSystemVisuals(world) {
+  if (!world || !menuActive || gameState) return
   clearMenuBodies()
 
-  // No forceType / fake id — same buildStarMesh path as loadBodiesForCurrentSystem.
-  menuStarMesh = buildStarMesh(system)
-  scene.add(menuStarMesh)
-  applyMenuStarAmbient()
-
-  for (const body of system.bodies) {
-    const mesh = buildBodyMesh(body, system)
-    mesh.position.fromArray(body.position)
-    if (body.kind === 'settlement' && body.surfaceOffset) {
-      orientSettlementOnSurface(mesh, body.surfaceOffset)
-    }
+  for (const body of world.bodies) {
+    if (Math.hypot(body.position[0], body.position[2]) > MENU_BODY_RANGE) continue
+    const mesh = buildBodyMesh(body)
+    const floatY = mesh.position.y
+    mesh.position.set(body.position[0], floatY, body.position[2])
+    if (body.surfaceOffset) orientSettlementOnSurface(mesh, body.surfaceOffset)
     menuBodyMeshes.push(mesh)
     scene.add(mesh)
   }
-
-  // Frame companions (halo) and outermost body so the whole system reads.
-  let maxR = 0
-  for (const star of menuStarMesh.userData.stars ?? []) {
-    const reach = (star.radius ?? 0) * 3.6
-    maxR = star.orbit ? Math.max(maxR, star.orbit.radius + reach) : Math.max(maxR, reach)
-  }
-  for (const body of system.bodies) {
-    const r = Math.hypot(body.position[0], body.position[1], body.position[2])
-    const shell =
-      body.radius ??
-      (body.kind === 'station' || body.kind === 'settlement' || body.kind === 'warpGate' ? 4000 : 0)
-    maxR = Math.max(maxR, r + shell)
-  }
-  // Frame companions closely — title wants the trinary large, system still visible behind.
-  menuOrbitRadius = Math.max(maxR * 0.42, 35000)
-  menuOrbitHeight = menuOrbitRadius * 0.12
 }
 
 function startMenuBackground() {
   if (menuActive) return
   menuActive = true
   menuAnimT = 0
-  setStarfieldStarTint(starfield, null)
-  scene.background = new THREE.Color(0x05070d)
   audio.playTitleMusic()
 
   const mount = () => {
     if (!menuActive || gameState) return
-    buildMenuSystemVisuals(getMenuWhispersSystem())
+    buildMenuSystemVisuals(getMenuWorld())
   }
-  // Yield so the menu chrome can paint before ~2s galaxy gen on cold start.
-  if (menuWhispersSystem) mount()
+  // Yield so the menu chrome can paint before world gen on a cold start.
+  if (menuWorld) mount()
   else setTimeout(mount, 0)
 }
 
 function stopMenuBackground() {
   menuActive = false
-  if (menuStarMesh) scene.remove(menuStarMesh)
-  menuStarMesh = null
   clearMenuBodies()
-  setStarfieldStarTint(starfield, null)
-  scene.background = new THREE.Color(0x05070d)
   audio.stopTitleMusic()
 }
 
 function updateMenuBackground(dt) {
   if (!menuActive) return
   menuAnimT += dt
-  if (menuStarMesh) updateStarMesh(menuStarMesh, menuAnimT, dt, camera)
-  for (const mesh of menuBodyMeshes) {
-    if (mesh.userData?.kind === 'warpGate') {
-      updateWarpGateMesh(mesh, dt, menuAnimT)
-    } else {
-      updateStationMesh(mesh, menuAnimT, dt)
-      updatePlanetAtmosphere(mesh, menuAnimT, dt)
-    }
-  }
-  // Slow orbit around the real system origin (primary + companions at true scale).
+  for (const mesh of menuBodyMeshes) updateHarbourMesh(mesh, menuAnimT)
+  // Slow circuit of the home archipelago, low over the water.
   const angle = (menuAnimT / MENU_ORBIT_PERIOD_S) * Math.PI * 2
   camera.position.set(
-    Math.cos(angle) * menuOrbitRadius,
-    menuOrbitHeight,
-    Math.sin(angle) * menuOrbitRadius
+    Math.cos(angle) * MENU_ORBIT_RADIUS,
+    MENU_ORBIT_HEIGHT,
+    Math.sin(angle) * MENU_ORBIT_RADIUS
   )
   camera.lookAt(MENU_LOOK_AT)
-  updateTitleGlowTint(dt)
+  updateEnvironment(menuAnimT)
 }
 
-const _tintRingPos = new THREE.Vector3()
-const _tintStarPos = new THREE.Vector3()
-// Current displayed glow colour, eased toward whatever updateTitleGlowTint
-// picks each frame — see the fade comment below.
-const _titleGlowCurrent = new THREE.Color(255 / 255, 70 / 255, 40 / 255)
-let _titleGlowRgb = ''
-
-/**
- * Tint the title's halo with the plasma ring nearest the orbiting menu camera.
- * Rings are bi-coloured (one hue per sun), so it also picks the end whose star
- * is closer — as the camera swings past each pairing the title takes on that
- * bridge's colour. Writes an "r,g,b" triplet to --title-glow; menu.js's
- * keyframes animate only radius/alpha, so the pulse is unaffected.
- *
- * The target colour itself changes in hard steps (nearest ring flips the
- * instant the camera crosses the midpoint), so the displayed colour is eased
- * toward it every frame rather than snapping — a quick fade reads as a
- * transition; an instant swap on a slow 72s orbit read as a jump cut.
- */
-function updateTitleGlowTint(dt = 1 / 60) {
-  const rings = menuStarMesh?.userData?.energyRings
-  if (!rings?.length) return
-  let best = null
-  let bestDist = Infinity
-  for (const ring of rings) {
-    ring.group.getWorldPosition(_tintRingPos)
-    const d = camera.position.distanceToSquared(_tintRingPos)
-    if (d < bestDist) {
-      bestDist = d
-      best = ring
-    }
-  }
-  // Mid layer carries the ring's body colour (halo is too dark, core too white).
-  const ends = best?.layers?.[2]?.ends
-  if (!ends) return
-  // End A is the primary (theta = PI), end B the companion (theta = 0).
-  const stars = menuStarMesh.userData.stars ?? []
-  const primary = stars[0]
-  const companion = stars[best.orbiterIndex ?? 1]
-  let target = ends.hotA
-  if (primary && companion) {
-    primary.group.getWorldPosition(_tintStarPos)
-    const dA = camera.position.distanceToSquared(_tintStarPos)
-    companion.group.getWorldPosition(_tintStarPos)
-    const dB = camera.position.distanceToSquared(_tintStarPos)
-    target = dB < dA ? ends.hotB : ends.hotA
-  }
-  if (!target) return
-  // Exponential ease, framerate-independent: ~90% of the way to the new
-  // colour in about half a second regardless of dt.
-  const t = 1 - Math.exp(-6 * Math.max(0, dt))
-  _titleGlowCurrent.lerp(target, t)
-  const rgb = `${Math.round(_titleGlowCurrent.r * 255)}, ${Math.round(_titleGlowCurrent.g * 255)}, ${Math.round(_titleGlowCurrent.b * 255)}`
-  // Only touch the DOM when the rounded value actually changes.
-  if (rgb === _titleGlowRgb) return
-  _titleGlowRgb = rgb
-  document.documentElement.style.setProperty('--title-glow', rgb)
-}
 
 function showGameSavedToast(durationMs = 2200) {
   if (!saveToastEl) return
@@ -2003,7 +1755,11 @@ function onProjectileHit({
       })
     }
     // Vignette only for player damage (below). Chip SFX handled in rAF above.
-    if (hitPlayer) pulseDamageVignette(position, inboundDir)
+    if (hitPlayer) {
+      pulseDamageVignette(position, inboundDir)
+      // Water thrown up the lens by a near hit.
+      spray.splash(0.9)
+    }
     return
   }
 
@@ -2106,7 +1862,10 @@ function onProjectileHit({
   // Player ship destroyed: handlePlayerDeath() plays combat boom + FX.
 
   // Red edge vignette toward the side of the screen the fire came from.
-  if (hitPlayer) pulseDamageVignette(position, inboundDir)
+  if (hitPlayer) {
+    pulseDamageVignette(position, inboundDir)
+    spray.splash(0.9)
+  }
 }
 
 /** Hull-plate explosion for destroyed ships (NPCs / player death). */
@@ -2246,8 +2005,8 @@ function findNearbyDatacoreNodule() {
  * Also keeps datacore relic + nodule meshes visible in the system.
  */
 function updateAnomalySites(dt) {
-  if (!gameState || docked || jumpEffect) {
-    if (docked || jumpEffect) clearAnomalySiteMeshes()
+  if (!gameState || docked) {
+    if (docked) clearAnomalySiteMeshes()
     return
   }
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
@@ -2255,7 +2014,7 @@ function updateAnomalySites(dt) {
   ensureSystemAnomalies(system, gameState.galaxy)
   pruneAnomalies(system, gameState.simTime)
   const ship = gameState.player.ship.position
-  const core = coreFraction(system)
+  const core = remoteness(gameState.player.ship.position)
 
   // Always show fully-scanned site geometry while undocked in-system.
   syncAnomalySiteMeshes(system, dt)
@@ -2425,7 +2184,7 @@ function tryDamageAlienBase(hitPos, damage = 40) {
 function maybeToastFieldDepleted(fieldId) {
   if (!fieldId || !gameState) return
   const field = getSystem(gameState.galaxy, gameState.player.currentSystemId)?.bodies
-    ?.find((b) => b.id === fieldId && b.kind === 'asteroidField')
+    ?.find((b) => b.id === fieldId && b.kind === 'wreckField')
   if (!field) return
   const rocks = getAsteroidRocks(field)
   if (!isFieldDepleted(gameState, field.id, rocks.length)) return
@@ -2443,7 +2202,7 @@ function maybeToastFieldDepleted(fieldId) {
 function toastIfDepletedField(bodyId) {
   if (!bodyId || !gameState) return
   const field = getSystem(gameState.galaxy, gameState.player.currentSystemId)?.bodies
-    ?.find((b) => b.id === bodyId && b.kind === 'asteroidField')
+    ?.find((b) => b.id === bodyId && b.kind === 'wreckField')
   if (!field) return
   const rocks = getAsteroidRocks(field)
   if (!isFieldDepleted(gameState, field.id, rocks.length)) return
@@ -2458,15 +2217,14 @@ function toastIfDepletedField(bodyId) {
 
 /** Sec 0–3 mining: 10% chance a pirate drops out of the dark. */
 function maybeSpawnMiningPirateAmbush() {
-  if (!gameState || docked || jumpEffect) return
+  if (!gameState || docked) return
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   if (!system) return
-  ensureSystemSecurity(system)
   if (!rollMiningPirateAmbush(Math.random, gameState, system)) return
   const npc = spawnMiningPirateAmbush(
     Math.random,
     gameState.player.ship.position,
-    coreFraction(system),
+    remoteness(gameState.player.ship.position),
     system.bodies
   )
   gameState.npcs.push(npc)
@@ -2490,22 +2248,23 @@ const menu = createMenu(appEl, {
           portraitDataUrl: portraitDataUrl || null,
           shipClassId: STARTER_SHIP_CLASS_ID,
           seed,
-          galaxySeed: CANONICAL_GALAXY_SEED
+          galaxySeed: CANONICAL_WORLD_SEED
         })
     if (DEV_TEST_SETUP && portraitDataUrl) {
       gameState.player.portraitDataUrl = portraitDataUrl
     }
-    // Begin the campaign parked in a Terra Prime bay rather than adrift in
-    // open space. Setting dockedBodyId is enough: startSession's
-    // restoreSessionLocation() already owns the whole docked entry path
-    // (interior swap, bay park pose, docked HUD, station services), which is
-    // the same route a save-load takes. Starting law is 10, so the Sec 6 dock
-    // check passes. Falls through to the old free-flight start if the home
-    // system somehow has no station.
-    const homeSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    const homeStation = homeSystem?.bodies?.find((b) => b.kind === 'station')
-    if (homeStation) gameState.player.dockedBodyId = homeStation.id
-    startSession(gameState, { enterFlightMode: true })
+    // Begin the campaign tied up at Port Haven rather than adrift. Setting
+    // dockedBodyId is enough: startSession's restoreSessionLocation() owns the
+    // whole berthed entry path (berth pose, berthed HUD, harbour services),
+    // which is the same route a save-load takes. Starting law is 10, so the
+    // Sec 6 berth check passes.
+    const world = getWorld(gameState.galaxy)
+    const homePort =
+      world?.bodies?.find((b) => b.id === gameState.player.homePortId) ??
+      world?.bodies?.find((b) => b.kind === 'port')
+    if (homePort) gameState.player.dockedBodyId = homePort.id
+    // Berthed, so do not grab the helm on entry — Undock hands it back.
+    startSession(gameState, { enterFlightMode: !homePort })
   },
   onLoadGame: async () => {
     const loaded = await persistLoadGame()
@@ -2535,8 +2294,6 @@ function clearSession() {
   for (const mesh of bodyMeshes.values()) scene.remove(mesh)
   bodyMeshes.clear()
   surfaceSettlements.clear()
-  if (starMesh) scene.remove(starMesh)
-  starMesh = null
   for (const mesh of projectileMeshes.values()) scene.remove(mesh)
   projectileMeshes.clear()
   for (const mesh of wreckMeshes.values()) scene.remove(mesh)
@@ -2556,10 +2313,10 @@ function clearSession() {
   hud?.element.remove()
   dockingUI?.element.remove()
   pauseMenu?.element.remove()
-  navMap?.element.remove()
   systemScanMap?.hide?.()
   systemScanMap?.element?.remove?.()
   systemScanMap = null
+  seaChart = null
   datacoreMinigame?.hide?.()
   datacoreMinigame?.element?.remove?.()
   datacoreMinigame = null
@@ -2612,10 +2369,6 @@ function clearSession() {
   targetDirEl = null
   currentTarget = null
   cruiseIndicatorEl?.remove()
-  jumpFlashEl?.remove()
-  jumpBlackEl?.remove()
-  jumpBlackEl = null
-  if (interiorMesh) scene.remove(interiorMesh)
   audio.setThrustState(null)
   audio.setSupercruiseActive(false)
   audio.stopAmbientMusic()
@@ -2626,14 +2379,12 @@ function clearSession() {
   docked = false
   hud?.setDocked(false)
   paused = false
-  navMapOpen = false
+  chartOpen = false
   inventoryOpen = false
   missionsOpen = false
   characterOpen = false
   cruising = false
   wasCruising = false
-  jumpEffect = null
-  hyperspaceTunnel.stop()
   audio.stopHyperspaceAudio()
   dockEffect = null
   dockedApproach = null
@@ -2642,9 +2393,9 @@ function clearSession() {
 }
 
 function clearProbeEffect() {
-  if (probeEffect?.mesh) scene.remove(probeEffect.mesh)
   probeEffect = null
   audio.setProbeScanActive(false)
+  sonarPulse?.stop()
 }
 
 function clearDroneMeshes() {
@@ -2684,7 +2435,7 @@ function syncDroneMeshes() {
 }
 
 function updatePlayerDrones(dt) {
-  if (!gameState || docked || cruising || jumpEffect) return
+  if (!gameState || docked || cruising) return
   ensureDrones(gameState.player.ship)
   // Drones only engage after shots exchanged (not Tab-lock alone).
   pruneCombatEngagement(gameState)
@@ -2788,13 +2539,13 @@ function rebuildPlayerShipMesh() {
 /** Open/toggle System Scan (HUD button + B). */
 function openSystemScanPanel() {
   if (!gameState || !systemScanMap) return
-  if (docked || dockEffect || jumpEffect || cruising) {
+  if (docked || dockEffect || cruising) {
     flashToast('System Scan unavailable right now')
     return
   }
   if (
     paused ||
-    navMapOpen ||
+    chartOpen ||
     inventoryOpen ||
     missionsOpen ||
     characterOpen ||
@@ -2807,7 +2558,7 @@ function openSystemScanPanel() {
     return
   }
   exitFlightMode()
-  const sys = getSystem(gameState.galaxy, gameState.player.currentSystemId)
+  const sys = getWorld(gameState.galaxy)
   if (sys) ensureSystemAnomalies(sys, gameState.galaxy)
   systemScanMap.show()
 }
@@ -2862,15 +2613,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   for (const npc of gameState.npcs) {
     addNpcMesh(npc)
   }
-  // Kenney free-model stations (3 types). Preload GLBs; rebuild bodies when
-  // ready so free models replace any procedural fallbacks from first paint.
-  const sessionToken = gameState
   loadBodiesForCurrentSystem()
-  preloadStationModels().then(() => {
-    if (gameState !== sessionToken) return
-    if (stationModelsReady()) loadBodiesForCurrentSystem()
-  })
-  preloadInteriorModels()
 
   hud = createHud(appEl)
   dockingUI = createDockingUI(appEl, gameState, Math.random, {
@@ -2883,17 +2626,12 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
     onPlayerShipChanged: () => rebuildPlayerShipMesh(),
     onStorageChanged: () => inventoryUI?.refresh?.(),
     onCloneTravel: (result) => {
-      // Leave bay UI / interior if we jumped while docked.
+      // Slip the mooring if we jumped while berthed.
       if (docked || dockEffect) {
         dockEffect = null
         docked = false
         dockedApproach = null
         clearDockedSaveFields()
-        try {
-          swapToExterior()
-        } catch {
-          /* already exterior */
-        }
       }
       if (result?.systemChanged) {
         loadBodiesForCurrentSystem()
@@ -2931,7 +2669,27 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
     },
     onQuit: () => window.electronAPI.quitApp()
   })
-  navMap = createNavMap(appEl, gameState)
+  seaChart = createSeaChart(appEl, gameState, {
+    canSetWaypoint: () => {
+      if (cruising) {
+        flashToast('Unable to set a waypoint with the autopilot engaged.')
+        return false
+      }
+      return true
+    },
+    onWaypointChange: ({ name, set }) => {
+      if (set) {
+        audio.playWaypointSet()
+        flashToast(`Waypoint set: ${name ?? 'mark'}`)
+      } else {
+        flashToast('Waypoint cleared')
+      }
+    },
+    onClose: () => {
+      chartOpen = false
+      if (!docked) reenterFlightMode()
+    }
+  })
   systemScanMap = createSystemScanMap(appEl, gameState, {
     getShipClassId: () => gameState.player.ship.classId,
     onFullyScanned: (a) => {
@@ -2943,14 +2701,15 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
       }
     },
     onClose: () => {
-      if (!docked && !navMapOpen) reenterFlightMode()
+      chartOpen = false
+      if (!docked) reenterFlightMode()
     }
   })
   datacoreMinigame = createDatacoreMinigame(appEl)
   systemOverview = createSystemOverview(appEl, gameState, {
     canSetWaypoint: () => {
       if (cruising) {
-        flashToast('Unable to set a waypoint during Supercruise.')
+        flashToast('Unable to set a waypoint with the autopilot engaged.')
         return false
       }
       return true
@@ -2974,7 +2733,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   missionsUI = createMissionsUI(appEl, gameState, {
     canSetWaypoint: () => {
       if (cruising) {
-        flashToast('Unable to set a waypoint during Supercruise.')
+        flashToast('Unable to set a waypoint with the autopilot engaged.')
         return false
       }
       return true
@@ -2983,9 +2742,8 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   characterUI = createCharacterUI(appEl, gameState)
   ensureLawStanding(gameState)
   const startSys = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (startSys) ensureSystemSecurity(startSys)
 
-  // Shared look for probe classification + all floating HUD copy (prompts, toasts, labels).
+  // Shared look for survey readouts + all floating HUD copy (prompts, toasts, labels).
   if (!document.getElementById('float-info-text-style')) {
     const floatInfoStyle = document.createElement('style')
     floatInfoStyle.id = 'float-info-text-style'
@@ -3241,28 +2999,17 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   `
   appEl.appendChild(targetDirEl)
 
-  // Drive status (supercruise / hyperdrive) — under ship status panel.
+  // Autopilot status — under the boat status panel.
   // Glitch enter/exit + chromatic slices.
   cruiseIndicatorEl = document.createElement('div')
   cruiseIndicatorEl.id = 'cruise-indicator'
   cruiseIndicatorEl.className = 'float-info-text'
   cruiseIndicatorEl.style.cssText = belowStatusCss
-  setHudGlitchText(cruiseIndicatorEl, 'SUPERCRUISE ENGAGED')
+  setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
   appEl.appendChild(cruiseIndicatorEl)
 
   // Reused for both the hyperspace punch and the dock/undock transition —
   // background color is set explicitly wherever each effect triggers.
-  jumpFlashEl = document.createElement('div')
-  jumpFlashEl.id = 'jump-flash'
-  jumpFlashEl.style.cssText = 'position:fixed;inset:0;opacity:0;pointer-events:none;display:none;z-index:38;'
-  appEl.appendChild(jumpFlashEl)
-
-  // Opaque black veil across the system swap (fade in → hold → fade out).
-  jumpBlackEl = document.createElement('div')
-  jumpBlackEl.id = 'jump-black'
-  jumpBlackEl.style.cssText =
-    'position:fixed;inset:0;background:#000;opacity:0;pointer-events:none;display:none;z-index:39;'
-  appEl.appendChild(jumpBlackEl)
 
   nextAmbientSpawnAt = gameState.simTime + AMBIENT_SPAWN_INTERVAL_S
   audio.startAmbientMusic()
@@ -3287,11 +3034,6 @@ function returnToMenu() {
   hasSave().then((exists) => menu.show(exists))
 }
 
-// Only stations and settlements are dockable — never bare planets/moons.
-function isDockable(body) {
-  return body.kind === 'station' || body.kind === 'settlement'
-}
-
 // Dock when within DOCK_RANGE of the body centre, but never inside the
 // collision shell / visual bulk (so large stations stay reachable and
 // undock exits remain re-dockable without diving back into the mesh).
@@ -3299,7 +3041,7 @@ function dockRangeFor(body) {
   const bodyRadius = collisionRadiusFor(body) ?? 0
   const shipR = getShipCollisionRadius(playerShipClass)
   const shell = bodyRadius + shipR + DOCK_RANGE_COLLISION_MARGIN
-  if (body.kind === 'station' || body.kind === 'settlement') {
+  if (body.kind === 'port' || body.kind === 'outpost') {
     const visual = exteriorRadiusFor(body) ?? bodyRadius
     const outsideVisual = visual + shipR + DOCK_RANGE_COLLISION_MARGIN + 80
     return Math.max(DOCK_RANGE, shell, outsideVisual)
@@ -3308,22 +3050,17 @@ function dockRangeFor(body) {
 }
 
 /**
- * Where supercruise should drop out around a waypoint body.
+ * Where the autopilot should hand back around a waypoint.
  * Stations/settlements: inside dockRange for F-to-dock.
  * Asteroid fields: near field centre (fraction of scatter radius), not at the edge.
  */
-function supercruiseArrivalRangeFor(body) {
+function autopilotArrivalRangeFor(body) {
   const shipR = getShipCollisionRadius(playerShipClass)
 
   // Belts: rocks fill body.radius around the field origin — drop well inside.
-  if (body.kind === 'asteroidField') {
+  if (body.kind === 'wreckField') {
     const fieldR = Math.max(40, body.radius ?? 120)
     return Math.max(60, Math.min(fieldR * 0.28, fieldR - 25) + shipR * 0.25)
-  }
-
-  // Warp gates: drop well inside the 2 km F-activate bubble.
-  if (body.kind === 'warpGate') {
-    return Math.max(400, Math.min(900, WARP_GATE_ACTIVATION_RANGE * 0.4 + shipR))
   }
 
   const bodyRadius = collisionRadiusFor(body) ?? 0
@@ -3333,19 +3070,16 @@ function supercruiseArrivalRangeFor(body) {
   // Prefer ~half the dock bubble (or a modest clear past the shell) — never
   // near the outer dock edge, where tiny overshoot left players unable to F-dock.
   let preferred
-  if (span > SUPERCRUISE_ARRIVAL_MIN_CLEAR * 2) {
-    preferred = shell + Math.max(SUPERCRUISE_ARRIVAL_MIN_CLEAR, span * 0.45)
+  if (span > AUTOPILOT_ARRIVAL_MIN_CLEAR * 2) {
+    preferred = shell + Math.max(AUTOPILOT_ARRIVAL_MIN_CLEAR, span * 0.45)
   } else {
-    preferred = Math.max(shell + 12, dockR - SUPERCRUISE_DOCK_INNER_SLACK)
+    preferred = Math.max(shell + 12, dockR - AUTOPILOT_DOCK_INNER_SLACK)
   }
   // Always leave a solid margin inside dock range (and outside the shell).
-  const minR = shell + Math.min(SUPERCRUISE_ARRIVAL_MIN_CLEAR, Math.max(12, span * 0.25))
-  const maxR = Math.max(minR, dockR - Math.max(SUPERCRUISE_DOCK_INNER_SLACK, span * 0.2))
+  const minR = shell + Math.min(AUTOPILOT_ARRIVAL_MIN_CLEAR, Math.max(12, span * 0.25))
+  const maxR = Math.max(minR, dockR - Math.max(AUTOPILOT_DOCK_INNER_SLACK, span * 0.2))
   return Math.min(maxR, Math.max(minR, preferred))
 }
-
-// Special waypoint id for the system star (local origin) — not a real body.
-const SYSTEM_STAR_WAYPOINT_ID = 'system-star'
 
 function findNearbyDockableBody() {
   const playerPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
@@ -3367,7 +3101,7 @@ function findNearbyDockableBody() {
 // Wide enough to catch approach before dock/probe range; uses shell radius so
 // huge planets don't stay "far" until you're already on the crust.
 const NEAREST_BODY_HUD_RANGE = 3500
-const HUD_NEAREST_KINDS = new Set(['planet', 'moon', 'station', 'settlement'])
+const HUD_NEAREST_KINDS = new Set(['island', 'port', 'outpost'])
 
 /** Closest planet / moon / station / settlement / star within surface range. */
 function findNearestHudBody() {
@@ -3386,18 +3120,6 @@ function findNearestHudBody() {
     if (surfaceDist < NEAREST_BODY_HUD_RANGE && surfaceDist < nearestSurface) {
       nearest = body
       nearestSurface = surfaceDist
-    }
-  }
-
-  // System sun at local origin (not a body in the list).
-  const starDist = playerPos.length()
-  const starR = starShellRadius()
-  const starSurface = Math.max(0, starDist - starR)
-  if (starSurface < NEAREST_BODY_HUD_RANGE && starSurface < nearestSurface) {
-    nearest = {
-      id: SYSTEM_STAR_WAYPOINT_ID,
-      name: currentSystem.name,
-      kind: 'star'
     }
   }
 
@@ -3585,42 +3307,19 @@ function toastCraftCompleted(jobs) {
 }
 
 function isProbeable(body) {
-  return body.kind === 'planet' || body.kind === 'moon' || body.kind === 'asteroidField'
+  return body.kind === 'island' || body.kind === 'wreckField'
 }
 
-function probeScanRadius(body) {
-  if (body.kind === 'star') return starShellRadius()
-  return collisionRadiusFor(body) ?? 20
-}
-
-// Near enough to a planet/moon to probe from "orbit".
+// Close enough inshore to work a sonar drone off the boat.
 function isInOrbitOfBody(body) {
-  if (!body || (body.kind !== 'planet' && body.kind !== 'moon')) return false
+  if (!body || body.kind !== 'island') return false
   const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
   const bodyPos = new THREE.Vector3().fromArray(body.position)
   const capture = (collisionRadiusFor(body) ?? 0) + PROBE_ORBIT_MARGIN
   return shipPos.distanceTo(bodyPos) < capture
 }
 
-// Near enough to the system sun for solar probe.
-function isInSolarOrbit() {
-  const [x, , z] = gameState.player.ship.position
-  const r = Math.hypot(x, z)
-  return r >= 3000 && r <= STAR_ORBITAL_CARRY_RADIUS
-}
 
-function makeStarProbeBody() {
-  const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  // Per-system probe key so exhausting one sun doesn't block every system star,
-  // and counts stay stable (not a shared global 'system-star' bucket).
-  const starProbeId = `${gameState.player.currentSystemId}:${SYSTEM_STAR_WAYPOINT_ID}`
-  return {
-    id: starProbeId,
-    name: currentSystem?.name ?? 'System',
-    kind: 'star',
-    position: [0, 0, 0]
-  }
-}
 
 // Close-range probe (belts / flyby): surface distance for large worlds.
 function findNearbyProbeableBody() {
@@ -3640,15 +3339,13 @@ function findNearbyProbeableBody() {
   return nearest
 }
 
-// Prefer: Tab-target planet/moon/star while in its orbit. Else nearby belt/body.
+// Prefer whatever is Tab-locked while lying close inshore; else the nearest
+// thing worth sounding.
 function getProbeLaunchTarget() {
-  if (currentTarget?.kind === 'star' && isInSolarOrbit()) {
-    return { body: makeStarProbeBody(), viaOrbit: true }
-  }
   if (currentTarget?.kind === 'body') {
     const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
     const body = currentSystem.bodies.find((b) => b.id === currentTarget.id)
-    if (body && (body.kind === 'planet' || body.kind === 'moon') && isInOrbitOfBody(body)) {
+    if (body && body.kind === 'island' && isInOrbitOfBody(body)) {
       return { body, viaOrbit: true }
     }
   }
@@ -3656,11 +3353,14 @@ function getProbeLaunchTarget() {
   return nearby ? { body: nearby, viaOrbit: false } : null
 }
 
-// Launch a tiny probe mesh that flies to the body, scans for PROBE_SCAN_S,
-// returns, then yields results (missions / survey data). Instant results
-// felt weightless; the flight + 10s scan sells "actually surveying".
-// Cap: MAX_PROBE_ATTEMPTS per body — further launches get a floating denial.
-// Attempts are reserved at launch (not return) so aborted probes still consume a slot.
+/**
+ * Sound the water around a place.
+ *
+ * There is no probe to launch any more — the boat carries sonar, so this is a
+ * burst of pings from where you are, a wait while the returns come back, and
+ * then the survey. Cap: MAX_PROBE_ATTEMPTS per place; attempts are reserved at
+ * the first ping, so breaking off still costs a slot.
+ */
 function probeBody(body) {
   if (probeEffect) return
 
@@ -3671,47 +3371,28 @@ function probeBody(body) {
     return
   }
 
-  // Snapshot before record: fully scanned + open mission → one free re-probe.
+  // Snapshot before record: fully scanned + open contract → one free re-sound.
   const missionOnlyReprobe = isMissionOnlyReprobe(gameState, body.id)
   const n = recordProbeAttempt(gameState, body.id)
 
-  const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-  const bodyPos = new THREE.Vector3().fromArray(body.position)
-  const toShip = shipPos.clone().sub(bodyPos)
-  if (toShip.lengthSq() < 1e-6) toShip.set(0, 0, 1)
-  else toShip.normalize()
-  const bodyRadius = probeScanRadius(body)
-  const scanPos = bodyPos.clone().addScaledVector(toShip, bodyRadius + PROBE_SCAN_STANDOFF)
-
-  // Eject slightly ahead of the ship nose so the probe doesn't spawn inside hull.
-  const shipQuat = new THREE.Quaternion().fromArray(gameState.player.ship.quaternion)
-  const launchPos = shipPos.clone().add(new THREE.Vector3(0, 0, 4).applyQuaternion(shipQuat))
-
-  const mesh = buildProbeMesh()
-  mesh.position.copy(launchPos)
-  mesh.quaternion.copy(quatFacing(launchPos, scanPos))
-  scene.add(mesh)
-
+  sonarPulse.ping(gameState.player.ship.position)
   probeEffect = {
-    phase: 'outbound',
     elapsed: 0,
     body,
-    mesh,
-    launchPos: launchPos.clone(),
-    scanPos,
-    bodyPos,
-    returnStart: null,
-    // Snapshot at launch — scan phase completes the mission before return, so
-    // finishProbeResults cannot re-detect "open mission target" on the way back.
+    pingsFired: 0,
+    surveyLogged: false,
+    // Snapshot now — the sounding completes the contract objective before the
+    // results panel opens, so finishProbeResults cannot re-detect it later.
     attemptNumber: n,
     missionTargetAtLaunch: isActiveMissionProbeTarget(gameState, body.id),
     missionOnlyReprobe
   }
-  audio.playProbeLaunch()
+  audio.playSonarPing(0)
+  audio.setProbeScanActive(true)
   if (missionOnlyReprobe) {
-    flashToast(`Mission re-scan of ${body.name}… (no additional finds)`, 2.4)
+    flashToast(`Re-sounding ${body.name} for the contract… (no additional finds)`, 2.4)
   } else {
-    flashToast(`Probe launched toward ${body.name}… (${n}/${MAX_PROBE_ATTEMPTS})`, 2.2)
+    flashToast(`Sounding ${body.name}… (${n}/${MAX_PROBE_ATTEMPTS})`, 2.2)
   }
 }
 
@@ -3741,16 +3422,15 @@ function showProbeScanPanel(lines, bodyId = null) {
 /** True if ship is within probe range of body (orbit margin or surface distance). */
 function isInProbeDisplayRange(body) {
   if (!body || !gameState) return false
-  if (body.kind === 'star') return isInSolarOrbit()
   const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
   const bodyPos = new THREE.Vector3().fromArray(body.position)
   const dist = shipPos.distanceTo(bodyPos)
   const shell = collisionRadiusFor(body) ?? 0
-  if (body.kind === 'planet' || body.kind === 'moon') {
+  if (body.kind === 'island') {
     return dist < shell + PROBE_ORBIT_MARGIN
   }
   // Asteroid belts: show while inside the field or near the outer edge.
-  if (body.kind === 'asteroidField') {
+  if (body.kind === 'wreckField') {
     return dist < shell + PROBE_RANGE
   }
   return Math.max(0, dist - shell) < PROBE_RANGE
@@ -3804,28 +3484,7 @@ function updateProbeScanFloat() {
       }
     }
   }
-  if (!showBody && currentTarget?.kind === 'star' && isInSolarOrbit()) {
-    const starBody = makeStarProbeBody()
-    if (isInProbeDisplayRange(starBody)) {
-      const report = getOrRebuildProbeScanLines(starBody, currentSystem)
-      if (report) {
-        showBody = starBody
-        lines = report
-      }
-    }
-  }
-  // Else any nearby scanned probeable (planet / moon / belt / star)
-  if (!showBody && currentSystem) {
-    // Star first if in solar orbit
-    if (isInSolarOrbit()) {
-      const starBody = makeStarProbeBody()
-      const report = getOrRebuildProbeScanLines(starBody, currentSystem)
-      if (report) {
-        showBody = starBody
-        lines = report
-      }
-    }
-  }
+  // Else whatever nearby has already been sounded (island or wreck field).
   if (!showBody && currentSystem) {
     let best = Infinity
     for (const b of currentSystem.bodies) {
@@ -3933,7 +3592,7 @@ function finishProbeResults(
         `The signal traces further — new fix on ${investigation.bodyName} in ${investigation.systemName}.`
       )
     } else {
-      // Probe (and exploration) contracts finish on survey; toast already fired at scan end.
+      // Survey (and charting) contracts finish on the sounding; toast already fired.
       missionCompleteLine = 'Mission complete'
     }
   }
@@ -3987,95 +3646,51 @@ function finishProbeResults(
 function updateProbeEffect(dt) {
   if (!probeEffect) return
   probeEffect.elapsed += dt
-  const { mesh, body } = probeEffect
 
-  // Keep scan hold point tracking the body if it orbits while we wait.
-  const liveBodyPos = new THREE.Vector3().fromArray(body.position)
-  const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-  const toShip = shipPos.clone().sub(liveBodyPos)
-  if (toShip.lengthSq() < 1e-6) toShip.set(0, 0, 1)
-  else toShip.normalize()
-  const bodyRadius = probeScanRadius(body)
-  const liveScanPos = liveBodyPos.clone().addScaledVector(toShip, bodyRadius + PROBE_SCAN_STANDOFF)
-  probeEffect.scanPos = liveScanPos
-  probeEffect.bodyPos = liveBodyPos
-
-  if (probeEffect.phase === 'outbound') {
-    const t = Math.min(1, probeEffect.elapsed / PROBE_OUTBOUND_S)
-    const lt = easeInOutCubic(t)
-    mesh.position.copy(probeEffect.launchPos).lerp(liveScanPos, lt)
-    const face = quatFacing(probeEffect.launchPos, liveScanPos)
-    updateProbeMesh(mesh, dt, { scanning: false, baseQuat: face })
-    if (t >= 1) {
-      probeEffect.phase = 'scanning'
-      probeEffect.elapsed = 0
-      audio.setProbeScanActive(true)
-      flashToast(`Scanning ${body.name}…`, PROBE_SCAN_S)
-    }
-  } else if (probeEffect.phase === 'scanning') {
-    mesh.position.copy(liveScanPos)
-    // Face the body (+Z toward center) so the nose beam paints the surface.
-    const face = quatFacing(liveScanPos, liveBodyPos)
-    const scanDist = mesh.position.distanceTo(liveBodyPos)
-    // Cap beam visual length; huge worlds would stretch a unit cylinder forever.
-    const beamCap = body.kind === 'star' ? 80 : 40
-    updateProbeMesh(mesh, dt, { scanning: true, scanDist: Math.min(scanDist, beamCap), baseQuat: face })
-    if (probeEffect.elapsed >= PROBE_SCAN_S) {
-      // Count the survey as soon as the scan finishes — not only after the
-      // probe docks back — so jump/dock/abort mid-return can't strand a probe
-      // mission in "in progress" after a successful scan.
-      if (!probeEffect.surveyLogged) {
-        probeEffect.surveyLogged = true
-        markBodyProbed(gameState, body.id)
-        updateMissionProgress(gameState)
-      }
-      probeEffect.phase = 'returning'
-      probeEffect.elapsed = 0
-      probeEffect.returnStart = mesh.position.clone()
-      audio.setProbeScanActive(false)
-      audio.playProbeReturn()
-      flashToast('Probe returning…', 2.2)
-    }
-  } else if (probeEffect.phase === 'returning') {
-    const t = Math.min(1, probeEffect.elapsed / PROBE_RETURN_S)
-    const lt = easeInOutCubic(t)
-    // Home on the ship's live position (player may have drifted).
-    const home = shipPos.clone().add(
-      new THREE.Vector3(0, 0, 3).applyQuaternion(
-        new THREE.Quaternion().fromArray(gameState.player.ship.quaternion)
-      )
-    )
-    mesh.position.copy(probeEffect.returnStart).lerp(home, lt)
-    const face = quatFacing(probeEffect.returnStart, home)
-    updateProbeMesh(mesh, dt, { scanning: false, baseQuat: face })
-    if (t >= 1) {
-      const finishedBody = body
-      const attemptNumber = probeEffect.attemptNumber
-      const missionTargetAtLaunch = probeEffect.missionTargetAtLaunch
-      const missionOnlyReprobe = !!probeEffect.missionOnlyReprobe
-      clearProbeEffect()
-      finishProbeResults(finishedBody, attemptNumber, missionTargetAtLaunch, missionOnlyReprobe)
-    }
+  // Fire the rest of the burst on the same cadence the rings expand at.
+  const due = Math.min(
+    SONAR_PING_COUNT - 1,
+    Math.floor(probeEffect.elapsed / SONAR_PING_INTERVAL_S)
+  )
+  while (probeEffect.pingsFired < due) {
+    probeEffect.pingsFired += 1
+    audio.playSonarPing(probeEffect.pingsFired)
   }
+
+  if (probeEffect.elapsed < PROBE_SCAN_S) return
+
+  // Log the survey the moment the returns are in, so berthing or breaking off
+  // right afterwards cannot strand a contract in "in progress".
+  const body = probeEffect.body
+  if (!probeEffect.surveyLogged) {
+    probeEffect.surveyLogged = true
+    markBodyProbed(gameState, body.id)
+    updateMissionProgress(gameState)
+  }
+  const attemptNumber = probeEffect.attemptNumber
+  const missionTargetAtLaunch = probeEffect.missionTargetAtLaunch
+  const missionOnlyReprobe = !!probeEffect.missionOnlyReprobe
+  clearProbeEffect()
+  audio.playSonarReturn()
+  finishProbeResults(body, attemptNumber, missionTargetAtLaunch, missionOnlyReprobe)
 }
 
 /** Surface settlements sit on a planet/moon — radar shows the host only. */
+/**
+ * A coastal outpost is drawn as part of its island rather than as a separate
+ * blip — otherwise every island with a jetty paints twice on the radar.
+ */
 function isPlanetSurfaceSettlement(body) {
-  if (body.kind !== 'settlement') return false
-  if (body.inAsteroidField) return false
-  return !!body.parentId || !!body.surfaceOffset
+  if (body.kind !== 'outpost') return false
+  return !!body.parentId
 }
 
 function radarKindForBody(body, isWaypoint, isMission) {
-  // Warp gates always paint purple (not mission/waypoint overrides).
-  if (body.kind === 'warpGate') return 'gate'
   if (isWaypoint) return 'waypoint'
   if (isMission) return 'mission'
-  if (body.kind === 'station') return 'station'
-  if (body.kind === 'planet') return 'planet'
-  if (body.kind === 'moon') return 'moon'
-  if (body.kind === 'asteroidField') return 'belt'
-  if (body.kind === 'settlement') return 'station'
+  if (body.kind === 'port' || body.kind === 'outpost') return 'port'
+  if (body.kind === 'island') return 'island'
+  if (body.kind === 'wreckField') return 'wreckField'
   return 'body'
 }
 
@@ -4124,30 +3739,15 @@ function computeRadarContacts() {
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   if (!currentSystem) return contacts
 
-  // System star / sun at origin (green with planets/moons)
-  {
-    const isStarWp = gameState.player.waypointBodyId === SYSTEM_STAR_WAYPOINT_ID
-    const targeted = t?.kind === 'star'
-    if (isStarWp || targeted || _radarShipPos.length() <= RADAR_RANGE) {
-      pushRadarContact(
-        contacts,
-        [0, 0, 0],
-        isStarWp ? 'waypoint' : 'sun',
-        isStarWp || targeted ? Infinity : RADAR_RANGE,
-        targeted
-      )
-    }
-  }
-
   const missionBodies = missionMarkedBodyIds(gameState, currentSystem.id)
   const waypointBodyId = gameState.player.waypointBodyId
 
-  // Planets, moons, stations, gates — not surface settlements (host only).
-  // Asteroid fields: never show the field centroid; only individual rocks (brown).
+  // Islands and harbours — coastal outposts paint as their island.
+  // Wreck fields never show the field centre; only individual hulks.
   for (const body of currentSystem.bodies) {
     if (isPlanetSurfaceSettlement(body)) continue
 
-    if (body.kind === 'asteroidField') {
+    if (body.kind === 'wreckField') {
       const rocks = getAsteroidRocks(body)
       if (!rocks?.length) continue
       const near = []
@@ -4219,745 +3819,34 @@ function computeRadarContacts() {
   return contacts
 }
 
-// Route autopilot: SC → gate → wait 10s (F to skip) → jump → next gate…
-const ROUTE_AUTOPILOT_GATE_PAUSE_S = 10
-/** @type {{ phase: 'to_gate' | 'gate_wait' | 'jumping', pauseRemaining?: number, nextId?: string, gateId?: string } | null} */
-let routeAutopilot = null
-
+// Route autopilot: cruise straight to the plotted waypoint. One sea, so a
+// route is a single leg — there is nothing to hop through on the way.
 function isRouteAutopilotActive() {
-  return !!routeAutopilot
+  return false
 }
 
-/**
- * Abort autopilot sequence only — plotted route is kept so the player can
- * resume later (manual F or re-engage autopilot).
- */
-function cancelRouteAutopilot(reason) {
-  if (!routeAutopilot) return
-  routeAutopilot = null
-  if (cruiseIndicatorEl) {
-    cruiseIndicatorEl.style.display = 'none'
-    cruiseIndicatorEl.style.opacity = '0'
-  }
-  if (reason) flashToast(reason)
-}
+function cancelRouteAutopilot() {}
 
-/** After SC drop (or already in range): 10s pause before auto-jump; F skips. */
-function armRouteAutopilotGateWait(nextId, gate) {
-  if (cruising) {
-    cruising = false
-    gameState.player.ship.velocity = [0, 0, 0]
-    gameState.player.ship.throttle = 0
-  }
-  gameState.player.waypointBodyId = null
-  gameState.player.waypointPosition = null
-  routeAutopilot = {
-    phase: 'gate_wait',
-    pauseRemaining: ROUTE_AUTOPILOT_GATE_PAUSE_S,
-    nextId,
-    gateId: gate.id
-  }
-  const destSys = getSystem(gameState.galaxy, nextId)
-  flashToast(
-    `Autopilot: jump in ${ROUTE_AUTOPILOT_GATE_PAUSE_S}s — press F to jump now`,
-    3.2
-  )
-  setHudGlitchText(
-    cruiseIndicatorEl,
-    destSys
-      ? `AUTOPILOT · JUMP ${ROUTE_AUTOPILOT_GATE_PAUSE_S}s · ${destSys.name}`
-      : `AUTOPILOT · JUMP ${ROUTE_AUTOPILOT_GATE_PAUSE_S}s`
-  )
-  showHudGlitch(cruiseIndicatorEl)
-}
-
-/** Set waypoint on the gate for the next plotted hop and engage supercruise. */
-function startRouteAutopilotCruiseToGate() {
-  ensureWarpGates(gameState.galaxy)
-  const rem = gameState.player.plottedRoute
-  if (!Array.isArray(rem) || rem.length === 0) {
-    cancelRouteAutopilot('Route complete')
-    return false
-  }
-  if (!shipHasAutopilot(gameState.player.ship)) {
-    cancelRouteAutopilot('Autopilot cancelled — module not fitted')
-    return false
-  }
-  const nextId = rem[0]
-  const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (!canJumpTo(currentSystem, nextId)) {
-    cancelRouteAutopilot('Autopilot cancelled — no warp lane')
-    return false
-  }
-  const gate = findWarpGateTo(currentSystem, nextId)
-  if (!gate) {
-    cancelRouteAutopilot('Autopilot cancelled — missing warp gate')
-    return false
-  }
-  // Already in activation range → wait, then jump (F skips wait).
-  if (isNearWarpGate(gameState.player.ship.position, gate)) {
-    armRouteAutopilotGateWait(nextId, gate)
-    return true
-  }
-  gameState.player.waypointBodyId = gate.id
-  gameState.player.waypointPosition = null
-  routeAutopilot = { phase: 'to_gate' }
-  try {
-    teleportDronesToBay(gameState.player.ship)
-    clearDroneMeshes()
-  } catch { /* */ }
-  clearTargetLock()
-  cruising = true
-  gameState.player.ship.supercruiseElapsed = 0
-  const destSys = getSystem(gameState.galaxy, nextId)
-  flashToast(`Route autopilot → ${gate.name}`)
-  setHudGlitchText(
-    cruiseIndicatorEl,
-    destSys ? `AUTOPILOT · ${destSys.name}` : 'ROUTE AUTOPILOT'
-  )
-  showHudGlitch(cruiseIndicatorEl)
-  audio.announce('Route autopilot engaged')
-  return true
-}
-
-function jumpEaseInOut(t) {
-  const x = Math.max(0, Math.min(1, t))
-  return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2
-}
-
-function jumpLerp3(a, b, t) {
-  return [
-    a[0] + (b[0] - a[0]) * t,
-    a[1] + (b[1] - a[1]) * t,
-    a[2] + (b[2] - a[2]) * t
-  ]
-}
-
-/**
- * Camera for gate approach / exit: sit on the portal axis so the ring face
- * is centered on screen (not a side-on silhouette).
- * @param {'in'|'out'} mode in = looking into aperture; out = looking out of gate
- */
-function syncGateFaceCamera(camera, shipPos, gatePos, lookDir, mode = 'in') {
-  const ship = new THREE.Vector3().fromArray(shipPos)
-  const gate = new THREE.Vector3().fromArray(gatePos)
-  const dir = new THREE.Vector3().fromArray(lookDir)
-  if (dir.lengthSq() < 1e-8) dir.set(0, 0, 1)
-  else dir.normalize()
-  // Behind the ship relative to the look direction.
-  const back = dir.clone().multiplyScalar(mode === 'in' ? -1 : -1)
-  const up = new THREE.Vector3(0, 1, 0)
-  // Prefer a stable screen-up that isn't parallel to the portal axis.
-  const camUp = up.clone().sub(dir.clone().multiplyScalar(up.dot(dir)))
-  if (camUp.lengthSq() < 1e-6) camUp.set(1, 0, 0)
-  else camUp.normalize()
-  const dist = 58
-  const lift = 14
-  camera.position.copy(ship).addScaledVector(back, dist).addScaledVector(camUp, lift)
-  // Look at a point through the aperture so the ring is framed face-on.
-  const lookTarget =
-    mode === 'in'
-      ? gate.clone().addScaledVector(dir, 40)
-      : ship.clone().addScaledVector(dir, 120)
-  camera.up.copy(camUp)
-  camera.lookAt(lookTarget)
-  camera.updateMatrixWorld(true)
-}
-
-/**
- * Begin the warp-gate jump VFX + system swap. Caller must validate proximity.
- * Sequence: enter origin gate → tunnel → exit destination gate.
- */
-function beginWarpJump(targetSystemId, opts = {}) {
-  navMapOpen = false
-  navMap?.hide()
-  // Probe can't follow a warp jump — abort mid-survey cleanly.
-  clearProbeEffect()
-  clearTargetLock()
-  // Jump sequence owns input until arrival flash ends (resumeFlightAfterPause).
-  flightModeWanted = true
-  flightMode = false
-  laserFireHeld = false
-  missileFireHeld = false
-  setChaseFreeLook(false)
-  // Keep pointer lock through the cutscene when possible so post-jump re-lock is easier.
-  if (document.pointerLockElement !== renderer.domElement) {
-    renderer.domElement.requestPointerLock().catch(() => {})
-  }
-  if (opts.routeAutopilot) {
-    routeAutopilot = { phase: 'jumping' }
-  } else {
-    routeAutopilot = null
-  }
-
-  ensureWarpGates(gameState.galaxy)
-  const fromSystemId = gameState.player.currentSystemId
-  const currentSystem = getSystem(gameState.galaxy, fromSystemId)
-  const originGate =
-    opts.originGate ||
-    findWarpGateTo(currentSystem, targetSystemId) ||
-    findNearbyWarpGate(currentSystem, gameState.player.ship.position)
-  const originGatePos = originGate?.position
-    ? [...originGate.position]
-    : [...gameState.player.ship.position]
-  const enterFromPos = [...gameState.player.ship.position]
-  const enterFromQuat = [...gameState.player.ship.quaternion]
-  // Portal +Z faces the star; approach along that axis so the ring face fills the screen.
-  const outward = warpGateOutwardDir(originGatePos)
-  // Direction the camera/ship looks to see the gate face (from star-side toward the aperture).
-  const gateLookDir = [-outward[0], -outward[1], -outward[2]]
-  // Prefer starting approach on the portal axis (face-on), not a lateral skim.
-  const approachDist = Math.max(
-    380,
-    Math.hypot(
-      enterFromPos[0] - originGatePos[0],
-      enterFromPos[1] - originGatePos[1],
-      enterFromPos[2] - originGatePos[2]
-    )
-  )
-  const axialStart = [
-    originGatePos[0] + outward[0] * approachDist,
-    originGatePos[1] + outward[1] * approachDist,
-    originGatePos[2] + outward[2] * approachDist
-  ]
-  // Blend current position toward the axial approach so we don't teleport hard.
-  const startPos = jumpLerp3(enterFromPos, axialStart, 0.72)
-  const enterToQuat = quatFacingFromTo(startPos, originGatePos)
-
-  gameState.player.ship.velocity = [0, 0, 0]
-  gameState.player.ship.position = [...startPos]
-  gameState.player.ship.quaternion = [...enterToQuat]
-
-  jumpEffect = {
-    phase: 'enterGate',
-    elapsed: 0,
-    targetSystemId,
-    fromSystemId,
-    jumped: false,
-    originGatePos,
-    enterFromPos: [...startPos],
-    enterFromQuat: [...enterToQuat],
-    enterToQuat,
-    gateLookDir,
-    gateOutward: outward
-  }
-  jumpFlashEl.style.background = HYPERSPACE_FLASH_COLOR
-  jumpFlashEl.style.display = 'block'
-  jumpFlashEl.style.opacity = '0'
-  setJumpBlackOpacity(0)
-  // Tunnel starts when the ship reaches the aperture (end of enterGate).
-  try {
-    teleportDronesToBay(gameState.player.ship)
-    clearDroneMeshes()
-  } catch { /* */ }
-  audio.announce(opts.routeAutopilot ? 'Warp gate engaged' : 'Warp gate engaged')
-  setHudGlitchText(cruiseIndicatorEl, opts.routeAutopilot ? 'ROUTE AUTOPILOT' : 'ENTERING GATE')
-  showHudGlitch(cruiseIndicatorEl)
-}
-
-/**
- * Galaxy-map "Engage Autopilot": chain SC → gate → wait → jump along plottedRoute.
- * Call again while active to cancel (route is preserved).
- */
-function engageRouteAutopilot(nextHopSystemId) {
-  // Toggle off while running — keep plottedRoute for later resume.
-  if (routeAutopilot) {
-    cancelRouteAutopilot('Autopilot cancelled — route kept')
-    return
-  }
-  if (docked || dockEffect) {
-    flashToast('Undock before engaging autopilot')
-    return
-  }
-  if (gameState.inCombat) {
-    flashToast('Cannot autopilot while in combat')
-    return
-  }
-  if (!shipHasAutopilot(gameState.player.ship)) {
-    flashToast('Fit an Autopilot module first')
-    return
-  }
-  if (!nextHopSystemId || nextHopSystemId === gameState.player.currentSystemId) {
-    flashToast('Plot a multi-system route first')
-    return
-  }
-  ensureWarpGates(gameState.galaxy)
-  const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (!canJumpTo(currentSystem, nextHopSystemId)) {
-    flashToast('No warp lane to the next hop — replot the route')
-    return
-  }
-  const gate = findWarpGateTo(currentSystem, nextHopSystemId)
-  if (!gate) {
-    flashToast('No warp gate to that system')
-    return
-  }
-  const rem = gameState.player.plottedRoute
-  if (!Array.isArray(rem) || rem[0] !== nextHopSystemId) {
-    if (!Array.isArray(rem) || rem.length === 0) {
-      gameState.player.plottedRoute = [nextHopSystemId]
-    }
-  }
-  navMapOpen = false
-  navMap?.hide()
-  if (!docked) reenterFlightMode()
-  startRouteAutopilotCruiseToGate()
-}
-
-function updateRouteAutopilot(dt) {
-  if (!routeAutopilot) return
-  if (docked || dockEffect) {
-    cancelRouteAutopilot('Autopilot cancelled — docked (route kept)')
-    return
-  }
-  if (jumpEffect) return
-  if (gameState.inCombat) {
-    cancelRouteAutopilot('Autopilot cancelled — combat (route kept)')
-    return
-  }
-  if (!shipHasAutopilot(gameState.player.ship)) {
-    cancelRouteAutopilot('Autopilot cancelled — module not fitted (route kept)')
-    return
-  }
-  const rem = gameState.player.plottedRoute
-  if (!Array.isArray(rem) || rem.length === 0) {
-    cancelRouteAutopilot('Route complete')
-    return
-  }
-
-  // Hold at gate after SC: countdown, F jumps early.
-  if (routeAutopilot.phase === 'gate_wait') {
-    const nextId = routeAutopilot.nextId ?? rem[0]
-    const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    const gate =
-      (routeAutopilot.gateId &&
-        currentSystem.bodies.find((b) => b.id === routeAutopilot.gateId)) ||
-      findWarpGateTo(currentSystem, nextId)
-    if (!gate || !isNearWarpGate(gameState.player.ship.position, gate)) {
-      // Drifted away — resume SC to the gate.
-      routeAutopilot = { phase: 'to_gate' }
-      return
-    }
-    routeAutopilot.pauseRemaining =
-      (routeAutopilot.pauseRemaining ?? ROUTE_AUTOPILOT_GATE_PAUSE_S) - dt
-    const sec = Math.max(1, Math.ceil(routeAutopilot.pauseRemaining))
-    const destSys = getSystem(gameState.galaxy, nextId)
-    const label = destSys
-      ? `AUTOPILOT · JUMP ${sec}s · ${destSys.name} (F)`
-      : `AUTOPILOT · JUMP ${sec}s (F)`
-    setHudGlitchText(cruiseIndicatorEl, label)
-    if (cruiseIndicatorEl) {
-      cruiseIndicatorEl.style.display = 'block'
-      cruiseIndicatorEl.style.opacity = '1'
-    }
-    if (routeAutopilot.pauseRemaining <= 0) {
-      beginWarpJump(nextId, { routeAutopilot: true, originGate: gate })
-    }
-    return
-  }
-
-  if (routeAutopilot.phase !== 'to_gate') return
-
-  const nextId = rem[0]
-  const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  const gate = findWarpGateTo(currentSystem, nextId)
-  if (!gate) {
-    cancelRouteAutopilot('Autopilot cancelled — missing warp gate (route kept)')
-    return
-  }
-  if (gameState.player.waypointBodyId !== gate.id) {
-    gameState.player.waypointBodyId = gate.id
-    gameState.player.waypointPosition = null
-  }
-  // Near the portal → drop SC and start the 10s jump pause.
-  if (isNearWarpGate(gameState.player.ship.position, gate)) {
-    armRouteAutopilotGateWait(nextId, gate)
-    return
-  }
-  // Keep supercruise engaged toward the gate.
-  if (!cruising) {
-    try {
-      teleportDronesToBay(gameState.player.ship)
-      clearDroneMeshes()
-    } catch { /* */ }
-    clearTargetLock()
-    cruising = true
-    gameState.player.ship.supercruiseElapsed = 0
-  }
-  // Live status on cruise indicator.
-  if (cruiseIndicatorEl) {
-    const destSys = getSystem(gameState.galaxy, nextId)
-    const label = destSys
-      ? `AUTOPILOT · ${destSys.name} (${rem.length} left)`
-      : `AUTOPILOT · ${rem.length} left`
-    setHudGlitchText(cruiseIndicatorEl, label)
-    cruiseIndicatorEl.style.display = 'block'
-    cruiseIndicatorEl.style.opacity = '1'
-  }
-}
-
-/** Smoothstep 0–1 (for black-fade ramps). */
-function jumpSmoothstep(t) {
-  const x = Math.max(0, Math.min(1, t))
-  return x * x * (3 - 2 * x)
-}
-
-function setJumpBlackOpacity(opacity) {
-  if (!jumpBlackEl) return
-  const v = Math.max(0, Math.min(1, opacity))
-  if (v <= 0.001) {
-    jumpBlackEl.style.opacity = '0'
-    jumpBlackEl.style.display = 'none'
-  } else {
-    jumpBlackEl.style.display = 'block'
-    jumpBlackEl.style.opacity = String(v)
-  }
-}
-
-/**
- * Black fade opacity for hyperspace streak phase s ∈ [0,1].
- * Fades in before the system swap, then stays fully black until jump end.
- * Reveal is handled separately (arrival flash after jump completes).
- */
-function jumpBlackOpacityForStreak(s, jumped) {
-  if (jumped) return 1
-  if (s < JUMP_BLACK_FADE_IN_START) return 0
-  if (s < JUMP_BLACK_FADE_IN_END) {
-    return jumpSmoothstep(
-      (s - JUMP_BLACK_FADE_IN_START) / (JUMP_BLACK_FADE_IN_END - JUMP_BLACK_FADE_IN_START)
-    )
-  }
-  return 1
-}
-
-function clearJumpVisuals() {
-  if (jumpFlashEl) {
-    jumpFlashEl.style.opacity = '0'
-    jumpFlashEl.style.display = 'none'
-  }
-  setJumpBlackOpacity(0)
-}
-
-function slerpShipQuat(fromArr, toArr, t, outShip) {
-  const a = new THREE.Quaternion().fromArray(fromArr)
-  const b = new THREE.Quaternion().fromArray(toArr)
-  a.slerp(b, Math.max(0, Math.min(1, t)))
-  outShip.quaternion = a.toArray()
-}
-
-function performWarpSystemSwap() {
-  hyperspaceJump(gameState, jumpEffect.targetSystemId, Math.random)
-  policeResponse = null
-  clearNpcMeshes()
-  for (const mesh of bodyMeshes.values()) scene.remove(mesh)
-  bodyMeshes.clear()
-  if (starMesh) scene.remove(starMesh)
-  starMesh = null
-  for (const mesh of projectileMeshes.values()) scene.remove(mesh)
-  projectileMeshes.clear()
-  missileTrail?.clear()
-  for (const mesh of wreckMeshes.values()) scene.remove(mesh)
-  wreckMeshes.clear()
-  for (const flash of impactFlashes) scene.remove(flash.mesh)
-  impactFlashes.length = 0
-  for (const fx of rockExplosions) {
-    scene.remove(fx.group)
-    disposeRockExplosion(fx)
-  }
-  rockExplosions.length = 0
-  for (const fx of hitImpacts) {
-    scene.remove(fx.group)
-    disposeHitImpact(fx)
-  }
-  hitImpacts.length = 0
-  for (const npc of gameState.npcs) {
-    addNpcMesh(npc)
-  }
-  loadBodiesForCurrentSystem()
-  if (playerMesh) {
-    playerMesh.scale.setScalar(1)
-    syncMeshToEntity(playerMesh, gameState.player.ship)
-  }
-}
-
-function beginJumpExitGatePhase() {
-  hyperspaceTunnel.stop()
-  if (playerMesh) playerMesh.scale.setScalar(1)
-  camera.fov = BASE_FOV
-  camera.updateProjectionMatrix()
-
-  const dest = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  const fromId = jumpEffect.fromSystemId
-  const exitFrom = [...gameState.player.ship.position]
-  const exitTo = warpArrivalNearExitGate(dest, fromId)
-  const exitFromQuat = [...gameState.player.ship.quaternion]
-  const exitToQuat = quatFacingFromTo(exitFrom, exitTo)
-  const exitOut = warpGateOutwardDir(exitFrom)
-  // Looking out through the face of the gate as we leave.
-  const exitLookDir = [...exitOut]
-
-  jumpEffect = {
-    phase: 'exitGate',
-    elapsed: 0,
-    targetSystemId: jumpEffect.targetSystemId,
-    fromSystemId: fromId,
-    exitFromPos: exitFrom,
-    exitToPos: exitTo,
-    exitFromQuat,
-    exitToQuat,
-    exitGatePos: [...exitFrom],
-    exitLookDir
-  }
-  setJumpBlackOpacity(0)
-  jumpFlashEl.style.opacity = '0.15'
-  setHudGlitchText(cruiseIndicatorEl, 'EXITING GATE')
-  showHudGlitch(cruiseIndicatorEl)
-  audio.playHyperspaceArrival()
-  audio.announce('Warp tunnel exit')
-}
-
-function finishJumpSequence() {
-  if (playerMesh) playerMesh.scale.setScalar(1)
-  camera.fov = BASE_FOV
-  camera.updateProjectionMatrix()
-  const ship = gameState.player.ship
-  // Snap to final standoff pose if exit phase completed.
-  if (jumpEffect?.exitToPos) {
-    ship.position = [...jumpEffect.exitToPos]
-    if (jumpEffect.exitToQuat) ship.quaternion = [...jumpEffect.exitToQuat]
-  }
-  ship.velocity = [0, 0, 0]
-  if (playerMesh) syncMeshToEntity(playerMesh, ship)
-
-  setJumpBlackOpacity(0)
-  jumpFlashEl.style.background = HYPERSPACE_FLASH_COLOR
-  jumpFlashEl.style.display = 'block'
-  jumpFlashEl.style.opacity = String(JUMP_ARRIVAL_FLASH_PEAK)
-  jumpEffect = {
-    phase: 'arrivalFlash',
-    elapsed: 0,
-    flashPeak: JUMP_ARRIVAL_FLASH_PEAK
-  }
-  setHudGlitchText(cruiseIndicatorEl, 'WARP TUNNEL EXIT')
-  showHudGlitch(cruiseIndicatorEl)
-  hideHudGlitch(cruiseIndicatorEl)
-  // Keep flight intent during the arrival flash. Do NOT call reenterFlightMode
-  // yet — canUseFlightMode() is false while jumpEffect is set, which would clear
-  // flightMode. Real re-entry happens when arrivalFlash ends (updateJumpEffect).
-  flightModeWanted = true
-  flightMode = false
-  // Next leg: supercruise to the following warp gate (or finish).
-  if (routeAutopilot) {
-    const rem = gameState.player.plottedRoute
-    if (shipHasAutopilot(gameState.player.ship) && Array.isArray(rem) && rem.length > 0) {
-      flashToast(`Autopilot: next gate (${rem.length} jump${rem.length === 1 ? '' : 's'} left)`)
-      startRouteAutopilotCruiseToGate()
-    } else {
-      routeAutopilot = null
-      if (!rem?.length) flashToast('Autopilot: route complete')
-    }
-  }
-}
-
-function updateJumpEffect(dt) {
-  jumpEffect.elapsed += dt
-  const e = jumpEffect.elapsed
-  const ship = gameState.player.ship
-
-  // Post-arrival screen flash (new system already revealed during exit).
-  if (jumpEffect.phase === 'arrivalFlash') {
-    syncChaseCamera(camera, ship)
-    if (playerMesh) syncMeshToEntity(playerMesh, ship)
-    const t = e / JUMP_ARRIVAL_FLASH_DECAY_S
-    const op = Math.max(0, jumpEffect.flashPeak * (1 - t) * (1 - t))
-    jumpFlashEl.style.opacity = String(op)
-    if (t >= 1) {
-      jumpEffect = null
-      clearJumpVisuals()
-      // Jump fully done — restore mouse-aim flight (same path as unpause).
-      if (!docked && !paused) resumeFlightAfterPause()
-    }
-    return
-  }
-
-  // Hull suck-in / spit-out scale (visual only — game state pose stays authoritative).
-  const applyShipJumpScale = (scale, forwardPull = 0) => {
-    if (!playerMesh) return
-    playerMesh.scale.setScalar(Math.max(0.02, scale))
-    if (forwardPull !== 0) {
-      const fwd = new THREE.Vector3(0, 0, 1).applyQuaternion(playerMesh.quaternion)
-      playerMesh.position.addScaledVector(fwd, forwardPull)
-    }
-  }
-
-  // ——— Phase 1: fly into the origin gate aperture ———
-  if (jumpEffect.phase === 'enterGate') {
-    const t = Math.min(1, e / JUMP_ENTER_GATE_S)
-    const ease = jumpEaseInOut(t)
-    ship.position = jumpLerp3(jumpEffect.enterFromPos, jumpEffect.originGatePos, ease)
-    slerpShipQuat(jumpEffect.enterFromQuat, jumpEffect.enterToQuat, ease, ship)
-    ship.velocity = [0, 0, 0]
-    // Slight FOV tighten + glow as we dive into the ring.
-    camera.fov = BASE_FOV - ease * 10
-    camera.updateProjectionMatrix()
-    jumpFlashEl.style.opacity = String(Math.min(0.35, ease * 0.28 + (t > 0.7 ? (t - 0.7) * 0.4 : 0)))
-    setJumpBlackOpacity(t > 0.85 ? jumpEaseInOut((t - 0.85) / 0.15) * 0.35 : 0)
-    if (playerMesh) {
-      playerMesh.scale.setScalar(1 - ease * 0.2)
-      syncMeshToEntity(playerMesh, ship)
-    }
-    // Face-on framing: ring fills the screen, not a side silhouette.
-    syncGateFaceCamera(
-      camera,
-      ship.position,
-      jumpEffect.originGatePos,
-      jumpEffect.gateLookDir,
-      'in'
-    )
-
-    if (t >= 1) {
-      // Lock in the aperture and start the tunnel.
-      ship.position = [...jumpEffect.originGatePos]
-      if (playerMesh) playerMesh.scale.setScalar(0.75)
-      hyperspaceTunnel.start({ warpMode: true })
-      audio.playHyperspace()
-      setHudGlitchText(cruiseIndicatorEl, 'WARP TUNNEL')
-      showHudGlitch(cruiseIndicatorEl)
-      jumpEffect.phase = 'tunnel'
-      jumpEffect.elapsed = 0
-      jumpEffect.jumped = false
-    }
-    return
-  }
-
-  // ——— Phase 3: fly out of the destination gate ———
-  if (jumpEffect.phase === 'exitGate') {
-    const t = Math.min(1, e / JUMP_EXIT_GATE_S)
-    const ease = jumpEaseInOut(t)
-    ship.position = jumpLerp3(jumpEffect.exitFromPos, jumpEffect.exitToPos, ease)
-    slerpShipQuat(jumpEffect.exitFromQuat, jumpEffect.exitToQuat, ease, ship)
-    ship.velocity = [0, 0, 0]
-    camera.fov = BASE_FOV + (1 - ease) * 8
-    camera.updateProjectionMatrix()
-    // Fade residual tunnel flash; keep scene fully visible.
-    setJumpBlackOpacity(0)
-    jumpFlashEl.style.opacity = String(Math.max(0, 0.2 * (1 - ease)))
-    if (playerMesh) {
-      // Scale back up as we leave the aperture.
-      playerMesh.scale.setScalar(0.55 + ease * 0.45)
-      syncMeshToEntity(playerMesh, ship)
-    }
-    // Early exit: still frame the gate face; later blend to chase.
-    if (ease < 0.55 && jumpEffect.exitGatePos && jumpEffect.exitLookDir) {
-      syncGateFaceCamera(
-        camera,
-        ship.position,
-        jumpEffect.exitGatePos,
-        jumpEffect.exitLookDir,
-        'out'
-      )
-    } else {
-      syncChaseCamera(camera, ship)
-    }
-
-    if (t >= 1) {
-      if (playerMesh) playerMesh.scale.setScalar(1)
-      finishJumpSequence()
-    }
-    return
-  }
-
-  // ——— Phase 2: windup + tunnel (system swap mid-pass under black) ———
-  syncChaseCamera(camera, ship)
-  if (playerMesh) syncMeshToEntity(playerMesh, ship)
-
-  if (e < JUMP_WINDUP_S) {
-    // Gate spool: FOV tightens, bright aperture flash, ship at aperture centre.
-    const w = e / JUMP_WINDUP_S
-    const ease = w * w
-    const throb = 0.5 + 0.5 * Math.sin(e * 14)
-    camera.fov = BASE_FOV - ease * 12 + throb * w * 4
-    camera.updateProjectionMatrix()
-    jumpFlashEl.style.opacity = String(Math.min(0.55, ease * 0.35 + throb * 0.08))
-    setJumpBlackOpacity(0)
-    hyperspaceTunnel.update(dt, Math.max(0.15, ease * 0.85), camera, getCrosshairAimWorld())
-    applyShipJumpScale(0.75 - ease * 0.25, ease * 12)
-  } else {
-    const s = (e - JUMP_WINDUP_S) / JUMP_STREAK_S
-    const punch = Math.sin(Math.min(1, s) * Math.PI)
-    camera.fov = BASE_FOV + 18 + punch * 42
-    camera.updateProjectionMatrix()
-    const black = jumpBlackOpacityForStreak(s, jumpEffect.jumped)
-    setJumpBlackOpacity(black)
-    if (!jumpEffect.jumped) {
-      jumpFlashEl.style.opacity = String(
-        Math.min(0.4, (0.12 + punch * 0.22) * (1 - black * 0.9))
-      )
-    } else {
-      jumpFlashEl.style.opacity = '0'
-    }
-    const tunnelStr = s < 0.12 ? s / 0.12 : s > 0.88 ? (1 - s) / 0.12 : 1
-    hyperspaceTunnel.update(dt, Math.min(1, 0.85 + tunnelStr * 0.2), camera, getCrosshairAimWorld())
-
-    if (!jumpEffect.jumped) {
-      const suckT = Math.min(1, s / 0.4)
-      const ease = suckT * suckT
-      applyShipJumpScale(0.5 - ease * 0.4, ease * 28)
-    } else if (playerMesh) {
-      playerMesh.scale.setScalar(0.55)
-    }
-
-    if (!jumpEffect.jumped && s >= 0.4) {
-      jumpEffect.jumped = true
-      setJumpBlackOpacity(1)
-      jumpFlashEl.style.opacity = '0'
-      if (playerMesh) playerMesh.scale.setScalar(0.1)
-      try {
-        performWarpSystemSwap()
-      } catch (err) {
-        gameNotice('Hyperspace failed', err.message)
-        jumpEffect = null
-        hyperspaceTunnel.stop()
-        if (playerMesh) playerMesh.scale.setScalar(1)
-        audio.playHyperspaceArrival()
-        clearJumpVisuals()
-        camera.fov = BASE_FOV
-        camera.updateProjectionMatrix()
-        if (!docked && !paused) resumeFlightAfterPause()
-        return
-      }
-    }
-  }
-
-  if (jumpEffect && jumpEffect.phase === 'tunnel' && jumpEffect.elapsed >= JUMP_TUNNEL_DURATION_S) {
-    // Destination system already loaded under black — reveal while flying out.
-    beginJumpExitGatePhase()
-  }
-}
+function updateRouteAutopilot() {}
 
 function dock(body) {
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (system) ensureSystemSecurity(system)
   if (!canDockWithLaw(gameState, body, system)) {
     flashToast(
-      body.kind === 'station'
+      body.kind === 'port'
         ? 'Docking refused — security standing too low for this station (Sec 3–6)'
         : 'Docking refused'
     )
     return
   }
-  cancelRouteAutopilot(routeAutopilot ? 'Autopilot cancelled — docked' : null)
+  cancelRouteAutopilot()
   docked = true
-  resetDockOrbit()
+  resetDockOrbit(dockedApproach?.approachDir ?? null)
   audio.setThrustState(null)
   markBodyVisited(gameState, body.id)
   // Catch up mission flags (e.g. probe already in probedBodyIds) before the
   // board renders Turn In / In progress.
   updateMissionProgress(gameState)
-  // Shields regenerate on their own anyway (see combat.js's regenShields) —
-  // docking just tops them off instantly and for free, since only hull/armor
-  // repair costs credits in the shipyard.
-  gameState.player.ship.shields = playerShipClass.stats.shields
   gameState.player.dockedBodyId = body.id
   if (dockedApproach) {
     gameState.player.dockedExteriorPosition = dockedApproach.exteriorPoint.toArray()
@@ -4980,12 +3869,11 @@ function applyDockedHud(body = null) {
     (gameState?.player?.dockedBodyId
       ? findBody(gameState.galaxy, gameState.player.dockedBodyId)
       : null)
-  const sys = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (sys) ensureSystemSecurity(sys)
   hud.setDocked(true, {
-    systemName: sys?.name ?? null,
-    locationName: bay?.name ?? null,
-    securityRating: getSystemSecurity(sys)
+    // The berth itself, not the region — same rule as the flight HUD.
+    systemName: bay?.name ?? 'Alongside',
+    locationName: null,
+    securityRating: bay?.securityRating ?? getSystemSecurity(getWorld(gameState.galaxy))
   })
   systemOverview?.hide()
 }
@@ -4998,8 +3886,8 @@ function clearDockedSaveFields() {
 }
 
 /**
- * After load: put the player back in space at their saved pose, or re-enter
- * the docking bay + UI at the station/settlement they saved at.
+ * After load: put the boat back where it was left — under way at its saved
+ * pose, or lying on its berth with harbour services open.
  */
 function restoreSessionLocation() {
   if (!gameState) return
@@ -5011,7 +3899,7 @@ function restoreSessionLocation() {
       body &&
       bodySystem &&
       bodySystem.id === gameState.player.currentSystemId &&
-      (body.kind === 'station' || body.kind === 'settlement')
+      (body.kind === 'port' || body.kind === 'outpost')
     ) {
       let exteriorPoint
       let approachDir
@@ -5021,14 +3909,10 @@ function restoreSessionLocation() {
       ) {
         exteriorPoint = new THREE.Vector3(...gameState.player.dockedExteriorPosition)
       } else {
+        // No stored berth (new game, or an older save): come in from seaward.
         exteriorPoint = dockExteriorPoint(
           body,
-          new THREE.Vector3().fromArray(
-            // Fallback hang: approach from system arrival side of the body.
-            gameState.player.ship.position?.[0] > 1e5
-              ? [0, 400, -800]
-              : gameState.player.ship.position
-          )
+          new THREE.Vector3().fromArray(gameState.player.ship.position)
         ).exteriorPoint
       }
       if (
@@ -5044,15 +3928,19 @@ function restoreSessionLocation() {
         else approachDir.normalize()
       }
       dockedApproach = { body, exteriorPoint, approachDir }
-      swapToInterior(body)
-      gameState.player.ship.position = DOCKING_BAY_ORIGIN.clone().add(BAY_PARK_OFFSET).toArray()
-      gameState.player.ship.quaternion = [0, 0, 0, 1]
+      // Put the boat back on its berth, lying alongside as it was left.
+      gameState.player.ship.position = [exteriorPoint.x, 0, exteriorPoint.z]
       gameState.player.ship.velocity = [0, 0, 0]
       gameState.player.ship.throttle = 0
+      const heading = mooringHeading(approachDir)
+      gameState.player.ship.heading = heading
+      snapToSea(gameState.player.ship, gameState.simTime)
+      applySeaAttitude(gameState.player.ship, heading, gameState.simTime)
       if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
       exitFlightMode()
       flightModeWanted = false
-      dock(body) // sets docked HUD (system + bay name top-left)
+      dock(body) // sets the berthed HUD + harbour services
+      applyDockOrbitCamera()
       return
     }
     // Stale dock id — fall through to free flight at saved pose.
@@ -5071,23 +3959,40 @@ function easeInOutCubic(t) {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }
 
-// Hang point just outside the body's flight collision shell, on the approach
-// line. Dock approach uses this (tight shell so you can fly in close). Undock
-// recomputes a farther hang via undockExteriorPoint so the ship clears mesh.
+/**
+ * A berth alongside the harbour, on whichever side the boat came in from.
+ *
+ * `approachDir` points from the berth toward the harbour — kept because undock
+ * reverses along it, and because a save records it so a reloaded game puts the
+ * boat back on the same side it tied up on.
+ */
 function dockExteriorPoint(body, shipPos) {
   const bodyPos = new THREE.Vector3(...body.position)
   const approachDir = bodyPos.clone().sub(shipPos)
+  approachDir.y = 0
   if (approachDir.lengthSq() < 1e-6) approachDir.set(0, 0, 1)
   else approachDir.normalize()
   const bodyRadius = collisionRadiusFor(body) ?? 0
-  const standoff = bodyRadius + getShipCollisionRadius(playerShipClass) + DOCK_EXTERIOR_MARGIN
+  const standoff = bodyRadius + getShipCollisionRadius(playerShipClass) + MOORING_STANDOFF
   const exteriorPoint = bodyPos.clone().addScaledVector(approachDir, -standoff)
+  exteriorPoint.y = 0
   return { bodyPos, approachDir, exteriorPoint, standoff }
 }
 
-// Undock hang: outside station/settlement *visual* bulk along the stored
-// approach direction. Flight collision (500m stations) is intentionally smaller
-// than the mesh so you can dock close — but leaving must clear geometry.
+/**
+ * Heading for a boat lying alongside: beam-on to the harbour, not bow-on. A
+ * moored boat is parallel to the quay, which is also what puts its whole
+ * broadside in frame for the berth camera.
+ */
+function mooringHeading(approachDir) {
+  // Perpendicular to the approach, in the horizontal plane.
+  return Math.atan2(approachDir.z, -approachDir.x)
+}
+
+// Where to slip to: outside the harbour's *visual* bulk along the stored
+// approach bearing. The running collision shell is deliberately tighter than
+// the mesh so you can come right alongside — but leaving has to clear the
+// jetties.
 function undockExteriorPoint(body, approachDir) {
   const bodyPos = new THREE.Vector3(...body.position)
   const dir = approachDir.clone()
@@ -5096,6 +4001,7 @@ function undockExteriorPoint(body, approachDir) {
   const bodyRadius = exteriorRadiusFor(body) ?? collisionRadiusFor(body) ?? 0
   const standoff = bodyRadius + getShipCollisionRadius(playerShipClass) + DOCK_EXTERIOR_MARGIN
   const exteriorPoint = bodyPos.clone().addScaledVector(dir, -standoff)
+  exteriorPoint.y = 0
   return { bodyPos, approachDir: dir, exteriorPoint, standoff }
 }
 
@@ -5116,64 +4022,45 @@ function beginDocking(body) {
       finishProbeResults(b, attemptNumber, missionTargetAtLaunch, missionOnlyReprobe)
     } else {
       clearProbeEffect()
-      flashToast('Probe aborted — docking')
+      flashToast('Sounding broken off — coming alongside')
     }
   }
 
   const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-  const { bodyPos, approachDir, exteriorPoint } = dockExteriorPoint(body, shipPos)
-
-  // Align hang: slightly closer than exterior, nose locked on bay.
-  const alignPoint = exteriorPoint.clone().lerp(bodyPos, 0.12)
-  const facingQuat = quatFacing(exteriorPoint, bodyPos)
-  // Slight bank into the approach so the glide feels less robotic.
-  const bankedFacing = facingQuat.clone().multiply(
-    new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), 0.22)
-  )
-  const alignQuat = quatFacing(alignPoint, bodyPos)
+  const { approachDir, exteriorPoint } = dockExteriorPoint(body, shipPos)
 
   dockedApproach = { body, exteriorPoint, approachDir }
   dockEffect = {
     undocking: false,
     elapsed: 0,
     body,
-    swapped: false,
     thrusterPulsed: false,
-    baySettled: false,
     fromPos: shipPos.clone(),
-    fromQuat: new THREE.Quaternion().fromArray(gameState.player.ship.quaternion),
+    fromHeading: headingOf(gameState.player.ship),
     exteriorPoint,
-    alignPoint,
-    facingQuat: bankedFacing,
-    alignQuat
+    // Swing the bow round to lie parallel with the quay on the way in.
+    toHeading: mooringHeading(approachDir)
   }
   gameState.player.ship.velocity = [0, 0, 0]
   audio.setThrustState(null)
-  // Drop supercruise cleanly (sound + flag) — dockEffect early-returns from
+  // Drop the autopilot cleanly (sound + flag) — dockEffect early-returns from
   // animate() so the usual edge-detect path won't run this frame.
   if (cruising || wasCruising) {
     cruising = false
     wasCruising = false
-    setHudGlitchText(cruiseIndicatorEl, 'SUPERCRUISE DISENGAGED')
+    setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
     showHudGlitch(cruiseIndicatorEl)
     hideHudGlitch(cruiseIndicatorEl)
-    hud?.setCruiseGlitch(false)
     gameState.player.ship.velocity = [0, 0, 0]
     gameState.player.ship.throttle = 0
-    motionFx.stopCruiseStreaks()
     thrusterEffects?.stopCruiseStreaks()
-    updateStarfieldMotion(starfield, 0, false)
     audio.setSupercruiseActive(false)
-    // Phonetic TTS spelling only — HUD already shows SUPERCRUISE DISENGAGED.
-    audio.announce('Supercrews disengaged')
+    // HUD already shows AUTOPILOT DISENGAGED.
+    audio.announce('Autopilot disengaged')
   }
   exitFlightMode()
   dockPromptEl.style.display = 'none'
   probePromptEl.style.display = 'none'
-  // Black out during the approach → bay cut (cyan flash was confusing).
-  jumpFlashEl.style.background = '#000'
-  jumpFlashEl.style.opacity = '0'
-  jumpFlashEl.style.display = 'block'
   audio.playDock()
 }
 
@@ -5196,22 +4083,18 @@ function beginUndocking() {
     awayDir,
     -(getShipCollisionRadius(playerShipClass) + UNDOCK_BACKOFF_MARGIN)
   )
-  // Face along the back-away vector (out of the station).
-  const awayQuat = quatFacing(exteriorPoint, backAwayPoint)
-  awayQuat.normalize()
+  // Turn seaward as we come off the berth.
   dockEffect = {
     undocking: true,
     elapsed: 0,
     body,
-    swapped: false,
     thrusterPulsed: false,
+    fromPos: new THREE.Vector3().fromArray(gameState.player.ship.position),
+    fromHeading: headingOf(gameState.player.ship),
     exteriorPoint,
-    awayQuat,
+    toHeading: Math.atan2(-awayDir.x, -awayDir.z),
     backAwayPoint
   }
-  jumpFlashEl.style.background = '#000'
-  jumpFlashEl.style.opacity = '0'
-  jumpFlashEl.style.display = 'block'
   audio.playUndock()
   // Wipe chase-cam / mouse state left over from the bay or a prior free-look
   // (load-from-docked is especially prone to a skewed seat vs boresight).
@@ -5227,143 +4110,76 @@ function beginUndocking() {
   reenterFlightMode()
 }
 
+/**
+ * Coming alongside, and slipping the berth again.
+ *
+ * There is no cut and no interior. The boat glides to a berth beside the
+ * harbour, swinging its bow round to lie parallel with the quay, and stays
+ * there in the world — riding the same swell, in the same weather, with the
+ * anchorage in shot. Undocking reverses it and hands the helm back.
+ */
 function updateDockEffect(dt) {
   dockEffect.elapsed += dt
-  // Exterior half is slightly longer than bay half so the approach reads.
-  const approachEnd = DOCK_ANIM_DURATION_S * 0.42
-  const alignEnd = DOCK_ANIM_DURATION_S * 0.55
-  const swapAt = alignEnd
-  // Longer black hold through the scene swap, then fade back as motion ends.
-  const fadeInEnd = DOCK_ANIM_DURATION_S * 0.22
-  const blackHoldEnd = DOCK_ANIM_DURATION_S * 0.72
-  const flashWindow = DOCK_FLASH_FADE_S
+  const t = Math.min(1, dockEffect.elapsed / DOCK_ANIM_DURATION_S)
+  const lt = easeInOutCubic(t)
+  const ship = gameState.player.ship
 
-  if (!dockEffect.undocking) {
-    if (dockEffect.elapsed < approachEnd) {
-      // Phase 1: banked glide to hang point outside the shell.
-      const lt = easeInOutCubic(dockEffect.elapsed / approachEnd)
-      gameState.player.ship.position = dockEffect.fromPos.clone().lerp(dockEffect.exteriorPoint, lt).toArray()
-      gameState.player.ship.quaternion = dockEffect.fromQuat.clone().slerp(dockEffect.facingQuat, lt).toArray()
-      if (!dockEffect.thrusterPulsed && dockEffect.elapsed > 0.15) {
-        dockEffect.thrusterPulsed = true
-        audio.playDockThrusterPulse()
-      }
-    } else if (dockEffect.elapsed < alignEnd) {
-      // Phase 2: nose settle / slight nudge toward bay before the cut.
-      const lt = easeInOutCubic((dockEffect.elapsed - approachEnd) / (alignEnd - approachEnd))
-      gameState.player.ship.position = dockEffect.exteriorPoint.clone().lerp(dockEffect.alignPoint, lt).toArray()
-      gameState.player.ship.quaternion = dockEffect.facingQuat.clone().slerp(dockEffect.alignQuat, lt).toArray()
-    } else {
-      // Phase 3: flash into bay, then ease into the park slot with a soft settle.
-      if (!dockEffect.swapped) {
-        dockEffect.swapped = true
-        swapToInterior(dockEffect.body)
-        gameState.player.ship.position = DOCKING_BAY_ORIGIN.clone().add(BAY_ENTRY_OFFSET).toArray()
-        gameState.player.ship.quaternion = [0, 0, 0, 1] // bay local +Z into the bay
-        audio.playDockThrusterPulse()
-      }
-      const bayT = Math.min(1, (dockEffect.elapsed - swapAt) / (DOCK_ANIM_DURATION_S - swapAt))
-      const lt = easeInOutCubic(bayT)
-      const entry = DOCKING_BAY_ORIGIN.clone().add(BAY_ENTRY_OFFSET)
-      const park = DOCKING_BAY_ORIGIN.clone().add(BAY_PARK_OFFSET)
-      gameState.player.ship.position = entry.lerp(park, lt).toArray()
-      // Soft roll-out of residual bank as we settle into the pad.
-      const settleRoll = (1 - lt) * 0.12
-      gameState.player.ship.quaternion = new THREE.Quaternion()
-        .setFromAxisAngle(new THREE.Vector3(0, 0, 1), settleRoll)
-        .toArray()
-      if (!dockEffect.baySettled && bayT > 0.85) {
-        dockEffect.baySettled = true
-      }
-    }
-  } else {
-    const half = DOCK_ANIM_DURATION_S / 2
-    if (dockEffect.elapsed < half) {
-      const lt = easeInOutCubic(dockEffect.elapsed / half)
-      const park = DOCKING_BAY_ORIGIN.clone().add(BAY_PARK_OFFSET)
-      const entry = DOCKING_BAY_ORIGIN.clone().add(BAY_ENTRY_OFFSET)
-      gameState.player.ship.position = park.clone().lerp(entry, lt).toArray()
-      // Pitch up slightly as we leave the pad.
-      const pitch = lt * 0.18
-      gameState.player.ship.quaternion = new THREE.Quaternion()
-        .setFromAxisAngle(new THREE.Vector3(1, 0, 0), -pitch)
-        .toArray()
-    } else {
-      if (!dockEffect.swapped) {
-        dockEffect.swapped = true
-        swapToExterior()
-        gameState.player.ship.position = dockEffect.exteriorPoint.toArray()
-        gameState.player.ship.quaternion = dockEffect.awayQuat.clone().normalize().toArray()
-        audio.playDockThrusterPulse()
-        // Leaving the bay: hard-reset chase seat so the interior camera pose
-        // (2e6 world) cannot leave a lateral skew vs ship boresight/crosshair.
-        mouseAim.dx = 0
-        mouseAim.dy = 0
-        if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
-        snapChaseCamera(camera, gameState.player.ship)
-      }
-      const lt = easeInOutCubic(Math.min(1, (dockEffect.elapsed - half) / half))
-      gameState.player.ship.position = dockEffect.exteriorPoint.clone().lerp(dockEffect.backAwayPoint, lt).toArray()
-      // Level out while backing away — keep a unit quat for boresight/camera.
-      gameState.player.ship.quaternion = dockEffect.awayQuat.clone().normalize().toArray()
-      if (!dockEffect.thrusterPulsed && lt > 0.2) {
-        dockEffect.thrusterPulsed = true
-        audio.playDockThrusterPulse()
-      }
-    }
+  const to = dockEffect.undocking ? dockEffect.backAwayPoint : dockEffect.exteriorPoint
+  _dockPos.copy(dockEffect.fromPos).lerp(to, lt)
+  ship.position = [_dockPos.x, _dockPos.y, _dockPos.z]
+
+  // Shortest way round, so a boat never spins the long way onto its berth.
+  const delta = Math.atan2(
+    Math.sin(dockEffect.toHeading - dockEffect.fromHeading),
+    Math.cos(dockEffect.toHeading - dockEffect.fromHeading)
+  )
+  const heading = dockEffect.fromHeading + delta * lt
+  ship.heading = heading
+  ship.velocity = [0, 0, 0]
+  ship.throttle = 0
+  // Still afloat the whole way in — the berth is on the water, not in a hangar.
+  snapToSea(ship, gameState.simTime)
+  applySeaAttitude(ship, heading, gameState.simTime)
+
+  if (!dockEffect.thrusterPulsed && dockEffect.elapsed > 0.2) {
+    dockEffect.thrusterPulsed = true
+    audio.playDockThrusterPulse()
   }
 
   syncMeshToEntity(playerMesh, gameState.player.ship)
-  // During exterior undock we already snapped once; keep hard snaps so the
-  // seat can't lerp from the bay. Dock approach still uses normal chase.
-  if (dockEffect.undocking && dockEffect.swapped) {
-    snapChaseCamera(camera, gameState.player.ship, { resetState: false })
+  if (dockEffect.undocking) {
+    // Ease the chase seat back in from wherever the berth camera left it.
+    syncChaseCamera(camera, gameState.player.ship, { forceSnap: t > 0.6, dt })
   } else {
-    syncChaseCamera(camera, gameState.player.ship)
-  }
-
-  // Full black veil: fade in → hold across interior/exterior swap → fade out.
-  {
-    const t = dockEffect.elapsed
-    const total = DOCK_ANIM_DURATION_S
-    let op = 0
-    if (t < fadeInEnd) {
-      op = easeInOutCubic(t / Math.max(1e-6, fadeInEnd))
-    } else if (t < blackHoldEnd) {
-      op = 1
-    } else if (t < total) {
-      op = 1 - easeInOutCubic((t - blackHoldEnd) / Math.max(1e-6, total - blackHoldEnd))
+    // Ease from the chase seat out to the berth orbit as the boat settles.
+    syncChaseCamera(camera, gameState.player.ship, { dt })
+    if (t > 0.55) {
+      _dockCamFrom.copy(camera.position)
+      applyDockOrbitCamera()
+      const blend = easeInOutCubic((t - 0.55) / 0.45)
+      camera.position.lerpVectors(_dockCamFrom, camera.position, blend)
+      camera.lookAt(_dockPos.x, _dockPos.y + 2.5, _dockPos.z)
+      camera.updateMatrixWorld(true)
     }
-    jumpFlashEl.style.background = '#000'
-    jumpFlashEl.style.opacity = String(Math.max(0, Math.min(1, op)))
   }
 
   if (dockEffect.elapsed >= DOCK_ANIM_DURATION_S) {
-    jumpFlashEl.style.opacity = '0'
-    jumpFlashEl.style.display = 'none'
     if (!dockEffect.undocking) {
       const finishedBody = dockEffect.body
       dockEffect = null
       dock(finishedBody)
     } else {
-      gameState.player.ship.velocity = [0, 0, 0]
-      // Ensure a clean unit orientation for boresight/camera after undock
-      // (especially load-from-docked where awayQuat is rebuilt from save).
-      const q = new THREE.Quaternion().fromArray(gameState.player.ship.quaternion).normalize()
-      gameState.player.ship.quaternion = q.toArray()
-      mouseAim.dx = 0
-      mouseAim.dy = 0
-      if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
-      // Final hard reset: bay → space handoff must leave a neutral chase seat.
-      snapChaseCamera(camera, gameState.player.ship)
+      ship.velocity = [0, 0, 0]
+      const body = dockEffect.body
       dockEffect = null
       docked = false
       dockedApproach = null
       clearDockedSaveFields()
-      hud?.setDocked(false)
+      applyDockedHud()
       systemOverview?.show()
-      // Re-place reticle immediately on the bolt path (don't wait a frame).
-      if (flightMode) updateCrosshair()
+      resetChaseCameraState()
+      snapChaseCamera(camera, gameState.player.ship)
+      markBodyVisited(gameState, body.id)
     }
   }
 }
@@ -5399,33 +4215,17 @@ function handlePlayerDeath() {
 
 window.addEventListener('keydown', (e) => {
   if (!gameState) return
-  if (e.code === 'KeyF' && !docked && !dockEffect && !cruising && !jumpEffect && !paused) {
+  if (e.code === 'KeyF' && !docked && !dockEffect && !cruising && !paused) {
     // Every F action now requires the object to be Tab-locked first — being
     // merely in range no longer triggers dock / gate / salvage / hack, so the
     // prompt and the keypress always agree on what F is about to do.
     // Wreck salvage always wins while a wreck is in range (1 km) — overrides
     // gate / dock / nodule F binds so salvage is never blocked by a station.
     // (Menus still block F via inventory/missions/character/nav checks below.)
-    if (!navMapOpen && !inventoryOpen && !missionsOpen && !characterOpen) {
+    if (!chartOpen && !inventoryOpen && !missionsOpen && !characterOpen) {
       const wreck = findNearbyWreck()
       if (wreck && currentTarget?.kind === 'wreck' && currentTarget.id === wreck.id) {
         lootNearbyWreck(wreck)
-        return
-      }
-      ensureWarpGates(gameState.galaxy)
-      const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-      const gate = findNearbyWarpGate(currentSystem, gameState.player.ship.position)
-      if (gate?.destinationSystemId && currentTarget?.kind === 'body' && currentTarget.id === gate.id) {
-        if (gameState.inCombat) {
-          flashToast('Cannot use warp gates while in combat')
-        } else {
-          // F during autopilot gate wait (or anytime near a gate) jumps now;
-          // if AP is active it continues the route after arrival.
-          beginWarpJump(gate.destinationSystemId, {
-            routeAutopilot: !!routeAutopilot,
-            originGate: gate
-          })
-        }
         return
       }
       const nodule = findNearbyDatacoreNodule()
@@ -5436,7 +4236,7 @@ window.addEventListener('keydown', (e) => {
       const body = findNearbyDockableBody()
       if (body && currentTarget?.kind === 'body' && currentTarget.id === body.id) beginDocking(body)
     }
-  } else if (e.code === 'KeyP' && !docked && !dockEffect && !cruising && !probeEffect && !navMapOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !systemScanMap?.isOpen?.() && !datacoreMinigame?.isOpen?.()) {
+  } else if (e.code === 'KeyP' && !docked && !dockEffect && !cruising && !probeEffect && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !systemScanMap?.isOpen?.() && !datacoreMinigame?.isOpen?.()) {
     // Planetary/body probing only — datacore nodules hack via F (Tab-targeted).
     const launch = getProbeLaunchTarget()
     if (launch) probeBody(launch.body)
@@ -5444,10 +4244,9 @@ window.addEventListener('keydown', (e) => {
     e.code === 'KeyB' &&
     !docked &&
     !dockEffect &&
-    !jumpEffect &&
     !cruising &&
     !probeEffect &&
-    !navMapOpen &&
+    !chartOpen &&
     !paused &&
     !inventoryOpen &&
     !missionsOpen &&
@@ -5481,45 +4280,33 @@ window.addEventListener('keydown', (e) => {
     docked &&
     !dockEffect &&
     !paused &&
-    !navMapOpen &&
+    !chartOpen &&
     !inventoryOpen &&
     !missionsOpen &&
     !characterOpen
   ) {
-    // Docked only: S toggles Station Services (flight uses S for reverse thrust).
+    // Docked only: S toggles Harbour Services (flight uses S for reverse thrust).
     e.preventDefault()
     dockingUI?.toggleServices?.()
   } else if (e.code === 'KeyM' && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !dockEffect) {
-    // Galaxy map: flight or docked (plot routes from a bay). Autopilot engage is
-    // disabled while docked — see navMap + engageRouteAutopilot.
-    navMapOpen = !navMapOpen
+    // The sea chart — under way or alongside. One sea, so this is the only map
+    // there is; it sets a waypoint rather than plotting a route between regions.
+    chartOpen = !chartOpen
     audio.setThrustState(null)
-    if (navMapOpen) {
+    if (chartOpen) {
       exitFlightMode()
-      navMap.show({
-        onEngageAutopilot: engageRouteAutopilot,
-        onCancelAutopilot: () => {
-          cancelRouteAutopilot('Autopilot cancelled — route kept')
-        },
-        isAutopilotActive: isRouteAutopilotActive,
-        onClose: () => {
-          navMapOpen = false
-          if (!docked) reenterFlightMode()
-        },
-        inCombat: !!gameState.inCombat,
-        docked: !!docked
-      })
+      seaChart?.show()
     } else {
-      navMap.hide()
+      seaChart?.hide()
       if (!docked) reenterFlightMode()
     }
-  } else if (e.code === 'KeyC' && !docked && !navMapOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
+  } else if (e.code === 'KeyC' && !docked && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
     if (cruising) {
       cruising = false
     } else if (!getActiveWaypoint()) {
       flashToast('Set a waypoint first (Navigation, Ctrl+Tab on a body, or J for missions)')
     } else if (gameState.inCombat) {
-      flashToast('Cannot engage supercruise while in combat')
+      flashToast('Cannot hand over the helm while under fire')
     } else {
       // Drones ride the hyperplane home before SC engages.
       teleportDronesToBay(gameState.player.ship)
@@ -5532,12 +4319,11 @@ window.addEventListener('keydown', (e) => {
     (e.code === 'KeyG' || e.code === 'KeyH') &&
     !docked &&
     !dockEffect &&
-    !navMapOpen &&
+    !chartOpen &&
     !paused &&
     !inventoryOpen &&
     !missionsOpen &&
     !characterOpen &&
-    !jumpEffect &&
     !cruising
   ) {
     if (!hasDroneBays(gameState.player.ship)) {
@@ -5555,7 +4341,7 @@ window.addEventListener('keydown', (e) => {
       else flashToast('Drones returning to bay')
       // Meshes stay until return animation finishes (updatePlayerDrones).
     }
-  } else if (e.code === 'Space' && !docked && !dockEffect && !navMapOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
+  } else if (e.code === 'Space' && !docked && !dockEffect && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
     // If locked in flight, Space exits. If wanted-but-lost (tab-out) or off,
     // Space (re)enters — so tabbing out then Space re-acquires cleanly.
     if (flightMode && document.pointerLockElement === renderer.domElement) {
@@ -5563,7 +4349,7 @@ window.addEventListener('keydown', (e) => {
     } else {
       reenterFlightMode()
     }
-  } else if (e.code === 'Tab' && !docked && !navMapOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
+  } else if (e.code === 'Tab' && !docked && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
     e.preventDefault()
     if (e.ctrlKey || e.metaKey) {
       // Ctrl/Cmd+Tab: set waypoint on body under the crosshair.
@@ -5574,7 +4360,7 @@ window.addEventListener('keydown', (e) => {
     } else {
       cycleTarget()
     }
-  } else if (e.code === 'KeyI' && !navMapOpen && !paused && !missionsOpen && !characterOpen && !dockEffect) {
+  } else if (e.code === 'KeyI' && !chartOpen && !paused && !missionsOpen && !characterOpen && !dockEffect) {
     // Inventory is available in flight and while docked (same as Map / Missions).
     inventoryOpen = !inventoryOpen
     audio.setThrustState(null)
@@ -5588,7 +4374,7 @@ window.addEventListener('keydown', (e) => {
       inventoryUI.hide()
       if (!docked) reenterFlightMode()
     }
-  } else if (e.code === 'KeyJ' && !navMapOpen && !paused && !inventoryOpen && !characterOpen && !dockEffect) {
+  } else if (e.code === 'KeyJ' && !chartOpen && !paused && !inventoryOpen && !characterOpen && !dockEffect) {
     // Missions tracker is available in flight and while docked.
     missionsOpen = !missionsOpen
     audio.setThrustState(null)
@@ -5634,9 +4420,8 @@ function openCharacterScreen() {
   }
 
   // Close competing overlays so F1 always works.
-  if (navMapOpen) {
-    navMap?.hide()
-    navMapOpen = false
+  if (chartOpen) {
+    chartOpen = false
   }
   if (inventoryOpen) {
     inventoryUI?.hide()
@@ -5694,7 +4479,7 @@ function closeCharacterScreen() {
   characterUI?.hide({ silent: true })
   // Overview remains shown (undocked); animate loop restores interactivity.
 
-  if (!docked && !cruising && !paused && !navMapOpen && !inventoryOpen && !missionsOpen && !jumpEffect) {
+  if (!docked && !cruising && !paused && !chartOpen && !inventoryOpen && !missionsOpen) {
     const token = ++characterFlightRestoreToken
     // Next frame: portrait WebGL is fully torn down before we re-lock.
     requestAnimationFrame(() => {
@@ -5715,40 +4500,7 @@ function closeCharacterScreen() {
 // Tab-lock range for ships/wrecks/rocks/bodies (surface dist for celestials).
 // Radar draws farther so contacts appear before they are lockable.
 const TARGET_RANGE = 60000
-// Fallback star shell when mesh isn't built yet (giants are far larger — see starShellRadius).
-const STAR_TARGET_RADIUS = 13200
-// Clear past the primary photosphere when dropping SC at the system sun.
-const STAR_SUPERCRUISE_STANDOFF = 3500
-
-/** Photosphere + corona reach for the local sun (binary companions included). */
-function starShellRadius() {
-  const stars = starMesh?.userData?.stars
-  if (!stars?.length) return STAR_TARGET_RADIUS
-  let shell = 0
-  for (const s of stars) {
-    const core = s.radius ?? 0
-    // Outer corona shells hug the photosphere (~1.06× core + soft glow).
-    const corona = core * 1.35
-    const orbitR = s.orbit?.radius ?? 0
-    shell = Math.max(shell, orbitR + corona)
-  }
-  return Math.max(STAR_TARGET_RADIUS, shell)
-}
-
-/**
- * SC arrival for the system star — outside the *primary* photosphere/corona.
- * Does not use the full binary envelope (that made arrival ~90km+ and SC crawl).
- */
-function starSupercruiseArrivalRange() {
-  const shipR = getShipCollisionRadius(playerShipClass)
-  const primary = starMesh?.userData?.stars?.[0]
-  // Primary is always the largest / origin component (see buildStarMesh).
-  const coreR = primary?.radius ?? STAR_TARGET_RADIUS * 0.45
-  // ~corona1 scale past the photosphere, plus a fixed standoff.
-  return coreR * 1.35 + shipR + STAR_SUPERCRUISE_STANDOFF
-}
-
-const TARGETABLE_BODY_KINDS = new Set(['planet', 'moon', 'station', 'settlement', 'warpGate'])
+const TARGETABLE_BODY_KINDS = new Set(['island', 'port', 'outpost'])
 
 function asteroidWorldPosition(field, rock) {
   return [field.position[0] + rock.position[0], field.position[1] + rock.position[1], field.position[2] + rock.position[2]]
@@ -5760,7 +4512,6 @@ function asteroidWorldPosition(field, rock) {
  */
 function buildHostilityContext() {
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (system) ensureSystemSecurity(system)
   return {
     system,
     truce: truceActive(gameState),
@@ -5792,8 +4543,8 @@ function isHostileToPlayer(npc, ctx = null) {
 }
 
 function bodyKindLabel(kind) {
-  if (kind === 'asteroidField') return 'belt'
-  if (kind === 'warpGate') return 'warp gate'
+  if (kind === 'wreckField') return 'wreck field'
+  if (kind === 'port') return 'harbour'
   return kind
 }
 
@@ -5814,24 +4565,6 @@ function getTargetableEntities() {
 
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
 
-  // System star (always at local origin).
-  {
-    const starPos = [0, 0, 0]
-    const starR = starShellRadius()
-    const dist = shipPos.distanceTo(new THREE.Vector3(...starPos))
-    const surfaceDist = Math.max(0, dist - starR)
-    if (surfaceDist <= TARGET_RANGE) {
-      entities.push({
-        kind: 'star',
-        id: SYSTEM_STAR_WAYPOINT_ID,
-        position: starPos,
-        dist: surfaceDist,
-        radius: starR,
-        name: currentSystem?.name ?? 'System'
-      })
-    }
-  }
-
   for (const body of currentSystem.bodies) {
     if (TARGETABLE_BODY_KINDS.has(body.kind)) {
       const bodyPos = new THREE.Vector3().fromArray(body.position)
@@ -5850,7 +4583,7 @@ function getTargetableEntities() {
           name: body.name
         })
       }
-    } else if (body.kind === 'asteroidField') {
+    } else if (body.kind === 'wreckField') {
       getAsteroidRocks(body).forEach((rock, index) => {
         if (!isRockAlive(gameState, body.id, index)) return
         const position = asteroidWorldPosition(body, rock)
@@ -5954,11 +4687,11 @@ function aimScore(entity, shipPos, forward) {
 // Bodies that can be locked as a navigation waypoint via Ctrl+Tab (fields as
 // a whole, not individual rocks — rocks are combat/mining targets only).
 const WAYPOINTABLE_BODY_KINDS = new Set([
-  'planet',
-  'moon',
-  'station',
-  'settlement',
-  'asteroidField',
+  'island',
+  'island',
+  'port',
+  'outpost',
+  'wreckField',
   'warpGate'
 ])
 
@@ -5974,17 +4707,9 @@ function setWaypointFromCrosshair() {
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   const candidates = []
 
-  // System star at origin — always eligible; aimScore decides if it's under reticle.
-  candidates.push({
-    id: SYSTEM_STAR_WAYPOINT_ID,
-    position: [0, 0, 0],
-    radius: starShellRadius(),
-    name: currentSystem?.name ?? 'System'
-  })
-
   for (const body of currentSystem.bodies) {
     if (!WAYPOINTABLE_BODY_KINDS.has(body.kind)) continue
-    const radius = collisionRadiusFor(body) ?? (body.kind === 'asteroidField' ? (body.radius ?? 80) : 0)
+    const radius = collisionRadiusFor(body) ?? (body.kind === 'wreckField' ? (body.radius ?? 80) : 0)
     candidates.push({
       id: body.id,
       position: body.position,
@@ -6011,7 +4736,7 @@ function setWaypointFromCrosshair() {
   }
 
   // Clearing the current waypoint is always allowed; setting a new one is not
-  // during supercruise (would redirect the SC autopilot mid-flight).
+  // with the autopilot engaged (it would redirect mid-passage).
   if (gameState.player.waypointBodyId === best.id) {
     gameState.player.waypointBodyId = null
     gameState.player.waypointPosition = null
@@ -6021,52 +4746,16 @@ function setWaypointFromCrosshair() {
   }
 
   if (cruising) {
-    flashToast('Unable to set a waypoint during Supercruise.')
+    flashToast('Unable to set a waypoint with the autopilot engaged.')
     return
   }
 
   gameState.player.waypointBodyId = best.id
-  gameState.player.waypointPosition = best.id === SYSTEM_STAR_WAYPOINT_ID ? [0, 0, 0] : null
+  gameState.player.waypointPosition = null
   audio.playWaypointSet()
   flashToast(`Waypoint set: ${best.name}`)
 }
 
-// Primary star tint for VFX (cruise tunnel). Binary uses the larger component
-// (first entry in starMesh.userData.stars — see buildStarMesh).
-function getCurrentStarColor() {
-  const primary = starMesh?.userData?.stars?.[0]?.color
-  return primary?.clone?.() ?? primary ?? null
-}
-
-/** Subtle starfield + scene-background tint from the system sun. */
-function applySystemStarAmbient() {
-  const starColor = getCurrentStarColor()
-  setStarfieldStarTint(starfield, starColor)
-  // Key light takes the local star's hue too, so a red dwarf system actually
-  // lights hulls warm instead of only tinting the backdrop.
-  setSunColor(starColor)
-  if (starColor) {
-    const bg = starColor.clone().lerp(new THREE.Color(0x05070d), 0.94)
-    bg.multiplyScalar(0.42)
-    scene.background = bg
-  } else {
-    scene.background = new THREE.Color(0x05070d)
-    setStarfieldStarTint(starfield, null)
-  }
-}
-
-// Host shells that contain the active waypoint (surface settlements etc.) —
-// tunnel must not fling the player to the far side of the parent planet.
-function cruiseTunnelIgnoreIds(wp, bodies) {
-  if (!wp || !bodies?.length) return null
-  const ids = new Set()
-  for (const body of bodies) {
-    if (ignoreBodyAsCruiseObstacle(body, wp.position, wp.bodyId, wp.arrivalRange)) {
-      ids.add(body.id)
-    }
-  }
-  return ids.size ? ids : null
-}
 
 /** Clear Tab-lock target only — does not touch waypoints / plotted routes. */
 function clearTargetLock() {
@@ -6131,7 +4820,6 @@ function resolveTarget() {
     if (!npc) return null
     const shipClass = getShipClass(npc.shipClassId)
     const maxHull = shipClass.stats.hull
-    const maxShields = shipClass.stats.shields
     const maxArmor = shipClass.stats.armor
     const faction = npc.faction || 'unknown'
     return {
@@ -6141,8 +4829,6 @@ function resolveTarget() {
       faction,
       hostile: isHostileToPlayer(npc),
       hullPct: Math.max(0, npc.hull / maxHull),
-      shields: npc.shields ?? 0,
-      maxShields,
       armor: npc.armor ?? 0,
       maxArmor,
       hull: npc.hull ?? 0,
@@ -6184,18 +4870,7 @@ function resolveTarget() {
       kindLabel: 'asteroid'
     }
   }
-  if (currentTarget.kind === 'star') {
-    return {
-      position: [0, 0, 0],
-      name: currentSystem?.name ?? 'System',
-      hostile: false,
-      hullPct: null,
-      isAsteroid: false,
-      reticle: 'star',
-      kindLabel: 'star'
-    }
-  }
-  // Free-space nav point (e.g. after supercruise drop on a mission marker).
+  // Open-water mark (e.g. where the autopilot handed back on a contract).
   if (currentTarget.kind === 'navpoint') {
     if (!currentTarget.position) return null
     return {
@@ -6264,14 +4939,14 @@ function resolveTarget() {
   const body = currentSystem.bodies.find((b) => b.id === currentTarget.id)
   if (!body) return null
   // Whole belts are waypoint-only — Tab-lock individual rocks instead.
-  if (body.kind === 'asteroidField') return null
+  if (body.kind === 'wreckField') return null
   return {
     position: body.position,
     name: body.name,
     hostile: false,
     hullPct: null,
     isAsteroid: false,
-    reticle: body.kind === 'station' || body.kind === 'settlement' ? 'facility' : 'world',
+    reticle: body.kind === 'port' || body.kind === 'outpost' ? 'facility' : 'world',
     kindLabel: bodyKindLabel(body.kind)
   }
 }
@@ -6466,17 +5141,14 @@ function updateCrosshair() {
 }
 
 /** After SC drops the waypoint, lock Tab-target on the destination for a reticle. */
-function setTargetFromSupercruiseArrival(wp) {
+function setTargetFromAutopilotArrival(wp) {
   if (!wp) return
-  if (wp.bodyId === SYSTEM_STAR_WAYPOINT_ID) {
-    currentTarget = { kind: 'star', id: SYSTEM_STAR_WAYPOINT_ID }
-    return
-  }
   if (wp.bodyId) {
     const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
     const body = system?.bodies?.find((b) => b.id === wp.bodyId)
-    // Belts stay waypointable for SC, but are not Tab-lock targets as a whole.
-    if (body?.kind === 'asteroidField') {
+    // Wreck fields stay waypointable for cruise, but the field as a whole is
+    // not a Tab-lock target — the individual hulks are.
+    if (body?.kind === 'wreckField') {
       currentTarget = null
       return
     }
@@ -6494,19 +5166,9 @@ function setTargetFromSupercruiseArrival(wp) {
   }
 }
 
-// Body waypoint, system star, or free-space mission marker (bounty location).
+// A place on the chart, or an open-water mark (a bounty's last known position).
 function getActiveWaypoint() {
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (gameState.player.waypointBodyId === SYSTEM_STAR_WAYPOINT_ID) {
-    return {
-      position: [0, 0, 0],
-      name: currentSystem?.name ?? 'System',
-      bodyId: SYSTEM_STAR_WAYPOINT_ID,
-      isMission: false,
-      // Drop SC outside the photosphere / corona (not inside the sun).
-      arrivalRange: starSupercruiseArrivalRange()
-    }
-  }
   if (gameState.player.waypointBodyId) {
     const body = currentSystem.bodies.find((b) => b.id === gameState.player.waypointBodyId)
     if (body) {
@@ -6516,7 +5178,7 @@ function getActiveWaypoint() {
         name: body.name,
         bodyId: body.id,
         isMission: missionBodies.has(body.id),
-        arrivalRange: supercruiseArrivalRangeFor(body)
+        arrivalRange: autopilotArrivalRangeFor(body)
       }
     }
     // Fully scanned Spatial Anomaly (overview waypoint)
@@ -6686,19 +5348,9 @@ function animate() {
   const now = performance.now()
   const dt = Math.min((now - lastTime) / 1000, 0.1)
   lastTime = now
-  // Both are fixed-radius point/sprite clouds scattered around world origin
-  // at creation time — recentering them on the camera every frame turns them
-  // into a proper skybox that always surrounds the viewer, rather than a
-  // patch of decoration the camera can fly outside of once it's traveled
-  // far enough from the origin (now routine given how large systems are).
-  starfield.position.copy(camera.position)
-  nebula.position.copy(camera.position)
-  updateNebula(nebula, dt)
-  updateStarfield(starfield, now / 1000)
-
   if (!gameState) {
-    motionFx.hide()
     updateMenuBackground(dt)
+    updateEnvironment(gameState?.simTime ?? menuAnimT)
     render()
     return
   }
@@ -6739,31 +5391,12 @@ function animate() {
     }
   }
 
-  if (jumpEffect) {
-    motionFx.hide()
-    updateJumpEffect(dt)
-    // Same reason as the dock branch: the warp camera swings hard, so the
-    // corona must keep re-aiming or it freezes mid-manoeuvre.
-    if (starMesh) updateStarMesh(starMesh, gameState.simTime, dt, camera)
-    render()
-    return
-  }
-
   // Checked before the `docked` early-return below: docked stays true for
   // the whole undocking animation (it only flips false once the animation
   // completes), so this branch must run regardless of `docked`.
   if (dockEffect) {
-    cancelRouteAutopilot(routeAutopilot ? 'Autopilot cancelled — docked' : null)
-    motionFx.hide()
     updateDockEffect(dt)
-    // The star has to keep updating through the dock/undock animation. Its
-    // corona flames are billboards aimed in SCREEN space and faded by their
-    // angle to the viewer, so skipping this while the camera swings out of the
-    // bay left every tongue oriented for the camera pose from before docking —
-    // the corona looked scrambled until the first normal frame corrected it.
-    if (starMesh) updateStarMesh(starMesh, gameState.simTime, dt, camera)
-    // Bay activity runs as soon as the interior is swapped in.
-    if (interiorMesh?.parent) updateStationInterior(interiorMesh, dt)
+    updateEnvironment(gameState?.simTime ?? menuAnimT)
     render()
     return
   }
@@ -6772,31 +5405,27 @@ function animate() {
   // world running (flight input stays off while those UIs hold the cursor).
   if (paused) {
     audio.setStrafeActive(false)
-    motionFx.hide()
     if (targetDirEl) targetDirEl.style.display = 'none'
-    updateStarfieldMotion(starfield, 0, false)
-    if (docked && interiorMesh?.parent) {
-      // Hangar still ticks visually under the pause overlay.
-      updateStationInterior(interiorMesh, dt)
-      applyDockOrbitCamera()
-    }
+    if (docked) applyDockOrbitCamera()
+    updateEnvironment(gameState?.simTime ?? menuAnimT)
     render()
     return
   }
 
   if (docked) {
-    cancelRouteAutopilot(routeAutopilot ? 'Autopilot cancelled — docked' : null)
+    cancelRouteAutopilot()
     audio.setStrafeActive(false)
-    motionFx.hide()
     if (targetDirEl) targetDirEl.style.display = 'none'
-    updateStarfieldMotion(starfield, 0, false)
     applyDockedHud()
-    // Keep the hangar alive behind station services (loaders, drones, lights).
-    if (interiorMesh?.parent) {
-      updateStationInterior(interiorMesh, dt)
-      applyDockOrbitCamera()
-    }
-    // Clock already advanced above; no flight / combat while parked.
+    // Moored, so the boat still rides the swell and the harbour still lives
+    // around it — but nothing can touch you and there is no helm to hold.
+    snapToSea(gameState.player.ship, gameState.simTime)
+    applySeaAttitude(gameState.player.ship, headingOf(gameState.player.ship), gameState.simTime)
+    syncMeshToEntity(playerMesh, gameState.player.ship)
+    for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
+    updateBodyVisibility()
+    applyDockOrbitCamera()
+    updateEnvironment(gameState.simTime)
     render()
     return
   }
@@ -6807,11 +5436,12 @@ function animate() {
 
   // Probe flight runs in normal play (ship can still fly while it works).
   if (probeEffect) updateProbeEffect(dt)
+  sonarPulse.update(dt, gameState.simTime)
   updateProbeScanFloat()
   updatePlayerDrones(dt)
 
   let thrustState = null
-  // Alt free-look works in normal flight and supercruise — consume mouse so
+  // Alt free-look works at the helm and on autopilot — consume mouse so
   // it never steers the ship while panning the camera.
   // Engage only once Alt is held AND the mouse actually moves (not bare Alt).
   if (altHeldForFreeLook && (flightMode || cruising)) {
@@ -6835,9 +5465,9 @@ function animate() {
       const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
       const shipRadius = getShipCollisionRadius(playerShipClass)
       // Steer around other bodies on the way; destination body is not avoided
-      // so arrival still works (see supercruise.aimAroundObstacles).
+      // so arrival still works (see autopilot.aimAroundObstacles).
       const skillB = playerSkillBonuses(gameState)
-      if (updateSupercruise(
+      if (updateAutopilot(
         gameState.player.ship,
         playerShipClass,
         wp.position,
@@ -6850,38 +5480,27 @@ function animate() {
           speedMult: skillB.speedMult,
           cruiseMult: skillB.cruiseMult,
           turnMult: skillB.turnMult
-        }
+        },
+        gameState.simTime
       )) {
         cruising = false
         // Kill residual cruise speed immediately so we don't coast into the shell.
         gameState.player.ship.velocity = [0, 0, 0]
         gameState.player.ship.throttle = 0
         // Snap facing onto the destination so you're lined up to dock/approach.
-        const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-        const targetPos = new THREE.Vector3(...wp.position)
-        if (shipPos.distanceToSquared(targetPos) > 1e-4) {
-          gameState.player.ship.quaternion = quatFacing(shipPos, targetPos).toArray()
+        const shipPos = gameState.player.ship.position
+        const dx = wp.position[0] - shipPos[0]
+        const dz = wp.position[2] - shipPos[2]
+        if (dx * dx + dz * dz > 1e-4) {
+          gameState.player.ship.heading = Math.atan2(dx, dz)
         }
-        // Route autopilot: arrival at a warp gate → 10s pause (F to jump early).
-        const arrivedBody = wp.bodyId
-          ? currentSystem.bodies.find((b) => b.id === wp.bodyId)
-          : null
-        if (
-          routeAutopilot &&
-          arrivedBody?.kind === 'warpGate' &&
-          arrivedBody.destinationSystemId &&
-          shipHasAutopilot(gameState.player.ship)
-        ) {
-          armRouteAutopilotGateWait(arrivedBody.destinationSystemId, arrivedBody)
-        } else {
-          // Keep a reticle on the destination after the waypoint is cleared.
-          setTargetFromSupercruiseArrival(wp)
-          // Clear nav lock on arrival — you're already there.
-          gameState.player.waypointBodyId = null
-          gameState.player.waypointPosition = null
-          // Arriving at a fully mined belt — show respawn countdown.
-          toastIfDepletedField(wp.bodyId)
-        }
+        // Keep a reticle on the destination after the waypoint is cleared.
+        setTargetFromAutopilotArrival(wp)
+        // Clear the nav lock on arrival — you are already there.
+        gameState.player.waypointBodyId = null
+        gameState.player.waypointPosition = null
+        // Arriving at a stripped wreck field — show the settle-again countdown.
+        toastIfDepletedField(wp.bodyId)
       }
     }
     audio.setThrustState(null)
@@ -6898,7 +5517,8 @@ function animate() {
           speedMult: skillB.speedMult,
           turnMult: skillB.turnMult,
           maxSpeed: effectiveMaxSpeed(gameState.player.ship, playerShipClass)
-        }
+        },
+        gameState.simTime
       )
     }
     thrustState = !flightMode ? null : keys.has('KeyW') ? 'accel' : keys.has('KeyS') ? 'brake' : null
@@ -6907,7 +5527,15 @@ function animate() {
     // under ~1s of off-boresight trail (ttl 1.2s otherwise).
     prunePlayerLasersOffBoresight(gameState)
   }
-  // Keep mesh + chase seat in sync with the post-flight pose *before* weapons
+  // The sea has the final say on where the hull sits — after handling, before
+  // anything reads the pose. Every other mover goes through the same clamp
+  // (see world/sea.js snapToSea).
+  snapToSea(gameState.player.ship, gameState.simTime)
+  // How policed this patch of water is, from the nearest harbour. Everything
+  // downstream still asks the world object, and now gets a local answer.
+  applyLocalSecurity(getWorld(gameState.galaxy), gameState.player.ship.position)
+
+  // Keep mesh + chase seat in sync with the post-handling pose *before* weapons
   // and reticles so undock/load can't leave a one-frame cam/gun skew.
   if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
   syncChaseCamera(camera, gameState.player.ship, { cruising, dt })
@@ -6917,79 +5545,49 @@ function animate() {
   audio.setSupercruiseActive(cruising)
   if (cruising !== wasCruising) {
     if (cruising) {
-      // Spool ramp starts at 0 every engage (see supercruise.SUPERCRUISE_RAMP_UP_S).
+      // Ramp starts at 0 every engage (see autopilot.AUTOPILOT_RAMP_UP_S).
       gameState.player.ship.supercruiseElapsed = 0
     } else {
       // Drop all residual cruise speed so normal flight doesn't inherit a huge v.
       gameState.player.ship.velocity = [0, 0, 0]
       gameState.player.ship.throttle = 0
       gameState.player.ship.supercruiseElapsed = 0
-      // Kill cyan velocity streaks / starfield stretch immediately (don't wait a frame).
-      motionFx.stopCruiseStreaks()
+      // Kill the wake immediately rather than waiting a frame.
       thrusterEffects?.stopCruiseStreaks()
-      updateStarfieldMotion(starfield, 0, false)
     }
     // TTS says "supercrews" so speech synthesis hits the right phonetics;
-    // on-screen HUD text stays SUPERCRUISE …
-    audio.announce(cruising ? 'Supercrews engaged' : 'Supercrews disengaged')
+    audio.announce(cruising ? 'Autopilot engaged' : 'Autopilot disengaged')
     if (cruising) {
-      setHudGlitchText(cruiseIndicatorEl, 'SUPERCRUISE ENGAGED')
+      setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
       showHudGlitch(cruiseIndicatorEl)
-      hud?.setCruiseGlitch(true)
     } else {
       // Brief yellow callout (same style as engage), then glitch-out.
-      setHudGlitchText(cruiseIndicatorEl, 'SUPERCRUISE DISENGAGED')
+      setHudGlitchText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
       showHudGlitch(cruiseIndicatorEl)
       hideHudGlitch(cruiseIndicatorEl)
-      hud?.setCruiseGlitch(false)
     }
     wasCruising = cruising
   }
 
   const currentBodies = getSystem(gameState.galaxy, gameState.player.currentSystemId).bodies
   const shipRadius = getShipCollisionRadius(playerShipClass)
-  if (cruising) {
-    // Tunnel through non-destination bodies with warp FX instead of bouncing.
-    // Also skip host shells that contain the waypoint (settlement on a planet).
-    const wp = getActiveWaypoint()
-    const tunnel = trySupercruiseTunnel(
-      gameState.player.ship,
-      currentBodies,
-      shipRadius,
-      wp?.bodyId ?? null,
-      cruiseTunnelIgnoreIds(wp, currentBodies)
-    )
-    if (tunnel) {
-      // Visual only — no tunnel whoosh SFX (felt weird punching through worlds).
-      thrusterEffects?.playTunnelBurst(tunnel.from, tunnel.to)
-    }
-  } else {
-    // Belts: collide with individual rocks only (not the field bounding shell).
-    resolveBodyCollisions(gameState.player.ship, currentBodies, shipRadius, {
-      isRockAlive: (fieldId, index) => isRockAlive(gameState, fieldId, index)
-    })
-  }
+  // The autopilot steers around land rather than through it (see
+  // game/autopilot.js aimAroundObstacles), so collision stays on under it —
+  // running aground on autopilot is a real outcome, not a teleport.
+  resolveBodyCollisions(gameState.player.ship, currentBodies, shipRadius, {
+    isRockAlive: (fieldId, index) => isRockAlive(gameState, fieldId, index)
+  })
 
   const shipSpeed = Math.hypot(...gameState.player.ship.velocity)
-  const motion = motionFx.update(dt, {
-    speed: shipSpeed,
-    refSpeed: playerShipClass.stats.speed,
-    cruising,
-    throttle: cruising ? 1 : (gameState.player.ship.throttle ?? 0),
-    shipPos: gameState.player.ship.position,
-    shipQuat: gameState.player.ship.quaternion,
-    camera,
-    starColor: cruising ? getCurrentStarColor() : null,
-    // Corridor vanishes through the crosshair aim point (ship forward).
-    aimWorld: cruising ? getCrosshairAimWorld() : null
-  })
-  // Skybox stays unwarped; cruise uses motionFx full-screen star tunnel.
-  updateStarfieldMotion(starfield, motion.intensity, cruising)
-  // Speed FOV: mild in normal flight; cruise uses a fixed +5% FOV only.
-  // Snap when close / nearly stopped so FOV settle doesn't smear projected aim.
-  const targetFov = cruising ? CRUISE_FOV : BASE_FOV + motion.fovBoost
+  // Water over the bow, scaled by how hard you are driving her.
+  spray.update(dt, shipSpeed / Math.max(1e-3, playerShipClass.stats.speed))
+  // Speed FOV: widens a little as the boat comes up onto the plane, fixed under
+  // cruise. Snap when close or nearly stopped so the settle can't smear aim.
+  const speedFovBoost =
+    SPEED_FOV_MAX * Math.min(1, shipSpeed / Math.max(1e-3, playerShipClass.stats.speed))
+  const targetFov = BASE_FOV + speedFovBoost
   const fovErr = Math.abs(camera.fov - targetFov)
-  if (fovErr < 0.08 || (!cruising && shipSpeed < 2 && motion.fovBoost < 0.05)) {
+  if (fovErr < 0.08 || (shipSpeed < 2 && speedFovBoost < 0.05)) {
     if (camera.fov !== targetFov) {
       camera.fov = targetFov
       camera.updateProjectionMatrix()
@@ -6998,7 +5596,7 @@ function animate() {
     camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 6)
     camera.updateProjectionMatrix()
   }
-  // SUPERCRUISE ENGAGED: shown/hidden with glitch enter/exit on wasCruising edge.
+  // AUTOPILOT ENGAGED: shown/hidden with glitch enter/exit on the wasCruising edge.
   // Player mesh + chase cam are re-synced after orbital carry (see below).
   syncMeshToEntity(playerMesh, gameState.player.ship)
   const strafeX = cruising ? 0 : (gameState.player.ship.strafeX ?? 0)
@@ -7053,11 +5651,6 @@ function animate() {
   updateProjectiles(gameState, dt, onProjectileHit)
   updateCombatFlag(gameState, combatFrame)
   updateDamageVignette(dt)
-  // Player shields: 1% of max every 10s while out of combat (see combat.js).
-  regenShields(gameState.player.ship, playerShipClass, gameState.simTime, dt, {
-    player: true,
-    inCombat: gameState.inCombat
-  })
   updateMissionProgress(gameState)
 
   // A pirate truce (see combat.js's truceActive) lasts only as long as a live
@@ -7080,17 +5673,16 @@ function animate() {
   }
   truceWasActive = truceNowActive
 
-  // Busier (higher cap, shorter interval) near the galactic core, quieter
-  // toward the rim — spawnEncounterNear separately biases alien vs.
-  // pirate/trader odds by the same coreFraction, toward the rim.
-  const spawnSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  const core = coreFraction(spawnSystem)
+  // Busy shipping lanes in home waters, empty sea further out —
+  // spawnEncounterNear separately biases what you meet by the same remoteness.
+  const spawnSystem = getWorld(gameState.galaxy)
+  const core = remoteness(gameState.player.ship.position)
   const ambientCap = Math.max(1, Math.round(AMBIENT_NPC_CAP + 1 - core * 3))
-  // Neutral-only ambient traffic:
-  //  - home system until the player breaks peace (see combat.js)
-  //  - Whispers (outer rim landmark) permanently — mission NPCs still spawn
-  const atPeacefulHome = gameState.player.currentSystemId === gameState.player.startingSystemId && !gameState.flags.startingSystemPeaceBroken
-  const forceNeutralAmbient = atPeacefulHome || !!spawnSystem.noAmbientHostiles
+  // Honest traffic only while inside the Haven Reach patrol area and the player
+  // has not started anything (see combat.js). Contract targets still spawn.
+  const atPeacefulHome =
+    inHomeWaters(gameState.player.ship.position) && !gameState.flags.startingSystemPeaceBroken
+  const forceNeutralAmbient = atPeacefulHome
   // Station police don't count toward ambient traffic cap (they're fixtures).
   const ambientCount = gameState.npcs.filter(
     (n) => !n.destroyed && n.faction !== 'police'
@@ -7141,7 +5733,6 @@ function animate() {
   // after a delay based on security rating (higher = faster).
   {
     const sys = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    if (sys) ensureSystemSecurity(sys)
     const sec = getSystemSecurity(sys)
     const livePolice = gameState.npcs.filter((n) => !n.destroyed && n.faction === 'police').length
     const fightingPirates = playerFightingPirates(gameState)
@@ -7285,47 +5876,23 @@ function animate() {
     }
   }
 
-  if (starMesh) updateStarMesh(starMesh, gameState.simTime, dt, camera)
-  // Axial spin for planets/moons (spinSpeed) + station beacons; warp-gate swirl;
-  // gas-giant cloud shells.
-  for (const mesh of bodyMeshes.values()) {
-    if (mesh.userData?.kind === 'warpGate') {
-      updateWarpGateMesh(mesh, dt, gameState.simTime)
-    } else {
-      updateStationMesh(mesh, gameState.simTime, dt)
-      updatePlanetAtmosphere(mesh, gameState.simTime, dt)
-    }
-  }
+  // Harbour beacons pulse. Land does not animate.
+  for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
+  updateBodyVisibility()
   // Depleted rocks "explode" (see onProjectileHit) and stay hidden until
   // their own respawn delay passes — isRockAlive is the single source of
   // truth for that, shared with targeting (getTargetableEntities/resolveTarget).
   for (const body of getSystem(gameState.galaxy, gameState.player.currentSystemId).bodies) {
-    if (body.kind !== 'asteroidField') continue
+    if (body.kind !== 'wreckField') continue
     const mesh = bodyMeshes.get(body.id)
     if (!mesh) continue
     mesh.children.forEach((child, i) => { child.visible = isRockAlive(gameState, body.id, i) })
   }
-  const sysBodies = getSystem(gameState.galaxy, gameState.player.currentSystemId).bodies
-  // Fixed layout: bodies keep generated positions. Settlements stay on host surface.
-  for (const entry of surfaceSettlements.values()) {
-    const parent = sysBodies.find((b) => b.id === entry.parentId)
-    if (!parent) continue
-    const o = entry.surfaceOffset
-    entry.body.position[0] = parent.position[0] + o[0]
-    entry.body.position[1] = parent.position[1] + o[1]
-    entry.body.position[2] = parent.position[2] + o[2]
-    const mesh = bodyMeshes.get(entry.body.id)
-    if (mesh) {
-      mesh.position.fromArray(entry.body.position)
-      orientSettlementOnSurface(mesh, entry.surfaceOffset)
-    }
-  }
-
   syncMeshToEntity(playerMesh, gameState.player.ship)
   // 60s with no input: let the chase seat drift around the ship. Free-look
   // (isChaseFreeLook) always wins inside syncChaseCamera itself, so this only
   // needs to gate the idle SIDE — no need to check it's not already active.
-  // Never during supercruise: the idle drift fighting the cruise FOV/streak
+  // Never on autopilot: idle drift fighting the passage camera
   // camera work would look broken, and cruise already has its own motion.
   setChaseIdleOrbit(!cruising && performance.now() - lastInputAtMs > 60_000)
   syncChaseCamera(camera, gameState.player.ship, { cruising, dt })
@@ -7336,7 +5903,6 @@ function animate() {
   if (missileFireHeld) tryPlayerFire('missile')
   syncProjectileMeshesNow()
 
-  // Tidally locked moons face their parent; others keep spinning via updateStationMesh.
   for (const [id, mesh] of bodyMeshes) {
     if (!mesh.userData.tidallyLocked || !mesh.userData.parentId) continue
     const parent = sysBodies.find((b) => b.id === mesh.userData.parentId)
@@ -7355,11 +5921,10 @@ function animate() {
     const overviewClickable =
       !flightMode &&
       !paused &&
-      !navMapOpen &&
+      !chartOpen &&
       !inventoryOpen &&
       !missionsOpen &&
       !characterOpen &&
-      !jumpEffect &&
       !dockEffect
     systemOverview?.setInteractive(overviewClickable)
     // Distances only — full rebuild would cancel pointer events mid-click.
@@ -7372,11 +5937,11 @@ function animate() {
   const speed = shipVelocity.length()
   const forwardSpeed = shipVelocity.dot(shipForward)
   const hudSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (hudSystem) ensureSystemSecurity(hudSystem)
+  // Where you are, not what region you are in — one sea, so the region name is
+  // the same every frame and tells you nothing. The nearest place does.
   const nearestHudBody = findNearestHudBody()
   {
     const ps = gameState.player.ship
-    ps.maxShields = effectiveMaxShields(ps, playerShipClass)
     ps.maxArmor = effectiveMaxArmor(ps, playerShipClass)
   }
   hud.update(
@@ -7384,24 +5949,10 @@ function animate() {
     playerShipClass,
     speed,
     forwardSpeed,
-    hudSystem?.name ?? null,
-    nearestHudBody?.name ?? null,
+    nearestHudBody?.name ?? 'Open water',
+    null,
     getSystemSecurity(hudSystem)
   )
-  // Plotted warp-gate route (far left) — remaining hops; clears at destination.
-  {
-    const rem = gameState.player.plottedRoute
-    if (Array.isArray(rem) && rem.length > 0) {
-      hud.updatePlottedRoute(
-        rem.map((id) => {
-          const sys = getSystem(gameState.galaxy, id)
-          return { id, name: sys?.name ?? String(id) }
-        })
-      )
-    } else {
-      hud.updatePlottedRoute(null)
-    }
-  }
   // Tab-target detail panel (top right, left of system overview).
   {
     const t = resolveTarget()
@@ -7420,8 +5971,6 @@ function animate() {
         name: t.name,
         hostile: !!t.hostile,
         meta: metaParts.join(' · '),
-        shields: t.shields,
-        maxShields: t.maxShields,
         armor: t.armor,
         maxArmor: t.maxArmor,
         hull: t.hull,
@@ -7433,7 +5982,7 @@ function animate() {
   }
   hud.updateRadar(computeRadarContacts(), RADAR_RANGE, gameState.simTime)
 
-  // Dock / probe / wreck / gate prompts are normal-space only — in supercruise
+  // Berth / sounding / salvage prompts are helm-only — on autopilot
   // you skim past shells so constantly that those toasts just spam the HUD.
   // F priority: wreck → warp gate (2 km) → nodule → dock. Each also requires
   // the object to be Tab-locked — otherwise the prompt would promise an F
@@ -7442,36 +5991,25 @@ function animate() {
   const nearbyWreckRaw = !cruising ? findNearbyWreck() : null
   const nearbyWreck = nearbyWreckRaw && isTargeted('wreck', nearbyWreckRaw.id) ? nearbyWreckRaw : null
   const currentSysForPrompt = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  const nearbyGateRaw =
-    !cruising && !nearbyWreck && !jumpEffect
-      ? findNearbyWarpGate(currentSysForPrompt, gameState.player.ship.position)
-      : null
-  const nearbyGate = nearbyGateRaw && isTargeted('body', nearbyGateRaw.id) ? nearbyGateRaw : null
   const nearbyNoduleRaw =
-    !cruising && !nearbyWreck && !nearbyGate && !probeEffect && !datacoreMinigame?.isOpen?.()
+    !cruising && !nearbyWreck && !probeEffect && !datacoreMinigame?.isOpen?.()
       ? findNearbyDatacoreNodule()
       : null
   const nearbyNodule =
     nearbyNoduleRaw && isTargeted('nodule', nearbyNoduleRaw.nodule.id) ? nearbyNoduleRaw : null
   const nearbyBodyRaw =
-    !cruising && !nearbyWreck && !nearbyGate && !nearbyNodule ? findNearbyDockableBody() : null
+    !cruising && !nearbyWreck && !nearbyNodule ? findNearbyDockableBody() : null
   const nearbyBody = nearbyBodyRaw && isTargeted('body', nearbyBodyRaw.id) ? nearbyBodyRaw : null
   wreckPromptEl.style.display = nearbyWreck ? 'block' : 'none'
   if (nearbyWreck) {
     wreckPromptEl.textContent = 'Press F to salvage wreck (or destroy with weapons)'
   }
 
-  dockPromptEl.style.display = nearbyGate || nearbyNodule || nearbyBody ? 'block' : 'none'
-  if (nearbyGate) {
-    const originName = currentSysForPrompt?.name ?? 'here'
-    const dest = getSystem(gameState.galaxy, nearbyGate.destinationSystemId)
-    const destName = dest?.name ?? 'unknown system'
-    dockPromptEl.textContent = `Press F to activate Warp Gate: ${originName} → ${destName}`
-  } else if (nearbyNodule) {
+  dockPromptEl.style.display = nearbyNodule || nearbyBody ? 'block' : 'none'
+  if (nearbyNodule) {
     dockPromptEl.textContent = `Press F to hack Datacore nodule (within ${NODULE_PROBE_RANGE}m)`
   } else if (nearbyBody) {
     const dockSys = currentSysForPrompt
-    if (dockSys) ensureSystemSecurity(dockSys)
     if (!canDockWithLaw(gameState, nearbyBody, dockSys)) {
       dockPromptEl.textContent = `${nearbyBody.name} — docking refused (security standing)`
     } else {
@@ -7486,14 +6024,14 @@ function animate() {
     if (left <= 0) {
       // Fully scanned, but an open probe/investigation mission still needs one re-scan.
       if (canProbeBody(gameState, probeLaunch.body.id)) {
-        probePromptEl.textContent = `Press P to re-scan ${probeLaunch.body.name} (mission) · no additional finds`
+        probePromptEl.textContent = `Press P to re-sound ${probeLaunch.body.name} (contract) · no additional finds`
       } else {
         probePromptEl.textContent = probeExhaustedMessage(probeLaunch.body.name)
       }
     } else {
       const base = probeLaunch.viaOrbit
-        ? `Press P to probe ${probeLaunch.body.name} (in orbit)`
-        : `Press P to launch a probe at ${probeLaunch.body.name}`
+        ? `Press P to sound the water around ${probeLaunch.body.name}`
+        : `Press P to sound ${probeLaunch.body.name}`
       probePromptEl.textContent = `${base} · ${left} left`
     }
   }
@@ -7537,6 +6075,10 @@ function animate() {
   updateTargetIndicator()
   updateTargetDirectionIndicator()
 
+  // Sea, sky and the sun's shadow box all ride the camera — advance them with
+  // the same clock the buoyancy uses, or the water the boat sits on and the
+  // water you can see stop being the same surface.
+  updateEnvironment(gameState.simTime)
   render()
   // HUD reticle on top in true framebuffer NDC (same space as camera.project).
   if (hudReticleRing.visible) {
@@ -7550,24 +6092,6 @@ function animate() {
   if (gameState.player.ship.hull <= 0) handlePlayerDeath()
 }
 animate()
-
-// Kick station + interior GLB preload early so New Game / Load hit ready models.
-preloadStationModels().then(() => {
-  // Title uses free-model stations too — rebuild once Kenney GLBs are ready.
-  if (gameState || !menuActive || !menuWhispersSystem) return
-  if (stationModelsReady()) buildMenuSystemVisuals(menuWhispersSystem)
-})
-preloadInteriorModels().then(() => {
-  // If already docked on a procedural-only bay, rebuild with kit props.
-  if (!gameState || !docked || !interiorMesh) return
-  const bodyId = gameState.player.dockedBodyId
-  const body = bodyId ? findBody(gameState.galaxy, bodyId) : null
-  if (!body) return
-  const theme = resolveInteriorTheme(body)
-  if (interiorMesh.parent) scene.remove(interiorMesh)
-  interiorMesh = null
-  scene.add(ensureInteriorMesh(theme))
-})
 
 // Intro/menu — apply saved sound + UI colour defaults, then title screen.
 // Display mode is already applied by the main process on window create.

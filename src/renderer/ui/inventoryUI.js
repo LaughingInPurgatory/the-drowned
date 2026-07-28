@@ -8,7 +8,7 @@ import {
   transferStorageItem,
   storeCarriedWeapons
 } from '../game/economy.js'
-import { findBody, findSystemOfBody } from '../procgen/galaxy.js'
+import { findBody, findSystemOfBody } from '../procgen/world.js'
 import { getWeapon } from '../data/weapons.js'
 import { getAccessory, effectiveMiningCapacity } from '../data/accessories.js'
 import {
@@ -42,7 +42,7 @@ const GEOM_LS_KEY = 'witv.inventoryPanel'
 const STYLE = `
 ${ITEM_ICON_CSS}
 /* Floating inventory — above docking chrome (z 50). Root is click-through so
-   Station Services stays usable while Inventory is open for drag transfers. */
+   Harbour Services stays usable while Inventory is open for drag transfers. */
 #inventory-ui {
   position: fixed; inset: 0; z-index: 55;
   display: none;
@@ -211,7 +211,7 @@ ${floatingResizeHandleCss('#inventory-ui .float-resize')}
 
 // Cargo / ore / stored assets / industry jobs — tabbed inventory.
 // Ship-part repair is in the header (consumes one part via useShipPart).
-// While docked, cargo/ore/parts/blueprints drag onto Station Services.
+// While docked, cargo/ore/parts/blueprints drag onto Harbour Services.
 export function createInventoryUI(container, gameState, hooks = {}) {
   const { onStorageChanged } = hooks
   const style = document.createElement('style')
@@ -282,8 +282,8 @@ export function createInventoryUI(container, gameState, hooks = {}) {
   }
 
   function formatBodyKind(kind) {
-    if (kind === 'station') return 'Station'
-    if (kind === 'settlement') return 'Settlement'
+    if (kind === 'port') return 'Station'
+    if (kind === 'outpost') return 'Settlement'
     return kind || 'Facility'
   }
 
@@ -291,7 +291,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
     const id = gameState.player.dockedBodyId
     if (!id) return null
     const body = findBody(gameState.galaxy, id)
-    if (!body || (body.kind !== 'station' && body.kind !== 'settlement')) return null
+    if (!body || (body.kind !== 'port' && body.kind !== 'outpost')) return null
     return id
   }
 
@@ -489,7 +489,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
         return
       }
       // Only accept station → ship on the inventory panel.
-      if (!payload || payload.from !== 'station') return
+      if (!payload || payload.from !== 'port') return
       const shiftKey = e.shiftKey || e.dataTransfer.getData('application/x-witv-shift') === '1'
       await performStorageTransfer(payload, 'toShip', shiftKey)
     })
@@ -524,7 +524,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
 
   function dockedXferHint(extra = '') {
     if (!xferEnabled()) return ''
-    return `<p class="xfer-hint">Docked — drag items onto Station Services to store (or drop station items here).${extra ? ` ${extra}` : ''}</p>`
+    return `<p class="xfer-hint">Docked — drag items onto Harbour Services to store (or drop station items here).${extra ? ` ${extra}` : ''}</p>`
   }
 
   function renderCargoTab(ship, shipClass) {

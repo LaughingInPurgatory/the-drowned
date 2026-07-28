@@ -7,7 +7,7 @@ import { ensureBlueprintMaps, updateCraftingJobs } from './crafting.js'
 import { applyOfflineTime, reanchorGameClock } from './gameClock.js'
 import { ensureDrones } from './drones.js'
 import { ensureLawStanding } from './security.js'
-import { ensureSystemSecurity, ensureWarpGates, getSystem } from '../procgen/galaxy.js'
+import { getWorld } from '../procgen/world.js'
 import { tickGalaxyAnomalies } from './systemScan.js'
 import { ensureSkills } from './skills.js'
 import { ensureClones, ensureGalaxyCloneBays } from './clones.js'
@@ -225,18 +225,19 @@ export function deserializeGameState(data) {
   // only rolled ~60% of stations with hasShipyard — force true on load.
   for (const system of gameState.galaxy?.systems ?? []) {
     for (const body of system.bodies ?? []) {
-      if (body.kind === 'station') body.hasShipyard = true
+      if (body.kind === 'port') body.hasShipyard = true
     }
   }
-  // Clone bays: deterministic ~30% of stations (stable body-id hash for old saves).
+  // Berths: deterministic ~30% of harbours (stable body-id hash).
   ensureGalaxyCloneBays(gameState.galaxy)
-  // startingSystemId/startingSystemPeaceBroken fall back for saves written
-  // before the starting-system peace existed — null just means that save
-  // never gets the "no hostiles at home" protection, which is harmless.
-  gameState.player.startingSystemId ??= null
+  const world = getWorld(gameState.galaxy)
+  // One sea — both ids always name it, whatever a save happened to store.
+  gameState.player.currentSystemId = world?.id ?? gameState.player.currentSystemId
+  gameState.player.startingSystemId = world?.id ?? gameState.player.startingSystemId
   gameState.player.waypointPosition ??= null
-  gameState.player.plottedRoute ??= null
-  // Fixed galaxy layout seed (layout is regenerated only on New Game).
+  gameState.player.homePortId ??=
+    gameState.galaxy?.homePortId ?? world?.bodies.find((b) => b.isHome)?.id ?? null
+  // Fixed world layout seed (layout is regenerated only on New Game).
   gameState.galaxySeed ??= data.galaxySeed ?? data.seed ?? null
   // Pre-docking-save fields: null = was flying when saved.
   gameState.player.dockedBodyId ??= null
@@ -245,22 +246,15 @@ export function deserializeGameState(data) {
   gameState.player.combatEngagedNpcIds ??= {}
   gameState.player.portraitDataUrl ??= null
   ensureLawStanding(gameState)
-  // Lazy-fill securityRating for systems from older galaxy saves.
-  for (const system of gameState.galaxy?.systems ?? []) {
-    ensureSystemSecurity(system)
-  }
-  // Warp gates (post-2.7.1): rebuild from neighbor lanes if missing/stale.
-  ensureWarpGates(gameState.galaxy)
-  // Home system is always maximum security (core capital authority).
-  if (gameState.player.startingSystemId) {
-    const home = getSystem(gameState.galaxy, gameState.player.startingSystemId)
-    if (home) home.securityRating = 6
-  }
-  // Keep last pose arrays valid if an older/corrupt save omitted them.
+  // Live local security is recomputed from the boat's position every frame
+  // (see game/security.js applyLocalSecurity); nothing to restore here.
+  // Keep last pose arrays valid if a corrupt save omitted them.
   const ship = gameState.player.ship
   if (!Array.isArray(ship.position) || ship.position.length !== 3) {
-    ship.position = [0, 400, 0]
+    ship.position = [0, 0, 0]
   }
+  // The sea owns the vertical; a saved altitude would just be re-clamped.
+  ship.position[1] = 0
   if (!Array.isArray(ship.velocity) || ship.velocity.length !== 3) {
     ship.velocity = [0, 0, 0]
   }
@@ -272,7 +266,7 @@ export function deserializeGameState(data) {
   // they would still be in the past if we kept them — clear so guns work
   // immediately on load (same as pre-persist-clock behaviour).
   ship.hardpointCooldowns = {}
-  // lastHitAt is also simTime-relative (shield regen delay); drop it so regen
+  // lastHitAt is simTime-relative; drop it so nothing
   // isn't stuck waiting for a pre-save combat timestamp.
   delete ship.lastHitAt
   gameState.flags.startingSystemPeaceBroken ??= false

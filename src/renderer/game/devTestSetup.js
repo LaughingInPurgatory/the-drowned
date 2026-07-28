@@ -1,7 +1,7 @@
 // Temporary dev/test loadout. Flip DEV_TEST_SETUP to false for normal New Game.
 // When true, the intro menu still appears; starting a New Game applies cheats.
 import { createGameState } from './state.js'
-import { CANONICAL_GALAXY_SEED } from '../procgen/galaxy.js'
+import { CANONICAL_WORLD_SEED } from '../procgen/world.js'
 import { getShipClass } from '../data/shipClasses.js'
 import { defaultLoadoutFor } from '../data/weapons.js'
 import { defaultAccessoriesFor } from '../data/accessories.js'
@@ -23,7 +23,7 @@ export function createDevTestGameState(opts = {}) {
     shipInstanceName: opts.shipInstanceName || 'Far Reach',
     shipClassId: DEV_SHIP_CLASS_ID,
     seed: opts.seed ?? Math.floor(Math.random() * 1e9),
-    galaxySeed: CANONICAL_GALAXY_SEED
+    galaxySeed: CANONICAL_WORLD_SEED
   })
   applyDevTestLoadout(gameState, opts)
   return gameState
@@ -41,7 +41,6 @@ export function applyDevTestLoadout(gameState, opts = {}) {
   ship.instanceName = opts.shipInstanceName || 'Far Reach'
 
   ship.hull = shipClass.stats.hull
-  ship.shields = shipClass.stats.shields
   ship.armor = shipClass.stats.armor
 
   // Best weapons per hardpoint type.
@@ -51,9 +50,7 @@ export function applyDevTestLoadout(gameState, opts = {}) {
     else if (hp.type === 'missile') ship.equippedWeapons[hp.id] = 'torpedo'
   }
 
-  // Autopilot in first accessory slot.
   ship.equippedAccessories = defaultAccessoriesFor(shipClass)
-  if (ship.equippedAccessories.length >= 1) ship.equippedAccessories[0] = 'autopilot'
 
   ship.spareWeapons ??= {}
   ship.blueprints ??= {}

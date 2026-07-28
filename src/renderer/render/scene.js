@@ -3,40 +3,37 @@ import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
+import { createOcean } from './oceanMesh.js'
+import { daylightAt, SKY_SHADER, skyUniforms } from './sky.js'
 
-// Image-based light. Ships/stations run metalness 0.85–0.92, and a metal with
-// no environment to reflect resolves to near-black under a single light — that
-// flat "plastic toy" read was the biggest gap between this and a real-looking
-// space sim. A dim Milky-Way-ish band (bright around the galactic plane, fading
-// to near-black at the poles) gives every metal surface something to mirror,
-// and the gradient makes highlights travel across a hull as it turns.
-// Env luminance stays well under 0.2 so it never doubles as a fill light.
-// Exported because the shipyard preview runs its own WebGL context, and a
-// PMREM texture belongs to the renderer that baked it — it needs its own copy.
-export function createSpaceEnvironment(renderer) {
+/**
+ * Everything about what time it is lives in `sky.js`. This file wires that one
+ * answer into the key light, the sky dome, the fog, the environment map and the
+ * water, so they can never disagree about where the sun is.
+ */
+
+/**
+ * Image-based light. Hulls run metalness 0.85–0.92, and a metal with nothing to
+ * reflect resolves to near-black under a single light. Baking the same sky the
+ * player sees gives every wet plate and railing something to mirror, and the
+ * horizon gradient makes highlights travel along a hull as it comes about.
+ *
+ * Exported because the boatyard preview runs its own WebGL context, and a PMREM
+ * texture belongs to the renderer that baked it — it needs its own copy.
+ */
+export function createSkyEnvironment(renderer) {
   const geometry = new THREE.SphereGeometry(1, 32, 16)
   const material = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
-    vertexShader: `
-      varying vec3 vDir;
-      void main() {
-        vDir = normalize(position);
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-      }`,
-    fragmentShader: `
-      varying vec3 vDir;
-      void main() {
-        // Galactic plane: tight bright band at the equator of the env sphere.
-        float band = pow(1.0 - abs(vDir.y), 7.0);
-        // Gentle side-to-side lift so a rotating hull sweeps through it.
-        float sweep = 0.55 + 0.45 * vDir.x;
-        vec3 c = mix(vec3(0.016, 0.021, 0.040), vec3(0.115, 0.120, 0.180), band);
-        c += vec3(0.055, 0.038, 0.022) * band * sweep;  // warm core-ward dust
-        c += vec3(0.010, 0.016, 0.030) * (1.0 - band);  // faint cold sky floor
-        gl_FragColor = vec4(c, 1.0);
-      }`
+    uniforms: skyUniforms(),
+    vertexShader: SKY_SHADER.vertex,
+    fragmentShader: SKY_SHADER.fragment
   })
+  // Baked once at boot from the midday sky. Rebaking it every frame to follow
+  // the day cycle is not worth the cost — `scene.environmentIntensity` is
+  // driven from the same clock instead, which dims reflections into the night
+  // convincingly enough.
   const envScene = new THREE.Scene()
   envScene.add(new THREE.Mesh(geometry, material))
   const pmrem = new THREE.PMREMGenerator(renderer)
@@ -49,34 +46,30 @@ export function createSpaceEnvironment(renderer) {
 
 export function createScene(container) {
   const scene = new THREE.Scene()
-  scene.background = new THREE.Color(0x05070d)
+  const day0 = daylightAt(0)
+  // Fog is what sells the horizon. Everything past the fog wall dissolves into
+  // the sky, so islands can fade in instead of popping. Colour and density both
+  // follow the time of day.
+  scene.fog = new THREE.FogExp2(day0.fog.getHex(), day0.fogDensity)
 
-  // Far plane must clear a full system diameter (local scatter up to ~300k+
-  // after the large sun/planet system scale-up) so the star stays visible
-  // from the rim / arrival point.
-  const camera = new THREE.PerspectiveCamera(60, 1, 0.5, 2_000_000)
+  // Far plane covers the ocean disc with room to spare. The space build needed
+  // 2e6 for a whole star system; at sea, 60k is generous — and staying inside a
+  // normal depth buffer means no logarithmicDepthBuffer, which in turn means
+  // custom ShaderMaterials no longer need the logdepthbuf chunks.
+  const camera = new THREE.PerspectiveCamera(60, 1, 0.5, 60_000)
 
-  // A 0.5 near / 2e6 far range leaves a normal depth buffer with almost no
-  // precision far out: at ~300 km it can only separate surfaces ~10,000 units
-  // apart, so the star's corona shells and streamers won per-pixel coin flips
-  // against the photosphere and the sun visibly boiled with z-fighting.
-  // Log depth spreads precision across the whole range and settles it.
-  // Custom ShaderMaterials must opt in with the logdepthbuf chunks or they
-  // render at the wrong depth — see planetMesh.js and warpGateMesh.js.
-  const renderer = new THREE.WebGLRenderer({
-    antialias: true,
-    alpha: false,
-    logarithmicDepthBuffer: true
-  })
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  // Khronos PBR Neutral, not ACES. This game's VFX (star halos, engine plumes,
-  // laser bolts, nebula) are additive sprites authored in LDR — ACES pulls
-  // in-range colour down and desaturates it, which turned the blue nebula grey
-  // and veiled the whole frame in milk. Neutral leaves anything under 1.0
-  // essentially untouched and only rolls off what actually overflows, so
-  // existing art survives and the new hot pixels still get a filmic shoulder.
+  // Khronos PBR Neutral, not ACES. The VFX here (spray, muzzle flash, tracer
+  // fire, burning wrecks) are additive sprites authored in LDR — ACES pulls
+  // in-range colour down and desaturates it, veiling the whole frame in milk.
+  // Neutral leaves anything under 1.0 essentially untouched and only rolls off
+  // what actually overflows, so existing art survives and the hot pixels still
+  // get a filmic shoulder.
   renderer.toneMapping = THREE.NeutralToneMapping
   renderer.toneMappingExposure = 1.0
+  renderer.shadowMap.enabled = true
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap
   container.appendChild(renderer.domElement)
   // Fill the container; size from client rect so aspect matches the pixels the
   // player actually sees (window.inner* can disagree with the canvas box).
@@ -84,37 +77,69 @@ export function createScene(container) {
   renderer.domElement.style.width = '100%'
   renderer.domElement.style.height = '100%'
 
-  // environment only — scene.background stays the per-system star tint.
-  scene.environment = createSpaceEnvironment(renderer)
+  scene.environment = createSkyEnvironment(renderer)
 
-  // The star is the light source, and main.js parks every system's star group
-  // at world origin, so the key light belongs there too. The old fixed
-  // DirectionalLight lit every body from (300,400,500) regardless of where the
-  // sun actually was, which is why terminators never lined up with the star.
-  // decay 0 = no inverse-square falloff, so a body 600k units out is lit the
-  // same as one at 5k.
-  // ponytail: single light for binaries too — companions orbit close enough to
-  // origin that it reads fine; give each entry in starMesh.userData.stars its
-  // own light only if wide binaries start looking wrong.
-  // Built at boot, never at runtime: a light added mid-session recompiles every
-  // MeshStandardMaterial (the combat hitch shipMesh.js warns about).
-  // Intensity is deliberately close to the old directional 1.5: with decay 0
-  // there is no falloff, so this lands at full strength on a hull 20 m away.
-  // Higher values clipped ship plating to flat white before bloom even ran.
-  const sun = new THREE.PointLight(0xfff2df, 1.7, 0, 0)
+  // Sky dome, drawn first and never depth-written, repositioned onto the camera
+  // in render() so it can never be sailed out of. Kept out of the fog: fogging
+  // the sky with a colour sampled from the sky is a flat grey screen.
+  const skyDome = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 48, 24),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: false,
+      fog: false,
+      uniforms: skyUniforms(),
+      vertexShader: SKY_SHADER.vertex,
+      fragmentShader: SKY_SHADER.fragment
+    })
+  )
+  skyDome.scale.setScalar(camera.far * 0.4)
+  skyDome.renderOrder = -1000
+  skyDome.frustumCulled = false
+  scene.add(skyDome)
+
+  const ocean = createOcean({
+    sunDirection: day0.sunDirection,
+    skyColor: day0.horizon.getHex(),
+    fogColor: day0.fog
+  })
+  scene.add(ocean)
+
+  // Real sunlight now, not a point light at a star. Built at boot and never at
+  // runtime: a light added mid-session recompiles every MeshStandardMaterial
+  // (the combat hitch shipMesh.js warns about).
+  const sun = new THREE.DirectionalLight(day0.sunColor.getHex(), day0.sunIntensity)
+  sun.position.copy(day0.sunDirection).multiplyScalar(1200)
+  sun.castShadow = true
+  // The shadow box travels with the player (see render()). It only has to cover
+  // the boat and whatever it is moored against — an ocean-wide shadow map would
+  // be all texel and no detail.
+  sun.shadow.mapSize.set(2048, 2048)
+  const shadowCam = sun.shadow.camera
+  shadowCam.near = 1
+  shadowCam.far = 3000
+  shadowCam.left = -320
+  shadowCam.right = 320
+  shadowCam.top = 320
+  shadowCam.bottom = -320
+  sun.shadow.bias = -0.0006
+  sun.shadow.normalBias = 0.6
   scene.add(sun)
-  // Starlight/zodiacal fill so night sides read as dark rather than pure black.
-  scene.add(new THREE.AmbientLight(0x232a3d, 0.55))
+  scene.add(sun.target)
+  // Sky above, sea bounce below — the standard outdoor fill. Without the sea
+  // term the undersides of hulls and jetties go pure black.
+  const hemi = new THREE.HemisphereLight(day0.hemiSky.getHex(), day0.hemiGround.getHex(), day0.hemiIntensity)
+  scene.add(hemi)
 
   const composer = new EffectComposer(renderer)
   composer.addPass(new RenderPass(scene, camera))
-  // Threshold at 1.0: only pixels that actually overflow LDR bloom (star cores,
-  // engine plumes, weapon fire). Anything lower catches the big additive halo
-  // sprites whole and fogs the entire frame.
-  // Strength/radius are deliberately small. A glossy canopy (roughness 0.06)
-  // throws a specular highlight far above 1.0, and at higher settings the pass
-  // smeared that single glint into a white blob covering the player's own ship.
-  // Low and tight reads as a glint that blooms, which is the point.
+  // Threshold at 1.0: only pixels that actually overflow LDR bloom (sun track
+  // on the water, muzzle flash, weapon fire, fires on a burning hull). Anything
+  // lower catches the big additive sprites whole and fogs the entire frame.
+  // Strength/radius stay small — glossy wet surfaces throw specular highlights
+  // far above 1.0, and at higher settings the pass smears a single glint into a
+  // white blob covering the player's own boat.
   const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.2, 0.28, 1.0)
   composer.addPass(bloom)
   // OutputPass owns tone mapping + sRGB encode once composer is in the path.
@@ -135,15 +160,63 @@ export function createScene(container) {
   resize()
   window.addEventListener('resize', resize)
 
-  // Overlays drawn straight to the screen after the post chain — currently the
-  // lens flare, which is a camera artifact and so must sit on top of the formed
-  // image rather than inside the world being photographed. Registered once here
-  // instead of at each render() call site (there are six across animate()).
+  // Overlays drawn straight to the screen after the post chain, for camera
+  // artifacts that must sit on the formed image rather than inside the world
+  // being photographed. Registered once here instead of at each render() call
+  // site (there are six across animate()).
   let postOverlay = null
 
   /** @param {((renderer: THREE.WebGLRenderer) => void)|null} fn */
   function setPostOverlay(fn) {
     postOverlay = fn
+  }
+
+  /**
+   * Advance the sea and keep the sky, sun and shadow box attached to the
+   * camera. Call once per frame before render(), with the same `t` the
+   * buoyancy maths uses — the ocean shader and `waveHeight` share it.
+   */
+  function updateEnvironment(t) {
+    const day = daylightAt(t)
+
+    // Sky dome + cloud deck.
+    const su = skyDome.material.uniforms
+    su.uSunDir.value.copy(day.sunDirection)
+    su.uZenith.value.copy(day.zenith)
+    su.uHorizon.value.copy(day.horizon)
+    su.uCloudColor.value.copy(day.cloudColor)
+    su.uCloudLit.value.copy(day.cloudLit)
+    su.uStars.value = day.starOpacity
+    su.uTime.value = t
+    skyDome.position.copy(camera.position)
+
+    // Fog follows the sky, or the horizon reads as a different time of day
+    // from the dome above it.
+    scene.fog.color.copy(day.fog)
+    scene.fog.density = day.fogDensity
+
+    // Key light. The shadow box travels with the player — an ocean-wide shadow
+    // map would be all texel and no detail.
+    sun.color.copy(day.sunColor)
+    sun.intensity = day.sunIntensity
+    sun.target.position.set(camera.position.x, 0, camera.position.z)
+    sun.position.copy(sun.target.position).addScaledVector(day.sunDirection, 1200)
+    // No point paying for a shadow pass once the sun is down.
+    sun.castShadow = day.sunDirection.y > 0.02
+
+    hemi.color.copy(day.hemiSky)
+    hemi.groundColor.copy(day.hemiGround)
+    hemi.intensity = day.hemiIntensity
+    scene.environmentIntensity = day.envIntensity
+
+    // Water. Its colour and its sun track come from the same clock as the sky.
+    const ou = ocean.material.uniforms
+    ou.uSunDir.value.copy(day.sunDirection)
+    ou.uDeepColor.value.copy(day.seaDeep)
+    ou.uCrestColor.value.copy(day.seaCrest)
+    ou.uSkyColor.value.copy(day.horizon)
+    ou.fogColor.value.copy(day.fog)
+    ocean.update(camera, t)
   }
 
   /** Draw a frame through the post chain. Swap-in for renderer.render(scene, camera). */
@@ -158,21 +231,14 @@ export function createScene(container) {
     renderer.autoClear = prevAutoClear
   }
 
-  /**
-   * Tint the key light with the local star (main.js already derives this for
-   * the starfield/background). null resets to neutral sunlight.
-   * @param {THREE.Color|number|null} starColor
-   */
-  function setSunColor(starColor) {
-    if (starColor == null) {
-      sun.color.set(0xfff2df)
-      return
-    }
-    const c = starColor.isColor ? starColor.clone() : new THREE.Color(starColor)
-    // Keep most of the neutral white — a fully saturated red dwarf key light
-    // makes every hull read as one flat colour.
-    sun.color.set(0xfff2df).lerp(c, 0.45)
+  return {
+    scene,
+    camera,
+    renderer,
+    render,
+    updateEnvironment,
+    setPostOverlay,
+    ocean,
+    sun
   }
-
-  return { scene, camera, renderer, render, setSunColor, setPostOverlay }
 }

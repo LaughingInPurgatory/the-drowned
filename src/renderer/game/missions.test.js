@@ -15,11 +15,10 @@ import {
   finishMission
 } from './missions.js'
 import { generateTradeMission } from '../data/missionTemplates.js'
-import { systemsWithinJumps } from '../procgen/galaxy.js'
 import { createGameState } from './state.js'
-import { TEST_GALAXY_OPTS } from '../procgen/galaxy.js'
+import { TEST_WORLD_OPTS } from '../procgen/world.js'
 import { STARTER_SHIP_CLASS_ID } from '../data/shipClasses.js'
-import { findBody } from '../procgen/galaxy.js'
+import { findBody } from '../procgen/world.js'
 
 function freshState(seed = 7) {
   return createGameState({
@@ -27,7 +26,7 @@ function freshState(seed = 7) {
     shipInstanceName: 'Ship',
     shipClassId: STARTER_SHIP_CLASS_ID,
     seed,
-    galaxyOpts: TEST_GALAXY_OPTS
+    galaxyOpts: TEST_WORLD_OPTS
   })
 }
 
@@ -187,27 +186,38 @@ test('investigation lead retargets to another probeable body', () => {
   assert.ok(mission.log?.some((e) => e.kind === 'lead'))
 })
 
-test('investigation leads never drift past 4 jumps from the giver system', () => {
-  // Try several seeds — lead placement depends on which systems actually have
-  // probeable bodies, so not every seed necessarily exercises a neighbor-spill hop.
+test('investigation leads stay in reach of the harbour that posted the contract', () => {
+  // A chain of "spill to somewhere nearby" hops must not walk the player clean
+  // across the sea one lead at a time — every lead re-anchors on the giver.
+  const MAX_LEAD_DISTANCE = 14000
+  let chased = 0
   for (let seed = 1; seed < 30; seed++) {
     const gs = freshState(seed)
     const mission = gs.missions.available.find((m) => m.type === 'investigation')
     if (!mission) continue
     acceptMission(gs, mission.id, Math.random)
-    const giverSystemId = mission.giverSystemId
+    const giver = findBody(gs.galaxy, mission.giverStationId)
+    if (!giver) continue
     // Force the 'lead' branch (roll >= 0.7) up to the mission's lead cap.
     for (let i = 0; i < 3 && mission.status !== 'complete'; i++) {
-      const before = mission.target.bodyId
-      resolveInvestigationProbe(gs, before, () => 0.85)
+      resolveInvestigationProbe(gs, mission.target.bodyId, () => 0.85)
       if (mission.status === 'complete') break
-      const reachable = systemsWithinJumps(gs.galaxy, giverSystemId, 4).map((s) => s.id)
+      const target = findBody(gs.galaxy, mission.target.bodyId)
+      if (!target) continue
+      chased++
+      const d = Math.hypot(
+        target.position[0] - giver.position[0],
+        target.position[2] - giver.position[2]
+      )
+      // The fallback picks the nearest thing outside the band when nothing is
+      // inside it, so allow a margin rather than a hard cutoff.
       assert.ok(
-        reachable.includes(mission.target.systemId),
-        `lead ${i} landed in ${mission.target.systemId}, more than 4 jumps from giver ${giverSystemId}`
+        d <= MAX_LEAD_DISTANCE * 2,
+        `lead ${i} landed ${Math.round(d)} out from ${giver.name}`
       )
     }
   }
+  assert.ok(chased > 0, 'at least one seed should have produced a lead to check')
 })
 
 test('investigation hostiles re-materialize after system re-entry', () => {
@@ -260,9 +270,11 @@ test('trade mission turns in at destination after buy+sell progress', () => {
   assert.ok(mission.trade.quantity >= 50)
   assert.ok(mission.trade.quantity <= 700)
 
-  // Destination must be ≥4 jumps from origin.
-  const within3 = new Set(systemsWithinJumps(gs.galaxy, mission.trade.originSystemId, 3).map((s) => s.id))
-  assert.equal(within3.has(mission.trade.destSystemId), false, 'dest must be at least 4 jumps away')
+  // A haul has to be worth the hold space — the destination is a long run away.
+  const origin = findBody(gs.galaxy, mission.trade.originBodyId)
+  const dest = findBody(gs.galaxy, mission.trade.destBodyId)
+  const haul = Math.hypot(dest.position[0] - origin.position[0], dest.position[2] - origin.position[2])
+  assert.ok(haul >= 11000, `haul should be a real voyage, got ${Math.round(haul)}`)
   assert.ok(mission.trade.destSellPrice > mission.trade.originBuyPrice)
 
   // Incomplete: nav at origin buy bay.

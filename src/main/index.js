@@ -16,7 +16,7 @@ import {
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 
 // Matches the in-game title screen (menu copyright) and packaged installers.
-const APP_NAME = 'Whispers In The Void'
+const APP_NAME = 'Drowned World'
 const APP_COPYRIGHT = '© Laughing In Purgatory 2026'
 const APP_ID = 'com.whispersinthevoid.game'
 

@@ -2,11 +2,7 @@ import { pick, range, intRange } from '../procgen/prng.js'
 import { SHIP_CLASSES, ALIEN_SHIP_CLASSES } from '../data/shipClasses.js'
 import { defaultLoadoutFor } from '../data/weapons.js'
 import { generateHumanName } from '../procgen/names.js'
-import {
-  exteriorRadiusFor,
-  npcExclusionRadiusFor,
-  STAR_NPC_EXCLUSION_RADIUS
-} from './collision.js'
+import { exteriorRadiusFor, npcExclusionRadiusFor } from './collision.js'
 
 let npcCounter = 0
 
@@ -17,7 +13,7 @@ const SHIP_CLASSES_BY_PRICE = [...SHIP_CLASSES]
   .sort((a, b) => a.price - b.price)
 // Fraction of the roster a pirate is drawn from around its difficulty band —
 // wide enough that pirates at any given distance from the core still vary,
-// rather than every pirate at a given coreFraction flying the same hull.
+// rather than every raider at a given remoteness running the same hull.
 const PIRATE_DIFFICULTY_BAND_FRACTION = 0.3
 
 // Approximate half-length of a typical NPC hull + safety pad outside body shells.
@@ -26,9 +22,9 @@ export const NPC_SPAWN_CLEARANCE = 80
 // Tighter pad while steering (still outside exterior mesh).
 export const NPC_FLIGHT_CLEARANCE = 24
 
-// Pirates fly cheaper/weaker hulls near the galactic core and pricier/
-// stronger ones toward the rim — coreFraction is the same 0-1 "how far
-// toward the rim" value spawnEncounterNear already uses for alien odds.
+// Pirates run cheap, tired hulls in home waters and serious ones out in the
+// deep — `remoteness` is the same 0-1 "how far from Haven Reach" value
+// spawnEncounterNear already uses for the odds of meeting something worse.
 function pickPirateShipClass(rng, coreFraction) {
   const bandSize = Math.max(1, Math.floor(SHIP_CLASSES_BY_PRICE.length * PIRATE_DIFFICULTY_BAND_FRACTION))
   const maxStart = SHIP_CLASSES_BY_PRICE.length - bandSize
@@ -36,13 +32,7 @@ function pickPirateShipClass(rng, coreFraction) {
   return SHIP_CLASSES_BY_PRICE[start + intRange(rng, 0, bandSize - 1)]
 }
 
-function starExclusionRadius(opts = {}) {
-  if (opts.excludeStar === false) return 0
-  const r = opts.starRadius
-  return r != null && Number.isFinite(r) ? r : STAR_NPC_EXCLUSION_RADIUS
-}
-
-/** True if `position` sits inside any solid body / sun shell (+ ship + clearance). */
+/** True if `position` sits inside any solid body shell (+ hull + clearance). */
 export function positionOverlapsBodies(
   position,
   bodies,
@@ -50,30 +40,22 @@ export function positionOverlapsBodies(
   clearance = NPC_SPAWN_CLEARANCE,
   opts = {}
 ) {
-  const starR = starExclusionRadius(opts)
-  if (starR > 0) {
-    const need = starR + shipRadius + clearance
-    const d = Math.hypot(position[0], position[1], position[2])
-    if (d < need) return true
-  }
   for (const body of bodies ?? []) {
     const bodyR = npcExclusionRadiusFor(body)
     if (bodyR == null) continue
     const need = bodyR + shipRadius + clearance
-    const d = Math.hypot(
-      position[0] - body.position[0],
-      position[1] - body.position[1],
-      position[2] - body.position[2]
-    )
+    // Horizontal only: everything floats at sea level, so a vertical term would
+    // just measure wave bob and let a boat "clear" an island by riding a crest.
+    const d = Math.hypot(position[0] - body.position[0], position[2] - body.position[2])
     if (d < need) return true
   }
   return false
 }
 
 /**
- * Iteratively push a point outside every solid body shell + sun.
- * Used as a final safety net for bounty hints, ambient spawns, probe hostiles,
- * and live NPC flight so ships are never trapped inside mesh.
+ * Iteratively push a point out of every solid body shell, in the horizontal
+ * plane. Final safety net for bounty hints, ambient spawns and live NPC
+ * steering, so nothing is ever left moored inside a rock.
  */
 export function clearPositionOfBodies(
   position,
@@ -83,47 +65,23 @@ export function clearPositionOfBodies(
   opts = {}
 ) {
   const pos = [position[0], position[1], position[2]]
-  const starR = starExclusionRadius(opts)
 
   for (let iter = 0; iter < 24; iter++) {
     let moved = false
-
-    // System primary / sun at local origin.
-    if (starR > 0) {
-      const need = starR + shipRadius + clearance
-      const d = Math.hypot(pos[0], pos[1], pos[2])
-      if (d < need) {
-        if (d < 1e-6) {
-          pos[0] = need
-          pos[1] = 0
-          pos[2] = 0
-        } else {
-          const s = need / d
-          pos[0] *= s
-          pos[1] *= s
-          pos[2] *= s
-        }
-        moved = true
-      }
-    }
-
     for (const body of bodies ?? []) {
       const bodyR = npcExclusionRadiusFor(body)
       if (bodyR == null) continue
       const need = bodyR + shipRadius + clearance
       const dx = pos[0] - body.position[0]
-      const dy = pos[1] - body.position[1]
       const dz = pos[2] - body.position[2]
-      const d = Math.hypot(dx, dy, dz)
+      const d = Math.hypot(dx, dz)
       if (d >= need) continue
       if (d < 1e-6) {
         pos[0] = body.position[0] + need
-        pos[1] = body.position[1]
         pos[2] = body.position[2]
       } else {
         const s = need / d
         pos[0] = body.position[0] + dx * s
-        pos[1] = body.position[1] + dy * s
         pos[2] = body.position[2] + dz * s
       }
       moved = true
@@ -134,8 +92,8 @@ export function clearPositionOfBodies(
 }
 
 /**
- * Random point outside a host body's exterior shell (and clear of all
- * solid system bodies + sun). Used for bounty locationHints and similar.
+ * Random patch of open water outside a place's exterior shell and clear of
+ * everything else solid. Used for bounty locationHints and similar.
  */
 export function spawnPointNearBody(rng, body, allBodies = null, opts = {}) {
   const shipRadius = opts.shipRadius ?? NPC_SPAWN_SHIP_RADIUS
@@ -144,25 +102,23 @@ export function spawnPointNearBody(rng, body, allBodies = null, opts = {}) {
   const minDist = shell + shipRadius + clearance
   const maxDist = minDist + (opts.extraRange ?? 240)
   const checkBodies = allBodies?.length ? allBodies : [body]
-  const clearOpts = { excludeStar: opts.excludeStar, starRadius: opts.starRadius }
 
   for (let i = 0; i < 48; i++) {
     const dist = range(rng, minDist, maxDist)
     const theta = rng() * Math.PI * 2
-    const phi = Math.acos(2 * rng() - 1)
+    // On the water, always — the sea sets the height (world/sea.js snapToSea).
     const pos = [
-      body.position[0] + dist * Math.sin(phi) * Math.cos(theta),
-      body.position[1] + dist * Math.cos(phi) * 0.4,
-      body.position[2] + dist * Math.sin(phi) * Math.sin(theta)
+      body.position[0] + dist * Math.cos(theta),
+      0,
+      body.position[2] + dist * Math.sin(theta)
     ]
-    if (!positionOverlapsBodies(pos, checkBodies, shipRadius, clearance, clearOpts)) return pos
+    if (!positionOverlapsBodies(pos, checkBodies, shipRadius, clearance)) return pos
   }
   return clearPositionOfBodies(
-    [body.position[0] + minDist + 80, body.position[1], body.position[2]],
+    [body.position[0] + minDist + 80, 0, body.position[2]],
     checkBodies,
     shipRadius,
-    clearance,
-    clearOpts
+    clearance
   )
 }
 
@@ -175,9 +131,8 @@ export function spawnNpcWithClass(rng, { shipClassId, position, faction = 'pirat
   const shipClass = SHIP_CLASSES.find((c) => c.id === shipClassId)
   const pilotName =
     faction === 'police' ? `Patrol ${100 + Math.floor(rng() * 900)}` : species ?? generateHumanName(rng)
-  const clearPos = bodies?.length
-    ? clearPositionOfBodies(position, bodies)
-    : clearPositionOfBodies(position, []) // still clear the sun at origin
+  const clearPos = clearPositionOfBodies(position, bodies ?? [])
+  clearPos[1] = 0 // afloat; the sea sets the actual height each frame
   // Combat drones are player-only — NPCs never get a drones array, even when
   // their hull class has droneBays for the player shipyard.
   const npc = {
@@ -190,7 +145,6 @@ export function spawnNpcWithClass(rng, { shipClassId, position, faction = 'pirat
     velocity: [0, 0, 0],
     quaternion: [0, 0, 0, 1],
     hull: shipClass.stats.hull,
-    shields: shipClass.stats.shields,
     armor: shipClass.stats.armor,
     aiState: 'patrol',
     patrolTarget: null,
@@ -341,7 +295,7 @@ export function ensureStationPolicePatrols(rng, gameState, system, securityRatin
   const spawned = []
 
   // Stations: Sec 3–6
-  const stations = bodies.filter((b) => b.kind === 'station')
+  const stations = bodies.filter((b) => b.kind === 'port')
   const perStation = securityRating >= 5 ? 2 : 1
   for (const station of stations) {
     const live = (gameState.npcs ?? []).filter(
@@ -420,7 +374,7 @@ const MIN_SPAWN_DISTANCE = 260
 const MAX_SPAWN_DISTANCE = 420
 const PIRATE_CHANCE = 0.25
 // Alien activity is zero at the galactic core and rises toward the rim (see
-// procgen/galaxy.js's coreFraction) — the caller passes coreFraction(system),
+// procgen/world.js's remoteness) — the caller passes remoteness(position),
 // so this stays decoupled from the galaxy/system shape.
 const ALIEN_MAX_CHANCE = 0.4
 

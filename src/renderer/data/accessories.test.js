@@ -7,10 +7,8 @@ import {
   defaultAccessoriesFor,
   normalizeAccessories,
   shipHasAccessory,
-  shipHasAutopilot,
   effectiveMiningCapacity,
   effectiveCargoCapacity,
-  effectiveMaxShields,
   effectiveMaxArmor,
   effectiveMaxSpeed,
   effectiveHardpoints,
@@ -20,7 +18,6 @@ import {
   EXTRA_DRONE_BAY_ID,
   EXTRA_TURRET_HP_ID,
   EXTRA_LAUNCHER_HP_ID,
-  SHIELD_UPGRADE_ID,
   ARMOUR_UPGRADE_ID,
   SPEED_UPGRADE_ID,
   MAX_ACCESSORY_SLOTS
@@ -34,10 +31,8 @@ test('catalog includes cargo / bay / hardpoint / defense / speed upgrades', () =
     EXTRA_DRONE_BAY_ID,
     EXTRA_TURRET_HP_ID,
     EXTRA_LAUNCHER_HP_ID,
-    SHIELD_UPGRADE_ID,
     ARMOUR_UPGRADE_ID,
-    SPEED_UPGRADE_ID,
-    'autopilot'
+    SPEED_UPGRADE_ID
   ]) {
     assert.ok(ACCESSORIES.some((a) => a.id === id), id)
     assert.ok(getAccessory(id).price > 0)
@@ -63,10 +58,9 @@ test('Cargo Upgrade is +200% (3× total)', () => {
   )
 })
 
-test('shield / armour / speed upgrades scale base stats', () => {
+test('armour / speed upgrades scale base stats', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const ship = { equippedAccessories: [SHIELD_UPGRADE_ID, ARMOUR_UPGRADE_ID, SPEED_UPGRADE_ID] }
-  assert.equal(effectiveMaxShields(ship, shipClass), Math.round(shipClass.stats.shields * 1.25))
+  const ship = { equippedAccessories: [ARMOUR_UPGRADE_ID, SPEED_UPGRADE_ID] }
   assert.equal(effectiveMaxArmor(ship, shipClass), Math.round(shipClass.stats.armor * 1.25))
   assert.ok(Math.abs(effectiveMaxSpeed(ship, shipClass) - shipClass.stats.speed * 1.15) < 1e-6)
 })
@@ -113,15 +107,14 @@ test('starter Light Runner has one accessory slot', () => {
 })
 
 test('normalizeAccessories pads and reports excess', () => {
-  const { equipped, excess } = normalizeAccessories(['autopilot', 'autopilot', 'x'], {
+  const { equipped, excess } = normalizeAccessories(['cargo_upgrade', 'cargo_upgrade', 'x'], {
     accessorySlots: 1
   })
-  assert.deepEqual(equipped, ['autopilot'])
-  assert.deepEqual(excess, ['autopilot', 'x'])
+  assert.deepEqual(equipped, ['cargo_upgrade'])
+  assert.deepEqual(excess, ['cargo_upgrade', 'x'])
 })
 
-test('shipHasAutopilot reads equippedAccessories', () => {
-  assert.equal(shipHasAutopilot({ equippedAccessories: [] }), false)
-  assert.equal(shipHasAutopilot({ equippedAccessories: [null, 'autopilot'] }), true)
-  assert.equal(shipHasAccessory({ equippedAccessories: ['autopilot'] }, 'autopilot'), true)
+test('shipHasAccessory reads equippedAccessories', () => {
+  assert.equal(shipHasAccessory({ equippedAccessories: [] }, 'cargo_upgrade'), false)
+  assert.equal(shipHasAccessory({ equippedAccessories: [null, 'cargo_upgrade'] }, 'cargo_upgrade'), true)
 })

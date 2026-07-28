@@ -42,13 +42,12 @@ import {
   effectiveCargoCapacity,
   effectiveHardpoints,
   effectiveDroneBayCount,
-  effectiveMaxShields,
   effectiveMaxArmor,
   effectiveMaxSpeed
 } from '../data/accessories.js'
 import { EXPLORER_PROBE_LOOT_BONUS } from '../game/probe.js'
 import { playerSkillBonuses, scaleOreCost } from '../game/skills.js'
-import { findBody, findSystemOfBody } from '../procgen/galaxy.js'
+import { findBody, findSystemOfBody } from '../procgen/world.js'
 import { acceptMission } from '../game/missions.js'
 import { refillMissionsIfExhausted } from '../data/missionTemplates.js'
 import { escapeHtml } from './escapeHtml.js'
@@ -597,7 +596,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       </div>
     </div>
     <div class="dock-actions">
-      <button type="button" class="services-btn">Station Services</button>
+      <button type="button" class="services-btn">Harbour Services</button>
       <button type="button" class="undock-btn">Undock</button>
     </div>
   `
@@ -634,8 +633,8 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
   const XFER_MIME = 'application/x-witv-storage'
 
   function xferEnabled() {
-    // Any open Station Services tab — drop routes by item kind/source, not by which tab is open.
-    if (!currentBody || (currentBody.kind !== 'station' && currentBody.kind !== 'settlement')) {
+    // Any open Harbour Services tab — drop routes by item kind/source, not by which tab is open.
+    if (!currentBody || (currentBody.kind !== 'port' && currentBody.kind !== 'outpost')) {
       return false
     }
     return root.classList.contains('services-open')
@@ -740,7 +739,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
               id,
               qty,
               where,
-              where === 'station' ? currentBody.id : null
+              where === 'port' ? currentBody.id : null
             )
           } else {
             discardCargo(
@@ -748,7 +747,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
               id,
               qty,
               where,
-              where === 'station' ? currentBody.id : null
+              where === 'port' ? currentBody.id : null
             )
           }
           await showNotice('Jettisoned', `Destroyed ${qty}× ${label}.`)
@@ -817,7 +816,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     const tab = root.querySelector('.tab-clones')
     if (!tab) return
     const show =
-      currentBody?.kind === 'station' && ensureStationCloneBayFlag(currentBody)
+      currentBody?.kind === 'port' && ensureStationCloneBayFlag(currentBody)
     tab.style.display = show ? '' : 'none'
     if (!show && currentTab === 'clones') {
       currentTab = 'trade'
@@ -994,7 +993,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
   /**
    * Drop target for ship↔station transfers. Direction is always derived from
    * the drag payload (ship → station bay, station → ship), so drops work on
-   * any wired surface — including the whole Station Services layout.
+   * any wired surface — including the whole Harbour Services layout.
    */
   function wireDropZone(el) {
     if (!el) return
@@ -1027,7 +1026,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       } catch {
         return
       }
-      if (!payload || (payload.from !== 'ship' && payload.from !== 'station')) return
+      if (!payload || (payload.from !== 'ship' && payload.from !== 'port')) return
       const direction = payload.from === 'ship' ? 'toStation' : 'toShip'
       const shiftKey = e.shiftKey || e.dataTransfer.getData('application/x-witv-shift') === '1'
       await performStorageTransfer(payload, direction, shiftKey)
@@ -1035,7 +1034,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
   }
 
   const dockedLayoutEl = root.querySelector('.docked-layout')
-  // Whole Station Services surface accepts drops; item kind/source pick the bay.
+  // Whole Harbour Services surface accepts drops; item kind/source pick the locker.
   wireDropZone(dockedLayoutEl)
 
   // Right column: stored ships + industry jobs. Ship cargo lives in Inventory (I).
@@ -1044,7 +1043,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     ensureBlueprintMaps(gameState)
     const atBay =
       currentBody &&
-      (currentBody.kind === 'station' || currentBody.kind === 'settlement')
+      (currentBody.kind === 'port' || currentBody.kind === 'outpost')
 
     if (!atBay) {
       shipsSideEl.style.display = 'none'
@@ -1365,7 +1364,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
   // between "browsing a ship for sale" and "the ship you currently fly" so
   // both read identically.
   const SHIP_STAT_ROWS = [
-    ['hull', 'Hull'], ['shields', 'Shields'], ['armor', 'Armour'],
+    ['hull', 'Hull'], ['armor', 'Armour'],
     ['cargoCapacity', 'Cargo Capacity'], ['miningCapacity', 'Mining Capacity'],
     ['speed', 'Speed'], ['turnRate', 'Turn Rate'], ['accel', 'Acceleration']
   ]
@@ -1540,7 +1539,6 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
         if (selectedShipClassId === ship.classId) {
           if (key === 'miningCapacity') val = effectiveMiningCapacity(ship, selectedClass)
           if (key === 'cargoCapacity') val = effectiveCargoCapacity(ship, selectedClass)
-          if (key === 'shields') val = effectiveMaxShields(ship, selectedClass)
           if (key === 'armor') val = effectiveMaxArmor(ship, selectedClass)
           if (key === 'speed') val = Math.round(effectiveMaxSpeed(ship, selectedClass))
           if (val !== selectedClass.stats[key]) {
@@ -1685,7 +1683,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
             try {
               const def = getDrone(d.typeId)
               name = def.name
-              meta = `S${def.shields} A${def.armor} H${def.hull}`
+              meta = `A${def.armor} H${def.hull}`
             } catch { /* */ }
             const destroyed = d.destroyed || d.hull <= 0
             return `
@@ -1813,10 +1811,10 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     const shipClass = getShipClass(gameState.player.ship.classId)
     const ship = gameState.player.ship
     selectedShipClassId ??= ship.classId
-    // Repair (hull/armor only — shields already regenerate on their own, see
+    // Repair (hull + armour — nothing regenerates on this sea, see
     // combat.js) is offered at both stations and settlements. Full shipyard
     // (buy/sell ships + armoury) is station-only — every station has one.
-    const canRepairHere = currentBody.kind === 'station' || currentBody.kind === 'settlement'
+    const canRepairHere = currentBody.kind === 'port' || currentBody.kind === 'outpost'
     const repairCostHere = canRepairHere ? repairCost(gameState, currentBody) : 0
     const repairSection = canRepairHere
       ? `<div class="repair-row">
@@ -1961,7 +1959,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
               return `
               <tr>
                 <td>${itemNameCell(itemIcon('drone'), d.name)}</td>
-                <td>${d.shields}/${d.armor}/${d.hull}</td>
+                <td>${d.armor}/${d.hull}</td>
                 <td>${d.price}cr</td>
                 <td>${st}</td>
                 <td>${onShip}</td>
@@ -2367,24 +2365,24 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       const oreStored = oreRows.reduce((a, [, qty]) => a + qty, 0)
       const stationParts = storage.shipParts ?? 0
       bodyHtml = `
-        <p class="xfer-hint">Open <strong>Inventory (I)</strong> and drag cargo, ore, ship parts, or blueprints onto any Station Services surface (or reverse onto Inventory).</p>
+        <p class="xfer-hint">Open <strong>Inventory (I)</strong> and drag cargo, ore, ship parts, or blueprints onto any Harbour Services surface (or reverse onto Inventory).</p>
         <h3>Cargo</h3>
         <div class="credits">${cargoStored} unit${cargoStored === 1 ? '' : 's'} stored</div>
         ${cargoRows.length
           ? `<table><tbody>${cargoRows.map(([id, qty]) =>
-              `<tr class="${xferClass(qty).trim()}"${xferAttrs('station', 'cargo', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty} ${discardBtn('station', 'cargo', id, qty)}</td></tr>`
+              `<tr class="${xferClass(qty).trim()}"${xferAttrs('port', 'cargo', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty} ${discardBtn('port', 'cargo', id, qty)}</td></tr>`
             ).join('')}</tbody></table>`
           : '<p class="empty" style="opacity:0.5">Empty</p>'}
         <h3>Ore</h3>
         <div class="credits">${oreStored} unit${oreStored === 1 ? '' : 's'} stored</div>
         ${oreRows.length
           ? `<table><tbody>${oreRows.map(([id, qty]) =>
-              `<tr class="${xferClass(qty).trim()}"${xferAttrs('station', 'ore', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty} ${discardBtn('station', 'ore', id, qty)}</td></tr>`
+              `<tr class="${xferClass(qty).trim()}"${xferAttrs('port', 'ore', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty} ${discardBtn('port', 'ore', id, qty)}</td></tr>`
             ).join('')}</tbody></table>`
           : '<p class="empty" style="opacity:0.5">Empty — drag from ship or buy on Trade → Ore</p>'}
         <h3>Ship Parts</h3>
         ${stationParts > 0
-          ? `<div class="credits xfer-parts${xferClass(stationParts)}"${xferAttrs('station', 'parts', 'ship_parts', stationParts)}>${itemNameCell(itemIcon('parts'), `${stationParts} in bay`)}</div>`
+          ? `<div class="credits xfer-parts${xferClass(stationParts)}"${xferAttrs('port', 'parts', 'ship_parts', stationParts)}>${itemNameCell(itemIcon('parts'), `${stationParts} in bay`)}</div>`
           : '<div class="credits">0 in bay</div>'}
         <p style="opacity:0.6;font-size:11px;margin-top:14px">Weapons &amp; accessories: buy/sell on Shipyard. Blueprints: Industry. ✕ jettisons permanently.</p>
       `
@@ -2398,7 +2396,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
             const body = findBody(gameState.galaxy, bodyId)
             const system = findSystemOfBody(gameState.galaxy, bodyId)
             const kind =
-              body?.kind === 'station' ? 'Station' : body?.kind === 'settlement' ? 'Settlement' : body?.kind || 'Facility'
+              body?.kind === 'port' ? 'Station' : body?.kind === 'outpost' ? 'Settlement' : body?.kind || 'Facility'
             return `<div class="remote-asset">
               <h4>${escapeHtml(body?.name ?? bodyId)} <span style="opacity:0.55;font-size:11px">(${escapeHtml(kind)})</span></h4>
               <div class="location">System: <span class="sys">${escapeHtml(system?.name ?? 'Unknown')}</span></div>
@@ -2480,7 +2478,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       oreSideEl.innerHTML = ''
       return
     }
-    if (currentBody.kind !== 'station' && currentBody.kind !== 'settlement') {
+    if (currentBody.kind !== 'port' && currentBody.kind !== 'outpost') {
       hideLeftSideBoxes()
       return
     }
@@ -2504,7 +2502,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       <p class="xfer-hint">Drag ore from <strong>Inventory (I)</strong> here (or reverse onto Inventory). Used by Assemble.</p>
       ${oreRows.length
         ? `<table><tbody>${oreRows.map(([id, qty]) =>
-            `<tr class="${xferClass(qty).trim()}"${xferAttrs('station', 'ore', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty} ${discardBtn('station', 'ore', id, qty)}</td></tr>`
+            `<tr class="${xferClass(qty).trim()}"${xferAttrs('port', 'ore', id, qty)}><td>${itemNameCell(goodIcon(id), getGood(id).name)}</td><td>${qty} ${discardBtn('port', 'ore', id, qty)}</td></tr>`
           ).join('')}</tbody></table>`
         : '<div class="empty">Empty — drag from ship or buy on Trade → Ore</div>'}
     `
@@ -2517,7 +2515,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
 
   function renderIndustry() {
     ensureBlueprintMaps(gameState)
-    if (currentBody.kind !== 'station' && currentBody.kind !== 'settlement') {
+    if (currentBody.kind !== 'port' && currentBody.kind !== 'outpost') {
       contentEl.innerHTML = '<p>Industry bays are only available at stations and settlements.</p>'
       hideLeftSideBoxes()
       renderSidePanel()
@@ -2575,7 +2573,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
                 )
                 const canAssemble = enoughOre && credits >= fee
                 return `
-              <tr class="${xferClass(qty).trim()}"${xferAttrs('station', 'blueprint', id, qty)}>
+              <tr class="${xferClass(qty).trim()}"${xferAttrs('port', 'blueprint', id, qty)}>
                 <td>${itemNameCell(itemIcon('blueprint', { blueprintKind: key }), bp.itemName)}</td>
                 <td>${qty}</td>
                 <td style="font-size:10px;opacity:0.85">${formatOreCost(cost)}</td>
@@ -2677,7 +2675,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
   function setServicesOpen(open) {
     servicesOpen = !!open
     root.classList.toggle('services-open', servicesOpen)
-    servicesBtn.textContent = servicesOpen ? 'Close Services' : 'Station Services'
+    servicesBtn.textContent = servicesOpen ? 'Close Services' : 'Harbour Services'
     servicesBtn.setAttribute('aria-pressed', servicesOpen ? 'true' : 'false')
     if (servicesOpen) {
       updateHeaderCredits()
@@ -2702,12 +2700,13 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     show(body, undockCallback) {
       currentBody = body
       onUndock = undockCallback
-      // Station/settlement names are generated already ending in "Station"/
-      // "Settlement" (see procgen/names.js) — appending "(kind)" on top of
-      // that said it twice ("Dunell Settlement (settlement)"). Only append it
-      // for kinds (planet/moon) whose name doesn't already spell it out.
-      const kindLabel = body.kind.charAt(0).toUpperCase() + body.kind.slice(1)
-      bodyNameEl.textContent = body.name.endsWith(kindLabel) ? body.name : `${body.name} (${body.kind})`
+      // Harbour names already read as places — "Port Haven", "Jorormarch Quay",
+      // "Valiion Fort" (see procgen/names.js). Appending the kind on top said it
+      // twice, so only the outpost/harbour distinction is added, and only when
+      // the name does not already carry it.
+      const kindLabel = body.kind === 'port' ? 'Harbour' : 'Outpost'
+      const spellsItOut = /harbour|quay|docks|landing|port|fort|anchorage|light|watch|station/i.test(body.name)
+      bodyNameEl.textContent = spellsItOut ? body.name : `${body.name} · ${kindLabel}`
       updateHeaderCredits()
       selectedShipClassId = null
       shipyardSubTab = 'ships'
@@ -2717,7 +2716,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       currentTab = 'trade'
       tabButtons.forEach((b) => b.classList.toggle('active', b.dataset.tab === 'trade'))
       updateCloneTabVisibility()
-      // Menu closed by default — only Station Services + Undock until opened.
+      // Menu closed by default — only Harbour Services + Undock until opened.
       setServicesOpen(false)
       root.style.display = 'flex'
     },
@@ -2731,7 +2730,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       if (!currentBody) return
       refreshStorageViews({ notify: false })
     },
-    /** Toggle Station Services panel (used by docked hotkey S). */
+    /** Toggle Harbour Services panel (used by docked hotkey S). */
     toggleServices() {
       if (root.style.display === 'none' || !currentBody) return false
       setServicesOpen(!servicesOpen)
