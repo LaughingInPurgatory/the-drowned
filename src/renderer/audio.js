@@ -1533,22 +1533,13 @@ let deathMusic = null
 let ambientMusic = null
 // Persists across sessions (not reset per game) so replaying "New Game"
 // continues cycling forward through the playlist rather than always
-// restarting at bg1.
+// restarting at the first track.
 let ambientTrackIndex = 0
 
 const AMBIENT_TRACKS = [
-  'bg1.mp3', 'bg2.mp3', 'bg3.mp3', 'bg4.mp3', 'bg5.mp3', 'bg6.mp3',
-  // Former title theme — retired from the menu in favour of
-  // celestial_descent.mp3, kept here so it still gets play in-game.
-  'intro.mp3',
-  'ancient_signal.mp3',
-  'drift_signal.mp3',
-  'far_signal.mp3',
-  'far_signal_drift.mp3',
-  'perihelion.mp3',
-  'perihelion_drift.mp3',
-  'relay.mp3',
-  'relay_through_europa.mp3'
+  'soundscape1.mp3', 'soundscape2.mp3', 'soundscape3.mp3', 'soundscape4.mp3',
+  'soundscape5.mp3', 'soundscape6.mp3', 'soundscape7.mp3', 'soundscape8.mp3',
+  'soundscape9.mp3', 'soundscape10.mp3'
 ]
 const TITLE_VOLUME = 0.5
 const DEATH_VOLUME = 0.55
@@ -1643,7 +1634,7 @@ function fadeOutCurrentMusic(seconds = MUSIC_FADE_S) {
 
 export function playTitleMusic() {
   fadeOutCurrentMusic()
-  titleMusic = playFile('celestial_descent.mp3', { loop: true, volume: 0 })
+  titleMusic = playFile('drowned_intro.mp3', { loop: true, volume: 0 })
   fadeMusicVolume(titleMusic, TITLE_VOLUME, MUSIC_FADE_S)
 }
 
@@ -1656,7 +1647,7 @@ export function stopTitleMusic() {
 
 export function playDeathMusic() {
   fadeOutCurrentMusic()
-  deathMusic = playFile('celestial_death.mp3', { loop: true, volume: 0 })
+  deathMusic = playFile('drowned_death.mp3', { loop: true, volume: 0 })
   fadeMusicVolume(deathMusic, DEATH_VOLUME, MUSIC_FADE_S)
 }
 
@@ -1676,7 +1667,7 @@ export function startAmbientMusic() {
   if (ambientMusic) return
   fadeOutCurrentMusic()
   // Random entry point, then advance in list order so sessions don't always
-  // open on bg1 — still a continuous cycle after the first pick.
+  // open on the first track — still a continuous cycle after the first pick.
   ambientTrackIndex = Math.floor(Math.random() * AMBIENT_TRACKS.length)
   playNextAmbientTrack(true)
 }

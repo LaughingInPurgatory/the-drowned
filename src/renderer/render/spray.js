@@ -67,6 +67,7 @@ void main() {
 `
 
 const FRAGMENT = `
+uniform float uAspect;
 varying float vAlpha;
 varying float vStretch;
 varying vec2 vDir;
@@ -75,10 +76,17 @@ varying float vKind;
 void main() {
   vec2 uv = gl_PointCoord - 0.5;
   // Rotate into the particle's own frame so "stretch" runs along the direction
-  // it is travelling — outward from screen centre — instead of always
-  // vertically. This is the whole reason droplets read as being torn off the
-  // glass rather than just sliding down it.
-  vec2 d = normalize(vDir + vec2(1e-5, 0.0));
+  // it is travelling — outward from the bow — instead of always vertically.
+  //
+  // Two conversions are needed to get that angle right, and missing them is
+  // why the streaks used to lean vertical while visibly travelling sideways:
+  //
+  //   - the direction is stored in NDC, where x and y have different pixel
+  //     scales on any non-square viewport, so x has to be multiplied by the
+  //     aspect ratio to become a screen-space direction
+  //   - gl_PointCoord has y running *down* the sprite while NDC y runs up, so
+  //     the y component flips
+  vec2 d = normalize(vec2(vDir.x * uAspect, -vDir.y) + vec2(1e-5, 0.0));
   vec2 local = vec2(dot(uv, vec2(d.y, -d.x)), dot(uv, d));
   // Stretch by *narrowing across* the direction of travel, never by widening
   // along it. Dividing local.y by the stretch shrank the coordinate until
@@ -138,6 +146,7 @@ export function createSprayOverlay() {
   geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 10)
 
   const material = new THREE.ShaderMaterial({
+    uniforms: { uAspect: { value: 1 } },
     vertexShader: VERTEX,
     fragmentShader: FRAGMENT,
     transparent: true,
@@ -253,7 +262,10 @@ export function createSprayOverlay() {
    * @param {number[]} [emitFrom] the bow's position in NDC, so spray radiates
    *   from where it is actually being thrown up rather than from screen centre.
    */
-  function update(dt, speedFraction = 0, boost = 0, emitFrom = null) {
+  function update(dt, speedFraction = 0, boost = 0, emitFrom = null, aspect = null) {
+    // Needed to turn an NDC travel direction into a screen angle — see the
+    // fragment shader. Falls back to the canvas if the caller does not say.
+    if (aspect) material.uniforms.uAspect.value = aspect
     if (emitFrom) {
       // Clamp: once the bow swings off-screen (hard turn, free-look) an
       // unbounded origin sends every droplet across the frame in one direction.

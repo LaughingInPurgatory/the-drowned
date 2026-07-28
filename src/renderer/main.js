@@ -8,6 +8,7 @@ import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from '
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
 import { createSonarPulse } from './render/sonarPulse.js'
 import { createSprayOverlay } from './render/spray.js'
+import { createLensFlare } from './render/lensFlare.js'
 import {
   updateTurretAim,
   centreTurret,
@@ -414,9 +415,29 @@ const spray = createSprayOverlay()
 const _sprayOrigin = new THREE.Vector3()
 const _sprayShipPos = new THREE.Vector3()
 const _sprayQuat = new THREE.Quaternion()
+// Lens flare. Drawn before the droplets: the water is on the front element,
+// so it sits over the flare, not under it.
+const lensFlare = createLensFlare()
+
+/**
+ * Advance the sky and the camera-space effects that hang off it.
+ *
+ * The flare has to be fed the same instant the sky was built from, so this
+ * pairs them rather than letting call sites drift apart.
+ */
+function refreshEnvironment(t) {
+  const day = updateEnvironment(t)
+  lensFlare.update(camera, day.sunDirection, {
+    aspect: renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight),
+    color: day.sunColor,
+    // Weaker at dawn and dusk when the sun is dim and reddened, full at noon.
+    strength: Math.min(1, day.sunIntensity / 2.0) * 0.85
+  })
+  return day
+}
 setPostOverlay((r) => {
-  if (!spray.visible) return
-  r.render(spray.scene, spray.camera)
+  if (lensFlare.visible) r.render(lensFlare.scene, lensFlare.camera)
+  if (spray.visible) r.render(spray.scene, spray.camera)
 })
 
 // Ortho HUD in NDC (-1..1). Circle must be scaled by aspect or it looks
@@ -1646,7 +1667,7 @@ function updateMenuBackground(dt) {
     Math.sin(angle) * MENU_ORBIT_RADIUS
   )
   camera.lookAt(MENU_LOOK_AT)
-  updateEnvironment(menuAnimT)
+  refreshEnvironment(menuAnimT)
 }
 
 
@@ -5413,7 +5434,7 @@ function animate() {
   lastTime = now
   if (!gameState) {
     updateMenuBackground(dt)
-    updateEnvironment(gameState?.simTime ?? menuAnimT)
+    refreshEnvironment(gameState?.simTime ?? menuAnimT)
     render()
     return
   }
@@ -5459,7 +5480,7 @@ function animate() {
   // completes), so this branch must run regardless of `docked`.
   if (dockEffect) {
     updateDockEffect(dt)
-    updateEnvironment(gameState?.simTime ?? menuAnimT)
+    refreshEnvironment(gameState?.simTime ?? menuAnimT)
     render()
     return
   }
@@ -5470,7 +5491,7 @@ function animate() {
     audio.setStrafeActive(false)
     if (targetDirEl) targetDirEl.style.display = 'none'
     if (docked) applyDockOrbitCamera()
-    updateEnvironment(gameState?.simTime ?? menuAnimT)
+    refreshEnvironment(gameState?.simTime ?? menuAnimT)
     render()
     return
   }
@@ -5489,7 +5510,7 @@ function animate() {
     updateBodyVisibility()
   ocean.setSurfObstacles(surfObstacles, camera)
     applyDockOrbitCamera()
-    updateEnvironment(gameState.simTime)
+    refreshEnvironment(gameState.simTime)
     render()
     return
   }
@@ -5665,7 +5686,8 @@ function animate() {
     dt,
     shipSpeed / Math.max(1e-3, playerShipClass.stats.speed),
     cruising ? 1 : 0,
-    [_sprayOrigin.x, _sprayOrigin.y]
+    [_sprayOrigin.x, _sprayOrigin.y],
+    renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
   )
   // Speed FOV: widens a little as the boat comes up onto the plane, fixed under
   // cruise. Snap when close or nearly stopped so the settle can't smear aim.
@@ -6163,7 +6185,7 @@ function animate() {
   // Sea, sky and the sun's shadow box all ride the camera — advance them with
   // the same clock the buoyancy uses, or the water the boat sits on and the
   // water you can see stop being the same surface.
-  updateEnvironment(gameState.simTime)
+  refreshEnvironment(gameState.simTime)
   render()
   // HUD reticle on top in true framebuffer NDC (same space as camera.project).
   if (hudReticleRing.visible) {

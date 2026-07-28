@@ -153,9 +153,24 @@ const _out = {
   seaCrest: new THREE.Color(),
   cloudColor: new THREE.Color(),
   cloudLit: new THREE.Color(),
+  moonDirection: new THREE.Vector3(),
+  /** 0 new, 1 full — drives the lit fraction of the disc. */
+  moonPhase: 1,
   starOpacity: 0,
   isNight: false
 }
+
+/**
+ * The moon runs on its own, slightly longer period.
+ *
+ * Pinning it exactly opposite the sun would be simpler, but then it is always
+ * full and always rises at sunset, and you would never see it in daylight. A
+ * period a few percent off the sun's makes it drift through its phases and
+ * through the day over a campaign, which is free variety from one constant.
+ */
+const MOON_PERIOD_RATIO = 1.09
+/** The moon's orbit is tilted differently from the sun's, so tracks differ. */
+const MOON_TILT = 0.55
 
 /**
  * The whole sky at time `t` (seconds of campaign time).
@@ -171,6 +186,18 @@ export function daylightAt(t) {
   _out.sunDirection.set(across * Math.cos(SUN_TILT), elevation, across * Math.sin(SUN_TILT))
   if (_out.sunDirection.lengthSq() < 1e-8) _out.sunDirection.set(0, 1, 0)
   _out.sunDirection.normalize()
+
+  // Moon: its own slower circuit, on a differently tilted track.
+  const moonAngle = phase * Math.PI * 2 / MOON_PERIOD_RATIO + Math.PI
+  _out.moonDirection
+    .set(
+      Math.cos(moonAngle) * Math.cos(MOON_TILT),
+      Math.sin(moonAngle),
+      Math.cos(moonAngle) * Math.sin(MOON_TILT)
+    )
+    .normalize()
+  // Illuminated fraction is just how opposed the moon is to the sun.
+  _out.moonPhase = 0.5 - 0.5 * _out.moonDirection.dot(_out.sunDirection)
 
   const { lo, hi, t: k } = lerpKeys(elevation)
   _out.phase = phase
@@ -222,6 +249,8 @@ export const SKY_SHADER = {
   fragment: `
     varying vec3 vDir;
     uniform vec3 uSunDir;
+    uniform vec3 uMoonDir;
+    uniform float uMoonPhase;
     uniform vec3 uZenith;
     uniform vec3 uHorizon;
     uniform vec3 uCloudColor;
@@ -229,6 +258,12 @@ export const SKY_SHADER = {
     uniform float uCloudCover;
     uniform float uStars;
     uniform float uTime;
+
+    // Angular radii, radians. Both are several times life-size: the real sun
+    // and moon subtend about half a degree, which at this field of view is a
+    // handful of pixels and reads as a blemish rather than a body.
+    #define SUN_ANGULAR_RADIUS 0.030
+    #define MOON_ANGULAR_RADIUS 0.038
 
     float hash21(vec2 p) {
       p = fract(p * vec2(123.34, 456.21));
@@ -267,11 +302,20 @@ export const SKY_SHADER = {
       // Stars, before the clouds so the deck occludes them.
       if (uStars > 0.001 && d.y > 0.0) {
         vec2 sp = d.xz / max(d.y * 0.6 + 0.4, 0.05);
-        vec2 cell = floor(sp * 90.0);
+        vec2 grid = sp * 90.0;
+        vec2 cell = floor(grid);
         float star = hash21(cell);
         if (star > 0.988) {
+          // Put the star at a random point *inside* its cell and fall off with
+          // distance from it. Lighting the whole cell — which is what this used
+          // to do — draws every star as a square, and at this cell size they
+          // are unmistakably squares.
+          vec2 jitter = vec2(hash21(cell + 3.7), hash21(cell + 11.3));
+          float dist = length(fract(grid) - jitter);
+          float point = smoothstep(0.34, 0.0, dist);
           float twinkle = 0.7 + 0.3 * sin(uTime * 2.0 + star * 90.0);
-          c += vec3(0.85, 0.9, 1.0) * (star - 0.988) * 70.0 * twinkle * uStars * smoothstep(0.0, 0.25, d.y);
+          c += vec3(0.85, 0.9, 1.0) * (star - 0.988) * 70.0 * point * twinkle * uStars
+             * smoothstep(0.0, 0.25, d.y);
         }
       }
 
@@ -280,6 +324,7 @@ export const SKY_SHADER = {
       // horizon, and from a boat almost everything you look at *is* near the
       // horizon — the softened denominator keeps cells finite down to the
       // skyline, which is where the clouds actually need to be.
+      float cloudVeil = 0.0;
       float horizonFade = smoothstep(0.005, 0.09, d.y);
       if (horizonFade > 0.001) {
         vec2 plane = d.xz / (d.y + 0.30);
@@ -298,17 +343,74 @@ export const SKY_SHADER = {
         float lit = clamp((n - toward) * 3.0 + 0.5, 0.0, 1.0);
         vec3 cloud = mix(uCloudColor, uCloudLit, lit);
         c = mix(c, cloud, cover * 0.92);
+        cloudVeil = cover;
       }
 
       // Below the horizon the sea covers this, but the PMREM bake samples it
       // for the underside of every hull — keep it dull, not black.
       c = mix(vec3(0.05, 0.06, 0.06), c, smoothstep(-0.12, 0.03, d.y));
 
+      // --- Sun and moon ------------------------------------------------
+      // Drawn after the cloud deck and veiled by it rather than hidden behind
+      // it. Physically a thick overcast does hide the sun completely, but this
+      // sky is broken cover most of the time and a sun you can never actually
+      // find is worse than a slightly too persistent one — so cloud dims the
+      // discs rather than erasing them.
+      float discVeil = 1.0 - cloudVeil * 0.72;
+
+      // Sun: a hard-edged disc with a hot core. Bigger than the real thing's
+      // half-degree — at that size it is a couple of pixels and reads as a
+      // stuck highlight rather than a sun.
+      float sunUp = smoothstep(-0.03, 0.05, uSunDir.y);
+      if (sunUp > 0.001) {
+        float sunCos = dot(d, uSunDir);
+        float sunEdge = cos(SUN_ANGULAR_RADIUS);
+        float disc = smoothstep(sunEdge - 0.0016, sunEdge + 0.0008, sunCos);
+        // Warmer and dimmer near the horizon — the same reddening the palette
+        // does to everything else at dawn and dusk.
+        vec3 low = vec3(1.0, 0.52, 0.24);
+        vec3 high = vec3(1.0, 0.97, 0.90);
+        vec3 sunTint = mix(low, high, smoothstep(0.0, 0.35, uSunDir.y));
+        c = mix(c, sunTint * 2.6, disc * sunUp * discVeil);
+      }
+
+      // Moon: a disc with a terminator and some mare blotching, brightest at
+      // night but not hidden by day — a moon in a daylit sky is a real sight
+      // and costs nothing here.
+      float moonUp = smoothstep(-0.03, 0.05, uMoonDir.y);
+      if (moonUp > 0.001) {
+        float moonCos = dot(d, uMoonDir);
+        float moonEdge = cos(MOON_ANGULAR_RADIUS);
+        float disc = smoothstep(moonEdge - 0.0014, moonEdge + 0.0006, moonCos);
+        if (disc > 0.001) {
+          // Local frame on the disc so the terminator and the mare can be
+          // placed in surface coordinates rather than screen ones.
+          vec3 right = normalize(cross(vec3(0.0, 1.0, 0.0), uMoonDir));
+          vec3 upv = cross(uMoonDir, right);
+          vec2 sp = vec2(dot(d, right), dot(d, upv)) / MOON_ANGULAR_RADIUS;
+          // Terminator: the lit edge faces the sun.
+          float toSun = dot(normalize(uSunDir - uMoonDir * dot(uSunDir, uMoonDir)), right);
+          float limb = smoothstep(-0.25, 0.35, sp.x * sign(toSun) + (uMoonPhase * 2.0 - 1.0));
+          // Mare: low-frequency blotches, plus a little fine grain.
+          float mare = fbm(sp * 1.6 + 31.7);
+          float shade = mix(0.62, 1.0, smoothstep(0.35, 0.72, mare));
+          // Darken toward the limb so it reads as a sphere, not a coin.
+          float sphere = sqrt(max(0.0, 1.0 - min(1.0, dot(sp, sp))));
+          vec3 moonCol = vec3(0.86, 0.87, 0.82) * shade * (0.55 + 0.45 * sphere);
+          // Bright at night, washed out in a bright sky.
+          float vis = mix(0.55, 1.0, uStars);
+          c = mix(c, moonCol * 1.5, disc * moonUp * limb * vis * discVeil);
+        }
+      }
+
       float sd = max(dot(d, uSunDir), 0.0);
       // The disc only shows above the horizon.
       float up = smoothstep(-0.06, 0.04, uSunDir.y);
-      c += vec3(1.0, 0.88, 0.66) * pow(sd, 250.0) * 5.0 * up;
-      c += vec3(0.85, 0.72, 0.52) * pow(sd, 6.0) * 0.30 * up;
+      // Atmospheric glow around the sun. Deliberately tighter than it was:
+      // a wide soft halo plus bloom swallowed the disc completely and left one
+      // featureless white blob where the sun should be.
+      c += vec3(1.0, 0.88, 0.66) * pow(sd, 420.0) * 3.0 * up;
+      c += vec3(0.85, 0.72, 0.52) * pow(sd, 22.0) * 0.16 * up;
       gl_FragColor = vec4(c, 1.0);
     }`
 }
@@ -317,6 +419,8 @@ export function skyUniforms() {
   const day = daylightAt(0)
   return {
     uSunDir: { value: day.sunDirection.clone() },
+    uMoonDir: { value: day.moonDirection.clone() },
+    uMoonPhase: { value: day.moonPhase },
     uZenith: { value: day.zenith.clone() },
     uHorizon: { value: day.horizon.clone() },
     uCloudColor: { value: day.cloudColor.clone() },

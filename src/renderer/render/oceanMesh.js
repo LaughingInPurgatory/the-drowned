@@ -94,9 +94,15 @@ const FRAGMENT = `
 uniform float uTime;
 uniform vec3 uSunDir;
 uniform vec3 uSunColor;
+uniform vec3 uMoonDir;
+// How strong the moon's track is relative to the sun's. A full moon is about
+// 400,000 times dimmer than the sun; this is a game, so it is a track you can
+// actually see — just never mistakable for daylight.
+uniform float uMoonBright;
 uniform vec3 uDeepColor;
 uniform vec3 uCrestColor;
 uniform vec3 uSkyColor;
+uniform vec3 uZenithColor;
 uniform vec3 uFoamColor;
 uniform vec3 uAlgaeColor;
 // Nearby things the sea breaks against, packed as (x, z, radius). Count is
@@ -157,21 +163,40 @@ vec3 noised(vec2 p) {
 vec2 rippleSlope(vec2 p, float t, float fade) {
   vec2 slope = vec2(0.0);
   float amp = 0.055;
-  float freq = 0.09;
-  // Each octave drifts on its own bearing so the pattern never tiles visibly.
-  vec2 drift[4];
+  float freq = 0.075;
+  // Each octave drifts on its own bearing *and* is sampled through its own
+  // rotation. Without the rotation every octave shares one grid orientation and
+  // the whole field lines up into rows — the same corduroy the swell used to
+  // have, just finer.
+  vec2 drift[6];
   drift[0] = vec2(0.31, 0.14);
   drift[1] = vec2(-0.21, 0.27);
   drift[2] = vec2(0.17, -0.33);
   drift[3] = vec2(-0.29, -0.11);
-  for (int i = 0; i < 4; i++) {
-    float oct = 1.0 - smoothstep(0.0, 1.0, float(i) / 3.0) * (1.0 - fade);
+  drift[4] = vec2(0.09, 0.36);
+  drift[5] = vec2(-0.38, 0.05);
+  float ang[6];
+  ang[0] = 0.0;
+  ang[1] = 0.9;
+  ang[2] = 1.9;
+  ang[3] = 2.7;
+  ang[4] = 3.8;
+  ang[5] = 5.1;
+  for (int i = 0; i < 6; i++) {
+    float oct = 1.0 - smoothstep(0.0, 1.0, float(i) / 5.0) * (1.0 - fade);
     if (oct > 0.002) {
-      vec3 n = noised(p * freq + drift[i] * t);
-      slope += n.yz * amp * freq * oct;
+      float ca = cos(ang[i]);
+      float sa = sin(ang[i]);
+      mat2 rot = mat2(ca, -sa, sa, ca);
+      vec2 q = rot * (p * freq) + drift[i] * t;
+      vec3 n = noised(q);
+      // Rotate the gradient back out of the octave's frame, or the slopes of
+      // different octaves fight each other instead of adding.
+      vec2 g = vec2(n.y * ca + n.z * sa, -n.y * sa + n.z * ca);
+      slope += g * amp * freq * oct;
     }
-    amp *= 0.62;
-    freq *= 2.35;
+    amp *= 0.66;
+    freq *= 2.17;
   }
   return slope;
 }
@@ -258,7 +283,10 @@ void main() {
 
   // Body colour: the dark column beneath, opening toward the crest tint on the
   // faces that are tilted enough to be looking through less water.
-  vec3 body = mix(uCrestColor, uDeepColor, smoothstep(0.86, 1.0, N.y));
+  // Water is dark. Almost everything you see on it is reflection; the body
+  // colour is what little light comes back up out of it, and keeping that deep
+  // and saturated is what stops the surface reading as a dusty plain.
+  vec3 body = mix(uCrestColor, uDeepColor, smoothstep(0.80, 1.0, N.y)) * 0.72;
 
   // Subsurface scattering. A wave lit from behind glows through its own crest —
   // this is most of why real water looks alive and a shaded height field does
@@ -269,7 +297,16 @@ void main() {
   float sss = backlight * steep * clamp(1.0 - uSunDir.y, 0.0, 1.0);
   vec3 scatter = uCrestColor * 1.9 + vec3(0.02, 0.10, 0.06) + uSunColor * 0.22;
 
-  vec3 col = mix(body, uSkyColor, fresnel);
+  // Reflect the *sky*, not a single colour.
+  //
+  // This is the difference between water and wet sand. Mixing one flat horizon
+  // colour by fresnel gives a uniformly tinted matte surface; sampling the sky
+  // gradient along the reflected ray means every facet returns the part of the
+  // sky it is actually pointed at, so the surface varies across the frame the
+  // way a reflective one does. Same curve the sky dome uses, so the two agree.
+  vec3 R = reflect(-V, N);
+  vec3 skyRefl = mix(uSkyColor, uZenithColor, pow(max(R.y, 0.0), 0.42));
+  vec3 col = mix(body, skyRefl, fresnel);
   col += scatter * sss * 0.5 * shadeDetail;
 
   // Specular. Two lobes: a tight sun track, and a broad sheen off the ripple
@@ -279,6 +316,16 @@ void main() {
   float sunUp = smoothstep(-0.08, 0.12, uSunDir.y);
   col += uSunColor * pow(ndh, 300.0) * 3.0 * sunUp;
   col += uSunColor * pow(ndh, 24.0) * 0.16 * sunUp;
+
+  // Moonlight. The same two-lobe treatment as the sun — a tight track and a
+  // broad sheen — because a moon path on water is the same phenomenon, just
+  // far dimmer and colder. Without it a night sea is a flat black sheet.
+  vec3 MH = normalize(uMoonDir + V);
+  float ndmh = max(dot(N, MH), 0.0);
+  float moonUp = smoothstep(-0.06, 0.10, uMoonDir.y);
+  vec3 moonTint = vec3(0.72, 0.80, 0.95);
+  col += moonTint * pow(ndmh, 340.0) * 1.1 * moonUp * uMoonBright;
+  col += moonTint * pow(ndmh, 26.0) * 0.055 * moonUp * uMoonBright;
 
   // Water breaking against land, quays and shoals. Sampled before the algae
   // because a slick gets torn apart in the surf line, not painted over it.
@@ -297,10 +344,14 @@ void main() {
   // in it, which is why this tints the surface *after* the fresnel and
   // scattering and before the foam breaks over it.
   float algae = algaeMask(vWorldPos.xz, uTime) * shadeDetail * (1.0 - surf);
+  // Algae is not bioluminescent. Without tying it to the light level the slicks
+  // glow bright green in the middle of the night, which is the one thing on the
+  // whole sea that was lighting itself.
+  float dayLight = clamp(uSunDir.y * 1.7 + 0.22, 0.06, 1.0);
   if (algae > 0.001) {
     // Thicker in the middle of a slick: it stops looking like water at all and
     // starts looking like a skin on it.
-    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.18 + vec3(0.02, 0.04, 0.0), algae);
+    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.18 + vec3(0.02, 0.04, 0.0), algae) * dayLight;
     col = mix(col, bloom, algae * 0.7);
     // A slick damps the chop and kills the sun track — that flat, dead patch
     // is most of how you spot one from a distance.
@@ -311,13 +362,13 @@ void main() {
   // whether one actually has, so the foam breaks up instead of painting a
   // smooth band along every wave back.
   float steepness = 1.0 - N.y;
-  float foamMask = smoothstep(0.055, 0.16, steepness);
+  float foamMask = smoothstep(0.085, 0.21, steepness);
   float breakup = noised(vWorldPos.xz * 0.55 + vec2(uTime * 0.22, uTime * -0.16)).x;
   breakup += noised(vWorldPos.xz * 1.9 - vec2(uTime * 0.4)).x * 0.5;
   // Algae holds the surface together, so a slick foams far less than clear
   // water at the same steepness.
   float foam = foamMask * smoothstep(-0.12, 0.30, breakup) * shadeDetail * (1.0 - algae * 0.75);
-  col = mix(col, uFoamColor, clamp(foam, 0.0, 0.75));
+  col = mix(col, uFoamColor, clamp(foam, 0.0, 0.55));
   // Surf goes on last and goes on hardest — it is opaque white water, not a
   // tint, and it must win over both the algae and the open-sea whitecaps.
   col = mix(col, uFoamColor * 1.06, surf * 0.92);
@@ -344,10 +395,13 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         // Tinted by the clock — the sun track has to go red at dusk with
         // everything else, or the water reads as lit from a second sky.
         uSunColor: { value: new THREE.Color(0xfff0d8) },
+        uMoonDir: { value: new THREE.Vector3(0, 1, 0) },
+        uMoonBright: { value: 1 },
         // Drowned-world water: silt and ash, not holiday blue.
         uDeepColor: { value: new THREE.Color(0x0a2136) },
         uCrestColor: { value: new THREE.Color(0x216580) },
         uSkyColor: { value: new THREE.Color(skyColor ?? 0x8a9499) },
+        uZenithColor: { value: new THREE.Color(0x3f6d92) },
         uFoamColor: { value: new THREE.Color(0xccd8de) },
         // Sickly, not tropical — this is a bloom fed by fallout and run-off.
         uAlgaeColor: { value: new THREE.Color(0x35502c) },

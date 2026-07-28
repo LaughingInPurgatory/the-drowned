@@ -182,6 +182,8 @@ export function createScene(container) {
     // Sky dome + cloud deck.
     const su = skyDome.material.uniforms
     su.uSunDir.value.copy(day.sunDirection)
+    su.uMoonDir.value.copy(day.moonDirection)
+    su.uMoonPhase.value = day.moonPhase
     su.uZenith.value.copy(day.zenith)
     su.uHorizon.value.copy(day.horizon)
     su.uCloudColor.value.copy(day.cloudColor)
@@ -215,9 +217,19 @@ export function createScene(container) {
     ou.uDeepColor.value.copy(day.seaDeep)
     ou.uCrestColor.value.copy(day.seaCrest)
     ou.uSkyColor.value.copy(day.horizon)
+    ou.uZenithColor.value.copy(day.zenith)
     ou.uSunColor.value.copy(day.sunColor)
+    ou.uMoonDir.value.copy(day.moonDirection)
+    // A crescent throws far less light than a full moon, and the track on the
+    // water should follow the phase you can see in the sky.
+    ou.uMoonBright.value = day.moonPhase
     ou.fogColor.value.copy(day.fog)
     ocean.update(camera, t)
+    // Handed back so callers can drive camera-space effects (the lens flare)
+    // from the same clock, rather than calling daylightAt again and risking a
+    // different `t`. Note this is daylightAt's shared object — use it now, do
+    // not hold on to it.
+    return day
   }
 
   /** Draw a frame through the post chain. Swap-in for renderer.render(scene, camera). */
