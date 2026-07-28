@@ -4842,12 +4842,12 @@ function resolveTarget() {
     return wreck
       ? {
           position: wreck.position,
-          name: 'Wreck',
+          name: 'Floating wreckage',
           hostile: false,
           hullPct: null,
           isAsteroid: false,
           reticle: 'wreck',
-          kindLabel: 'wreck'
+          kindLabel: 'wreckage'
         }
       : null
   }
@@ -4860,14 +4860,14 @@ function resolveTarget() {
     const oreMax = rockOreMax(field.id, currentTarget.index)
     return {
       position: asteroidWorldPosition(field, rock),
-      name: `${rockDisplayName(currentSystem, field.oreOverride)} (${field.name})`,
+      name: `${rockDisplayName(field, field.oreOverride)} (${field.name})`,
       hostile: false,
       hullPct: null,
       oreLeft,
       oreMax,
       isAsteroid: true,
       reticle: 'asteroid',
-      kindLabel: 'asteroid'
+      kindLabel: 'sunken hull'
     }
   }
   // Open-water mark (e.g. where the autopilot handed back on a contract).
@@ -5965,7 +5965,7 @@ function animate() {
       if (t.pilotName) metaParts.push(t.pilotName)
       if (t.faction) metaParts.push(t.faction)
       if (t.kindLabel) metaParts.push(t.kindLabel)
-      if (t.isAsteroid) metaParts.push('asteroid')
+      if (t.isAsteroid) metaParts.push('sunken hull')
       metaParts.push(`${Math.round(dist)} m`)
       hud.updateTarget({
         name: t.name,

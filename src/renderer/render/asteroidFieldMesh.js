@@ -129,30 +129,6 @@ function rockNoise(nx, ny, nz, o) {
 }
 
 /**
- * Icosahedron pushed into an irregular rock (not a smooth ball).
- * amount ≈ peak fractional radial displacement.
- */
-function buildLumpyRockGeometry(radius, seed, amount = 0.32) {
-  const rng = mulberry32(seed)
-  const offsets = [rng() * 12, rng() * 12, rng() * 12]
-  // detail 2: enough verts for real lumps without planet-level cost.
-  const geometry = new THREE.IcosahedronGeometry(radius, 2)
-  const pos = geometry.attributes.position
-  const v = new THREE.Vector3()
-  for (let i = 0; i < pos.count; i++) {
-    v.set(pos.getX(i), pos.getY(i), pos.getZ(i)).normalize()
-    const n = rockNoise(v.x, v.y, v.z, offsets)
-    // Asymmetric: ridges + pits, not a uniform "blobby sphere".
-    const bump = 1 + n * amount + Math.abs(n) * amount * 0.35
-    v.multiplyScalar(radius * bump)
-    pos.setXYZ(i, v.x, v.y, v.z)
-  }
-  pos.needsUpdate = true
-  geometry.computeVertexNormals()
-  return geometry
-}
-
-/**
  * One sunken hull, half out of the water.
  *
  * A wreck field is a convoy or a harbour that went down together, so what
