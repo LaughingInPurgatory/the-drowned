@@ -201,7 +201,7 @@ const STYLE = `
 #main-menu input[type="text"]:focus,
 #main-menu input:not([type]):focus { outline: none; border-color: var(--ui-glow); box-shadow: 0 1px 3px rgba(0,0,0,0.7); }
 
-/* Create Skipper — portrait upload (matches Character sheet). */
+/* Create Captain — portrait upload (matches Character sheet). */
 #main-menu .new-game-view {
   width: min(480px, 92vw);
   padding: 28px 32px;
@@ -399,7 +399,7 @@ const STYLE = `
 #main-menu.reveal .panel > button:nth-of-type(3), #main-menu.reveal .panel > label:nth-of-type(3) { animation-delay: 0.16s; }
 #main-menu.reveal .panel > button:nth-of-type(4) { animation-delay: 0.24s; }
 #main-menu.reveal .panel > button:nth-of-type(5) { animation-delay: 0.32s; }
-/* Settings panel (same shell as Create Skipper). */
+/* Settings panel (same shell as Create Captain). */
 #main-menu .settings-view,
 #main-menu .controls-view,
 #main-menu .ui-colour-view {
@@ -475,7 +475,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
       </div>
     </div>
     <div class="panel new-game-view" style="display:none">
-      <h2>Create Skipper</h2>
+      <h2>Create Captain</h2>
       <div class="new-game-layout">
         <div class="new-game-identity">
           <div class="new-game-portrait">
@@ -489,7 +489,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
           <p class="portrait-hint">Optional PNG / JPG</p>
         </div>
         <div class="new-game-fields">
-          <label>Character Name <input type="text" class="char-name" value="Skipper" maxlength="32" spellcheck="false" autocomplete="off" /></label>
+          <label>Character Name <input type="text" class="char-name" value="Captain" maxlength="32" spellcheck="false" autocomplete="off" /></label>
           <label>Ship Name <input type="text" class="ship-name" value="${starterShip.name}" maxlength="32" spellcheck="false" autocomplete="off" /></label>
           <div class="new-game-actions">
             <button type="button" class="confirm-new-game">Cast Off</button>
@@ -538,7 +538,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
 
   function renderCreatePortrait() {
     if (pendingPortraitDataUrl) {
-      portraitFrame.innerHTML = `<img alt="Skipper portrait" src="${pendingPortraitDataUrl}" />`
+      portraitFrame.innerHTML = `<img alt="Captain portrait" src="${pendingPortraitDataUrl}" />`
       clearPortraitBtn.style.display = 'block'
     } else {
       const initial = (charNameInput.value || 'P').trim().charAt(0).toUpperCase() || 'P'
@@ -558,7 +558,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
 
   function resetNewGameForm() {
     pendingPortraitDataUrl = null
-    charNameInput.value = 'Skipper'
+    charNameInput.value = 'Captain'
     root.querySelector('.ship-name').value = starterShip.name
     renderCreatePortrait()
   }
@@ -640,7 +640,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
   })
 
   root.querySelector('.confirm-new-game').addEventListener('click', () => {
-    const characterName = charNameInput.value.trim() || 'Skipper'
+    const characterName = charNameInput.value.trim() || 'Captain'
     const shipInstanceName = root.querySelector('.ship-name').value.trim() || starterShip.name
     const portraitDataUrl = pendingPortraitDataUrl
     hide()

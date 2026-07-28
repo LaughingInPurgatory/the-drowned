@@ -34,7 +34,7 @@ test('every New Game opens on the same sea, tied up at the same harbour', () => 
   assert.equal(a.player.currentSystemId, a.player.startingSystemId)
   assert.equal(a.galaxy.systems.length, 1, 'one sea, no regions to travel between')
 
-  // Both skippers start at Haven Reach, the last harbour with any authority left.
+  // Both captains start at Haven Reach, the last harbour with any authority left.
   assert.equal(a.player.homePortId, b.player.homePortId)
   const world = getWorld(a.galaxy)
   const homePort = world.bodies.find((x) => x.id === a.player.homePortId)
@@ -47,5 +47,5 @@ test('every New Game opens on the same sea, tied up at the same harbour', () => 
   // The boat starts at the harbour, on the water, and near the centre.
   assert.deepEqual(a.player.ship.position, [...homePort.position])
   assert.equal(a.player.ship.position[1], 0)
-  assert.ok(remoteness(a.player.ship.position) < 0.15, 'a new skipper starts in home waters')
+  assert.ok(remoteness(a.player.ship.position) < 0.15, 'a new captain starts in home waters')
 })

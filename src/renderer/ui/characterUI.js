@@ -286,7 +286,7 @@ export function createCharacterUI(container, gameState) {
           </div>
           <div class="stats">
             <div class="stat-row">
-              <span class="label">Skipper name</span>
+              <span class="label">Captain name</span>
               <div class="name-field">
                 <input type="text" class="char-name-input" maxlength="${NAME_MAX_LEN}" spellcheck="false" autocomplete="off" />
                 <button type="button" class="apply apply-char">Rename</button>
@@ -391,7 +391,7 @@ export function createCharacterUI(container, gameState) {
   function renderPortrait() {
     const url = gameState.player.portraitDataUrl
     if (url) {
-      portraitFrame.innerHTML = `<img alt="Skipper portrait" src="${url}" />`
+      portraitFrame.innerHTML = `<img alt="Captain portrait" src="${url}" />`
       clearBtn.style.display = 'block'
     } else {
       const initial = (gameState.player.name || '?').trim().charAt(0).toUpperCase() || '?'
@@ -562,7 +562,7 @@ export function createCharacterUI(container, gameState) {
     gameState.player.name = next
     charNameInput.value = next
     renderPortrait()
-    flashMsg(charRenameMsg, 'Skipper renamed', true, charTimer)
+    flashMsg(charRenameMsg, 'Captain renamed', true, charTimer)
   }
 
   function applyShipName() {

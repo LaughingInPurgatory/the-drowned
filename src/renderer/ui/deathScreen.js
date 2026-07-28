@@ -98,7 +98,7 @@ const DEATH_PUNS = [
   'Never bring a trawler to a gunfight. Or… whatever that was.',
   'Your boat has left the chat. It is going down with it.',
   'Rest in pieces. We’ll mark the spot on the chart. Roughly.',
-  'Plot twist: the water was the real final boss. Also that skipper.',
+  'Plot twist: the water was the real final boss. Also that captain.',
   'You aimed for the horizon and found the bottom. Committed, at least.',
   'The autopilot says “destination reached.” We disagree on the meaning.',
   'Armour holed, spirits lower, and now everything else too.',
@@ -167,7 +167,7 @@ export function createDeathScreen(container, onReturnToMenu) {
       killerFaction = null,
       killerMethod = null
     }) {
-      const name = escapeHtml(characterName || 'Skipper')
+      const name = escapeHtml(characterName || 'Captain')
 
       const killerEl = root.querySelector('.killer')
       if (killerPilot || killerShip) {
@@ -179,7 +179,7 @@ export function createDeathScreen(container, onReturnToMenu) {
         killerEl.classList.remove('unknown')
         killerEl.innerHTML = `
           <span class="k-tag">Killed by</span>
-          <div class="k-line"><span class="k-name">${escapeHtml(killerPilot || 'Unknown skipper')}</span></div>
+          <div class="k-line"><span class="k-name">${escapeHtml(killerPilot || 'Unknown captain')}</span></div>
           <div class="k-line">Vessel: <span class="k-ship">${escapeHtml(killerShip || 'Unknown vessel')}</span></div>
           <div class="k-line k-method">${escapeHtml(method)}</div>
           ${faction ? `<span class="k-faction">${escapeHtml(faction)}</span>` : ''}

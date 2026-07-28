@@ -180,7 +180,7 @@ test('a survey describes islands and wreck fields, and repeats itself exactly', 
   const islandLines = probeSurveyReport(island, world)
   assert.ok(islandLines.some((l) => /^Survey: /.test(l)))
   assert.ok(islandLines.some((l) => /Land type:/.test(l)))
-  assert.ok(islandLines.some((l) => /Anchorage:/.test(l)), 'a skipper wants to know if it can be laid alongside')
+  assert.ok(islandLines.some((l) => /Anchorage:/.test(l)), 'a captain wants to know if it can be laid alongside')
   // Deterministic from body id, so a repeat survey never contradicts the first.
   assert.deepEqual(probeSurveyReport(island, world), islandLines)
   assert.equal(planetArchetypeForBody(island), planetArchetypeForBody(island))

@@ -1696,7 +1696,7 @@ function notePlayerDamagedBy(ownerId, { ram = false } = {}) {
   const npc = gameState.npcs?.find((n) => n.id === ownerId)
   if (!npc) {
     gameState.player.lastKiller = {
-      pilotName: 'Unknown skipper',
+      pilotName: 'Unknown captain',
       shipName: 'Unknown vessel',
       method: ram ? 'ram' : 'fire'
     }
@@ -1709,7 +1709,7 @@ function notePlayerDamagedBy(ownerId, { ram = false } = {}) {
     /* */
   }
   gameState.player.lastKiller = {
-    pilotName: npc.pilotName || 'Unknown skipper',
+    pilotName: npc.pilotName || 'Unknown captain',
     shipName,
     shipClassId: npc.shipClassId,
     faction: npc.faction || null,

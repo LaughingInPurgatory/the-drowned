@@ -26,7 +26,7 @@ export function createGameState({
   const homePort =
     world.bodies.find((b) => b.id === galaxy.homePortId) ??
     world.bodies.find((b) => b.kind === 'port')
-  // Missions use the career seed so each skipper gets a different board.
+  // Missions use the career seed so each captain gets a different board.
   const missionRng = mulberry32(seed + 1)
   const availableMissions = seedMissionsForGalaxy(missionRng, galaxy)
 
@@ -43,7 +43,7 @@ export function createGameState({
       // sites reach the body list through it (see procgen/world.js).
       currentSystemId: world.id,
       startingSystemId: world.id,
-      /** Haven Reach. Where a new skipper starts and where a berth returns them. */
+      /** Haven Reach. Where a new captain starts and where a berth returns them. */
       homePortId: homePort?.id ?? null,
       waypointBodyId: null,
       // Free-space waypoint (e.g. bounty hunt marker) — cleared when a body
@@ -58,7 +58,7 @@ export function createGameState({
       combatEngagedNpcIds: {},
       // Authority reputation 0–10 (see game/security.js). Start clean.
       lawStanding: 10,
-      // Optional base64 data-URL of player portrait (Create Skipper / Character upload).
+      // Optional base64 data-URL of player portrait (Create Captain / Character upload).
       portraitDataUrl: portraitDataUrl || null,
       // Player-only skills 0–20 (data/skills.js) — raised via skillbooks.
       skills: emptySkills(),
