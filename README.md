@@ -17,7 +17,7 @@
 
 <p align="center">
   <strong>A procedurally generated open-world ocean trading and combat game</strong><br/>
-  Electron + Three.js · one seamless sea · arcade boat handling · saves & berths
+  Electron + Three.js · one seamless sea · arcade boat handling · saves
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@
 
 The seas rose after the war. What is left is water, a scatter of islands, and whatever people have nailed together on top of them.
 
-A desktop ocean sim on **one seamless sea 160 km across** (80 km radius from Haven Reach, ~20 100 km²) — about **330** islands, harbours, outposts and wreck fields on the canonical seed, **100+** vessel classes (including salvage-only Drowned hulls), real-time boat handling and gunnery, harbour workshops, local security and law standing, saves, and crew berths. No loading screens: the whole world is one coordinate space you can sail across.
+A desktop ocean sim on **one seamless sea 160 km across** (80 km radius from Haven Reach, ~20 100 km²) — about **330** islands, harbours, outposts and wreck fields on the canonical seed, **100+** vessel classes (including salvage-only Drowned hulls), real-time boat handling and gunnery, harbour workshops, local security and law standing, and saves. No loading screens: the whole world is one coordinate space you can sail across.
 
 New Game starts you alongside at **Port Haven** on **Haven Reach** — the middle of the sea, the last harbour with a working harbourmaster, always **Security 6**.
 
@@ -43,7 +43,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars come out. Harbour lamps and mast lights carry the night.
 - **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does. Fair skies most of the time; **occasional thunderstorms** load the deck dark, sheet rain across the glass, flash lightning through the fog, and answer with deep thunder over the water.
 - **How far out you are is the difficulty curve** — Haven Reach is policed and picked over. The further you sail, the worse the law, the harder the raiders, and the better the salvage still lying on the bottom.
-- **Local security** — every harbour has its own rating **0–6** and patrols the water around it. Between them is open sea, which answers to nobody. **Law standing 0–10** (start 10): attacking honest traffic only costs you where someone is watching. Low standing draws patrols, refused berths, and eventually shoot-on-sight.
+- **Local security** — every harbour has its own rating **0–6** and patrols the water around it. Between them is open sea, which answers to nobody. **Law standing 0–10** (start 10): attacking honest traffic only costs you where someone is watching. Low standing draws patrols, refused docking, and eventually shoot-on-sight.
 - **100+ vessel classes** — hulls lofted from station lines with transom, sheer and freeboard, round bilge or hard chine, then fitted out: deck, wheelhouse, bridge windows, funnel, mast and rigging, railings, fenders, anchor and bollards. What sits on the deck is the trade — deck cargo and a crane on a freighter, a gun tub and ammo lockers on a gunboat, davits and a survey winch on an explorer, an A-frame and a dive platform on a salvage boat.
 - **Islands with shapes** — six landforms (dome, ridge, mesa, sea stack, atoll with a lagoon, scattered cluster) crossed with five materials (bare rock, scrub, drowned town, pre-war works, fresh basalt). Coloured by height, slope and tide line, with talus at the foot and ruins on the high ground where someone used to live.
 - **The Drowned** — pre-war military hulls and ordnance that never stood down. Never sold in any boatyard: rare blueprints only, off their wrecks or sealed sites, then built in harbour workshops. On the radio they still sound like a navy; on the water they take what they need. Corsairs may call a truce with you against them.
@@ -64,7 +64,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **Music & SFX** — title, ambient and death music; synthesised diesel, dock/mooring, rain, deep thunder and most guns; sampled thruster engage and heavy launchers. Separate **Sound Effects** and **Music** toggles in **Settings**.
 - **UI Colour** — retint accent and panel background in **Settings → UI Colour**; applies live and saves.
 - **Windowed app + fullscreen** — default windowed with OS frame (**1600×900**, size/position remembered). **Alt + Enter** toggles fullscreen.
-- **Saves & berths** — manual/quick save; death screen names what sank you. **Berths** at many harbours let you keep a body backup.
+- **Saves** — manual/quick save; death screen names what sank you.
 
 ## Getting started
 
