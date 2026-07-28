@@ -1331,6 +1331,181 @@ function addTurret(group, shipClass, mats) {
   return group.userData.turret
 }
 
+// Shared nav-light materials (MeshBasic — no PointLights, so no material recompiles).
+let _navMats = null
+function navLightMaterials() {
+  if (_navMats) return _navMats
+  const mk = (color, opacity = 0.95) =>
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      toneMapped: false
+    })
+  const mkGlow = (color) =>
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false
+    })
+  _navMats = {
+    port: mk(0xff2a2a),
+    portGlow: mkGlow(0xff4040),
+    starboard: mk(0x2aff5a),
+    starboardGlow: mkGlow(0x40ff70),
+    white: mk(0xfff5e0),
+    whiteGlow: mkGlow(0xffe8b0),
+    search: mk(0xfff8e8, 1),
+    searchGlow: mkGlow(0xffe0a0),
+    beam: new THREE.MeshBasicMaterial({
+      color: 0xfff0c8,
+      transparent: true,
+      opacity: 0.07,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false
+    })
+  }
+  return _navMats
+}
+
+/**
+ * Coloured running lights — port red, starboard green, stern + masthead white.
+ * Visible only at night (see updateShipNightLights). Pure emissive meshes.
+ */
+function addRunningLights(group, hull) {
+  const mats = navLightMaterials()
+  const length = hull?.length ?? 18
+  const beam = Math.max(...(hull?.stationWidths ?? [2])) * 2
+  const heights = hull?.stationHeights ?? [1.2]
+  const midH = heights[Math.floor(heights.length / 2)] ?? 1.2
+  const bowH = heights[heights.length - 1] ?? midH
+  const sternH = heights[0] ?? midH
+  const r = Math.max(0.06, beam * 0.04)
+  const meshes = []
+
+  function lamp(mat, glowMat, x, y, z, scale = 1) {
+    const core = new THREE.Mesh(new THREE.SphereGeometry(r * scale, 8, 6), mat)
+    core.position.set(x, y, z)
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(r * scale * 1.7, 8, 6), glowMat)
+    glow.position.copy(core.position)
+    group.add(core, glow)
+    meshes.push(core, glow)
+    core.visible = false
+    glow.visible = false
+  }
+
+  // Port (left / −X) red, starboard (+X) green — midway along the sheer.
+  const sideY = midH * 0.55
+  const sideZ = length * 0.08
+  lamp(mats.port, mats.portGlow, -beam * 0.52, sideY, sideZ, 1)
+  lamp(mats.starboard, mats.starboardGlow, beam * 0.52, sideY, sideZ, 1)
+  // Stern white.
+  lamp(mats.white, mats.whiteGlow, 0, sternH * 0.7, -length * 0.48, 0.95)
+  // Masthead / bow all-round white — high for range.
+  lamp(mats.white, mats.whiteGlow, 0, bowH * 1.35 + midH * 0.4, length * 0.22, 1.15)
+
+  group.userData.runningLights = { meshes, lastNight: -1 }
+}
+
+/**
+ * Searchlight on the gun mount — lamp + soft beam volume.
+ * Optional SpotLight (player only): real water/ship illumination, one light total.
+ */
+function addSearchlight(turret, { withSpot = false } = {}) {
+  if (!turret?.pitchGroup) return
+  const mats = navLightMaterials()
+  const pitchGroup = turret.pitchGroup
+  const housing = new THREE.Mesh(
+    new THREE.SphereGeometry(0.14, 10, 8),
+    mats.search
+  )
+  housing.position.set(0, 0.12, 0.18)
+  pitchGroup.add(housing)
+  const glow = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), mats.searchGlow)
+  glow.position.copy(housing.position)
+  pitchGroup.add(glow)
+  // Soft cone along +Z (barrel direction).
+  const beamLen = 55
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.08, 6.5, beamLen, 12, 1, true),
+    mats.beam.clone()
+  )
+  beam.rotation.x = Math.PI / 2
+  beam.position.set(0, 0.08, beamLen * 0.48)
+  beam.renderOrder = 2
+  pitchGroup.add(beam)
+
+  let spot = null
+  if (withSpot) {
+    // One SpotLight on the player: intensity driven at night only.
+    spot = new THREE.SpotLight(0xfff0d0, 0, 320, 0.2, 0.55, 1.15)
+    spot.castShadow = false
+    spot.position.set(0, 0.1, 0.25)
+    pitchGroup.add(spot)
+    spot.target.position.set(0, 0, 80)
+    pitchGroup.add(spot.target)
+  }
+
+  housing.visible = false
+  glow.visible = false
+  beam.visible = false
+
+  turret.searchlight = { housing, glow, beam, spot, lastNight: -1 }
+}
+
+/**
+ * Toggle nav lights + searchlight for night. Cheap: skips when factor unchanged.
+ * @param {THREE.Object3D} mesh ship root from buildShipMesh
+ * @param {number} nightFactor 0 day … 1 full night
+ */
+export function updateShipNightLights(mesh, nightFactor) {
+  if (!mesh) return
+  const n = Math.min(1, Math.max(0, nightFactor))
+  // Quantise so we skip most frames.
+  const key = n < 0.06 ? 0 : n < 0.35 ? 1 : n < 0.7 ? 2 : 3
+
+  const rl = mesh.userData.runningLights
+  if (rl && rl.lastNight !== key) {
+    rl.lastNight = key
+    // Shared materials — only toggle visibility, never per-mesh opacity.
+    const on = key > 0
+    for (const m of rl.meshes) m.visible = on
+  }
+
+  const sl = mesh.userData.turret?.searchlight
+  if (sl && sl.lastNight !== key) {
+    sl.lastNight = key
+    const on = key > 0
+    sl.housing.visible = on
+    sl.glow.visible = on
+    sl.beam.visible = on
+    // Beam mat is cloned per ship so opacity is safe.
+    if (sl.beam.material) sl.beam.material.opacity = on ? 0.045 + n * 0.1 : 0
+    if (sl.spot) {
+      // Bright enough to pick out water and contacts; zero by day.
+      sl.spot.intensity = on ? 12 + n * 28 : 0
+      sl.spot.distance = 200 + n * 180
+      sl.spot.visible = on
+    }
+  }
+}
+
+/** 0 by day, 1 deep night — soft ramp through twilight for light fade. */
+export function nightLightFactorFromDay(day) {
+  if (!day) return 0
+  const el = day.elevation ?? 0
+  // Full on below horizon; fully off once the sun is clearly up.
+  if (el <= -0.06) return 1
+  if (el >= 0.14) return 0
+  return 1 - (el + 0.06) / 0.2
+}
+
 export function buildShipMesh(shipClass, opts = {}) {
   const group = new THREE.Group()
   group.name = shipClass.id
@@ -1512,7 +1687,11 @@ export function buildShipMesh(shipClass, opts = {}) {
 
   // Every vessel carries a gun mount, lite NPCs included — it is four meshes
   // and it is the thing the player is aiming at and being shot by.
-  addTurret(group, shipClass, mats)
+  const turret = addTurret(group, shipClass, mats)
+
+  // Nav lights on every hull; player also gets a real SpotLight on the mount.
+  addRunningLights(group, shipClass.hull)
+  if (turret) addSearchlight(turret, { withSpot: !!opts.searchlight })
 
   // Police: bold black/white livery + red/blue emergency flashers.
   if (isPolice) {

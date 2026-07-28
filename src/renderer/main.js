@@ -1,6 +1,11 @@
 import * as THREE from 'three'
 import { createScene } from './render/scene.js'
-import { buildShipMesh, updatePoliceLights } from './render/shipMesh.js'
+import {
+  buildShipMesh,
+  updatePoliceLights,
+  updateShipNightLights,
+  nightLightFactorFromDay
+} from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
 import { buildIslandMesh, islandMaxShoreline } from './render/islandMesh.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
@@ -8,6 +13,7 @@ import { buildProjectileMesh, buildImpactFlash, preloadProjectileMeshes } from '
 import { buildWreckMesh, updateWreckMesh } from './render/wreckMesh.js'
 import { createSonarPulse } from './render/sonarPulse.js'
 import { createSprayOverlay } from './render/spray.js'
+import { createWeather } from './render/weather.js'
 import { createLensFlare } from './render/lensFlare.js'
 import {
   updateTurretAim,
@@ -377,6 +383,7 @@ scene.add(sonarPulse.group)
 // Water on the lens. An artifact of the camera, so it is drawn over the formed
 // image rather than into the world (see render/scene.js setPostOverlay).
 const spray = createSprayOverlay()
+const weatherFx = createWeather()
 // Scratch for projecting the stem to screen each frame (see the frame loop).
 const _sprayOrigin = new THREE.Vector3()
 const _sprayShipPos = new THREE.Vector3()
@@ -385,25 +392,82 @@ const _sprayQuat = new THREE.Quaternion()
 // so it sits over the flare, not under it.
 const lensFlare = createLensFlare()
 
+/** Latest weather sample — lighting + audio. */
+let weatherFrame = {
+  mode: 'clear',
+  rain: 0,
+  storm: 0,
+  cloudCover: 0.52,
+  sunMul: 1,
+  fogMul: 1,
+  hemiMul: 1,
+  flash: 0,
+  thunder: null
+}
+/** 0 day … 1 night — drives running lights + player searchlight. */
+let _nightLightFactor = 0
+
+/** Fair-weather frame — title screen never rolls rain/storm. */
+const CLEAR_WEATHER_FRAME = Object.freeze({
+  mode: 'clear',
+  rain: 0,
+  storm: 0,
+  rainGloom: 0,
+  stormGloom: 0,
+  cloudCover: 0.52,
+  sunMul: 1,
+  fogMul: 1,
+  hemiMul: 1,
+  flash: 0,
+  thunder: null
+})
+
+/**
+ * Step rain/storm FX + audio for this frame, then drive the sky from the result.
+ * Title / menu always stays clear — weather only runs in an active session.
+ * @param {number} dt
+ * @param {number} t campaign or menu time
+ */
+function tickWeather(dt, t) {
+  // No rain or thunderstorms on the title screen.
+  if (!gameState) {
+    weatherFx.clear()
+    weatherFrame = CLEAR_WEATHER_FRAME
+    audio.setRainLevel(0)
+    return
+  }
+  const aspect =
+    renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
+  weatherFrame = weatherFx.update(dt, t, aspect)
+  audio.setRainLevel(weatherFrame.rain)
+  if (weatherFrame.thunder) audio.playThunder(weatherFrame.thunder)
+}
+
 /**
  * Advance the sky and the camera-space effects that hang off it.
  *
  * The flare has to be fed the same instant the sky was built from, so this
  * pairs them rather than letting call sites drift apart.
+ * Call `tickWeather` earlier in the frame when `dt` is available.
  */
 function refreshEnvironment(t) {
-  const day = updateEnvironment(t)
+  const day = updateEnvironment(t, weatherFrame)
+  const sunStrength = Math.min(1, (day.sunIntensity * (weatherFrame.sunMul ?? 1)) / 2.0) * 0.85
+  // Storm cover kills the flare; a lightning flash briefly restores a white glint.
+  const flareMul =
+    (1 - Math.min(0.95, (weatherFrame.storm ?? 0) * 0.9 + (weatherFrame.rain ?? 0) * 0.35)) +
+    (weatherFrame.flash ?? 0) * 0.8
   lensFlare.update(camera, day.sunDirection, {
     aspect: renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight),
     color: day.sunColor,
-    // Weaker at dawn and dusk when the sun is dim and reddened, full at noon.
-    strength: Math.min(1, day.sunIntensity / 2.0) * 0.85
+    strength: sunStrength * Math.max(0, flareMul)
   })
   return day
 }
 setPostOverlay((r) => {
   if (lensFlare.visible) r.render(lensFlare.scene, lensFlare.camera)
   if (spray.visible) r.render(spray.scene, spray.camera)
+  if (weatherFx.visible) r.render(weatherFx.scene, weatherFx.camera)
 })
 
 // Ortho HUD in NDC (-1..1). Circle must be scaled by aspect or it looks
@@ -1599,6 +1663,9 @@ function startMenuBackground() {
   if (menuActive) return
   menuActive = true
   menuAnimT = 0
+  weatherFx.clear()
+  weatherFrame = CLEAR_WEATHER_FRAME
+  audio.setRainLevel(0)
   audio.playTitleMusic()
 
   const mount = () => {
@@ -2442,6 +2509,8 @@ function clearSession() {
   audio.setThrustState(null)
   audio.stopAmbientMusic()
   audio.stopSeaAmbient()
+  audio.stopWeatherAudio()
+  weatherFx.clear()
   camera.fov = BASE_FOV
   camera.updateProjectionMatrix()
   resetChaseZoom()
@@ -2594,7 +2663,8 @@ function rebuildPlayerShipMesh() {
     scene.remove(playerMesh)
     playerMesh = null
   }
-  playerMesh = buildShipMesh(playerShipClass)
+  // searchlight: one SpotLight on the player turret (night only).
+  playerMesh = buildShipMesh(playerShipClass, { searchlight: true })
   scene.add(playerMesh)
   syncMeshToEntity(playerMesh, gameState.player.ship)
   // A different hull leaves a different wake — drop the old trail rather than
@@ -5544,10 +5614,14 @@ function animate() {
   if (!gameState) {
     spray.clear()
     updateMenuBackground(dt)
-    refreshEnvironment(gameState?.simTime ?? menuAnimT)
+    tickWeather(dt, menuAnimT)
+    refreshEnvironment(menuAnimT)
     render()
     return
   }
+
+  // Rain / storms keep rolling while docked, paused, or dead.
+  tickWeather(dt, gameState.simTime)
 
   // Death: freeze the fight, keep the sea running, orbit the wreck slowly.
   if (deathOrbit) {
@@ -5660,7 +5734,11 @@ function animate() {
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
     updateBodyVisibility()
     applyDockOrbitCamera()
-    refreshEnvironment(gameState.simTime)
+    {
+      const day = refreshEnvironment(gameState.simTime)
+      _nightLightFactor = nightLightFactorFromDay(day)
+      if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
+    }
     render()
     return
   }
@@ -5977,6 +6055,10 @@ function animate() {
     // Animate emergency lights on any mesh that has police livery (faction or flag).
     if (npc.faction === 'police' || mesh.userData?.policeLights) {
       updatePoliceLights(mesh, gameState.simTime)
+    }
+    // Nav lights share the same night factor as the player (set below).
+    if (_nightLightFactor > 0.05 || mesh.userData.runningLights?.lastNight !== 0) {
+      updateShipNightLights(mesh, _nightLightFactor)
     }
   }
 
@@ -6328,7 +6410,9 @@ function animate() {
   // Sea, sky and the sun's shadow box all ride the camera — advance them with
   // the same clock the buoyancy uses, or the water the boat sits on and the
   // water you can see stop being the same surface.
-  refreshEnvironment(gameState.simTime)
+  const day = refreshEnvironment(gameState.simTime)
+  _nightLightFactor = nightLightFactorFromDay(day)
+  if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
   render()
   // HUD reticle on top in true framebuffer NDC (same space as camera.project).
   if (hudReticleRing.visible) {

@@ -44,6 +44,17 @@ export function createSkyEnvironment(renderer) {
   return target.texture
 }
 
+// Scratch colours for weather grading (avoid per-frame allocations).
+const _wxRainCloud = new THREE.Color(0x5a6570) // slate — wet overcast
+const _wxRainCloudLit = new THREE.Color(0x7a8694)
+const _wxStormCloud = new THREE.Color(0x2a3038) // near-charcoal deck
+const _wxStormCloudLit = new THREE.Color(0x4a5564)
+const _wxFlashZenith = new THREE.Color(0xc8d8f0)
+const _wxFlashHorizon = new THREE.Color(0xd0dceb)
+const _wxFlashCloud = new THREE.Color(0xe8f0ff)
+const _wxStormFog = new THREE.Color(0x4a5560)
+const _wxFlashFog = new THREE.Color(0xc8d4e8)
+
 export function createScene(container) {
   const scene = new THREE.Scene()
   const day0 = daylightAt(0)
@@ -176,8 +187,32 @@ export function createScene(container) {
    * camera. Call once per frame before render(), with the same `t` the
    * buoyancy maths uses — the ocean shader and `waveHeight` share it.
    */
-  function updateEnvironment(t) {
+  /**
+   * @param {number} t campaign / menu time
+   * @param {{
+   *   cloudCover?: number,
+   *   sunMul?: number,
+   *   fogMul?: number,
+   *   hemiMul?: number,
+   *   flash?: number,
+   *   storm?: number,
+   *   rain?: number,
+   *   rainGloom?: number,
+   *   stormGloom?: number
+   * } | null} [weather] optional rain/storm modifiers from render/weather.js
+   */
+  function updateEnvironment(t, weather = null) {
     const day = daylightAt(t)
+    const cloudCover = weather?.cloudCover ?? 0.52
+    const sunMul = weather?.sunMul ?? 1
+    const fogMul = weather?.fogMul ?? 1
+    const hemiMul = weather?.hemiMul ?? 1
+    const flash = weather?.flash ?? 0
+    const storm = weather?.storm ?? 0
+    // Gloom leads/lags precipitation so the deck darkens before drops start
+    // and recovers after the front has passed (see weather.js PRELUDE/AFTERMATH).
+    const rainGloom = weather?.rainGloom ?? weather?.rain ?? 0
+    const stormGloom = weather?.stormGloom ?? weather?.storm ?? 0
 
     // Sky dome + cloud deck.
     const su = skyDome.material.uniforms
@@ -188,28 +223,62 @@ export function createScene(container) {
     su.uHorizon.value.copy(day.horizon)
     su.uCloudColor.value.copy(day.cloudColor)
     su.uCloudLit.value.copy(day.cloudLit)
-    su.uStars.value = day.starOpacity
+    // Procedural deck: wet slate in rain, near-black in thunderstorms.
+    // Driven by *gloom* (gradual), not raw precipitation (which starts later).
+    if (rainGloom > 0.02 || stormGloom > 0.02) {
+      const rainW = Math.min(1, rainGloom) * (1 - stormGloom * 0.35)
+      const stormW = Math.min(1, stormGloom)
+      if (rainW > 0.02) {
+        su.uCloudColor.value.lerp(_wxRainCloud, 0.55 * rainW)
+        su.uCloudLit.value.lerp(_wxRainCloudLit, 0.5 * rainW)
+        su.uCloudColor.value.multiplyScalar(1 - 0.28 * rainW)
+        su.uCloudLit.value.multiplyScalar(1 - 0.22 * rainW)
+      }
+      if (stormW > 0.02) {
+        su.uCloudColor.value.lerp(_wxStormCloud, 0.72 * stormW)
+        su.uCloudLit.value.lerp(_wxStormCloudLit, 0.65 * stormW)
+        su.uCloudColor.value.multiplyScalar(1 - 0.4 * stormW)
+        su.uCloudLit.value.multiplyScalar(1 - 0.35 * stormW)
+        su.uZenith.value.multiplyScalar(1 - 0.28 * stormW)
+        su.uHorizon.value.multiplyScalar(1 - 0.22 * stormW)
+      } else if (rainW > 0.02) {
+        su.uZenith.value.multiplyScalar(1 - 0.12 * rainW)
+        su.uHorizon.value.multiplyScalar(1 - 0.1 * rainW)
+      }
+    }
+    // Lightning paints the whole dome for a frame.
+    if (flash > 0.05) {
+      const lift = flash * 0.55
+      su.uZenith.value.lerp(_wxFlashZenith, lift)
+      su.uHorizon.value.lerp(_wxFlashHorizon, lift * 0.7)
+      su.uCloudLit.value.lerp(_wxFlashCloud, lift)
+    }
+    su.uCloudCover.value = cloudCover
+    su.uStars.value = day.starOpacity * (storm > 0.3 ? 1 - storm * 0.7 : 1)
     su.uTime.value = t
     skyDome.position.copy(camera.position)
 
     // Fog follows the sky, or the horizon reads as a different time of day
     // from the dome above it.
     scene.fog.color.copy(day.fog)
-    scene.fog.density = day.fogDensity
+    if (rainGloom > 0.05 && stormGloom < 0.05) scene.fog.color.lerp(_wxStormFog, 0.18 * rainGloom)
+    if (stormGloom > 0.05) scene.fog.color.lerp(_wxStormFog, 0.4 * stormGloom)
+    if (flash > 0.05) scene.fog.color.lerp(_wxFlashFog, flash * 0.4)
+    scene.fog.density = day.fogDensity * fogMul
 
     // Key light. The shadow box travels with the player — an ocean-wide shadow
     // map would be all texel and no detail.
     sun.color.copy(day.sunColor)
-    sun.intensity = day.sunIntensity
+    sun.intensity = day.sunIntensity * sunMul + flash * 4.5
     sun.target.position.set(camera.position.x, 0, camera.position.z)
     sun.position.copy(sun.target.position).addScaledVector(day.sunDirection, 1200)
     // No point paying for a shadow pass once the sun is down.
-    sun.castShadow = day.sunDirection.y > 0.02
+    sun.castShadow = day.sunDirection.y > 0.02 || flash > 0.2
 
     hemi.color.copy(day.hemiSky)
     hemi.groundColor.copy(day.hemiGround)
-    hemi.intensity = day.hemiIntensity
-    scene.environmentIntensity = day.envIntensity
+    hemi.intensity = day.hemiIntensity * hemiMul + flash * 1.8
+    scene.environmentIntensity = day.envIntensity * (0.55 + 0.45 * sunMul) + flash * 0.6
 
     // Water. Its colour and its sun track come from the same clock as the sky.
     const ou = ocean.material.uniforms
@@ -218,12 +287,16 @@ export function createScene(container) {
     ou.uCrestColor.value.copy(day.seaCrest)
     ou.uSkyColor.value.copy(day.horizon)
     ou.uZenithColor.value.copy(day.zenith)
+    if (storm > 0.05) {
+      ou.uDeepColor.value.multiplyScalar(1 - 0.15 * storm)
+      ou.uCrestColor.value.multiplyScalar(1 - 0.1 * storm)
+    }
     ou.uSunColor.value.copy(day.sunColor)
     ou.uMoonDir.value.copy(day.moonDirection)
     // A crescent throws far less light than a full moon, and the track on the
     // water should follow the phase you can see in the sky.
     ou.uMoonBright.value = day.moonPhase
-    ou.fogColor.value.copy(day.fog)
+    ou.fogColor.value.copy(scene.fog.color)
     ocean.update(camera, t)
     // Handed back so callers can drive camera-space effects (the lens flare)
     // from the same clock, rather than calling daylightAt again and risking a

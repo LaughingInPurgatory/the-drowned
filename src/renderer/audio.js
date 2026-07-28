@@ -696,6 +696,189 @@ export function stopSeaAmbient(fadeOut = 1.4) {
   }
 }
 
+// --- Rain bed + deep thunder -------------------------------------------------
+// Rain is filtered noise (not a sample): high-mid hiss for drops, low rumble
+// under it in a storm. Thunder is a one-shot: sub boom + rolling body, no
+// bright crack so it reads as distance over water.
+
+let rainBed = null
+let rainLevel = 0
+
+function ensureRainBed() {
+  if (rainBed) return rainBed
+  const audio = getContext()
+  const seconds = 3.2
+  const n = Math.floor(audio.sampleRate * seconds)
+  const buf = audio.createBuffer(1, n, audio.sampleRate)
+  const data = buf.getChannelData(0)
+  // White-ish rain with mild brown undercurrent so it is not pure static.
+  let brown = 0
+  for (let i = 0; i < n; i++) {
+    const white = Math.random() * 2 - 1
+    brown = (brown + 0.02 * white) / 1.02
+    // Sparse louder “fat drops”.
+    const drop = Math.random() < 0.004 ? (Math.random() * 2 - 1) * 0.9 : 0
+    data[i] = white * 0.55 + brown * 1.4 + drop
+  }
+  const source = audio.createBufferSource()
+  source.buffer = buf
+  source.loop = true
+  const hip = audio.createBiquadFilter()
+  hip.type = 'highpass'
+  hip.frequency.value = 420
+  const band = audio.createBiquadFilter()
+  band.type = 'bandpass'
+  band.frequency.value = 2400
+  band.Q.value = 0.45
+  const low = audio.createBiquadFilter()
+  low.type = 'lowpass'
+  low.frequency.value = 6200
+  // Separate low “storm air” bus — only heard when raining hard.
+  const bodySrc = audio.createBufferSource()
+  bodySrc.buffer = buf
+  bodySrc.loop = true
+  const bodyLp = audio.createBiquadFilter()
+  bodyLp.type = 'lowpass'
+  bodyLp.frequency.value = 280
+  const bodyG = audio.createGain()
+  bodyG.gain.value = 0.0001
+  const gain = audio.createGain()
+  gain.gain.value = 0.0001
+  source.connect(hip).connect(band).connect(low).connect(gain).connect(getMasterDestination())
+  bodySrc.connect(bodyLp).connect(bodyG).connect(getMasterDestination())
+  const now = audio.currentTime
+  source.start(now)
+  bodySrc.start(now)
+  rainBed = { source, bodySrc, gain, bodyG }
+  return rainBed
+}
+
+/**
+ * Continuous rain on the hull / cabin glass.
+ * @param {number} level 0 silent … 1 full storm rain
+ */
+export function setRainLevel(level) {
+  ensureSfx()
+  const next = Math.min(1, Math.max(0, level))
+  if (Math.abs(next - rainLevel) < 0.02 && (next === 0 || rainBed)) {
+    rainLevel = next
+    return
+  }
+  rainLevel = next
+  if (next < 0.02) {
+    if (!rainBed) return
+    const audio = getContext()
+    const now = audio.currentTime
+    const { gain, bodyG, source, bodySrc } = rainBed
+    try {
+      gain.gain.cancelScheduledValues(now)
+      bodyG.gain.cancelScheduledValues(now)
+      gain.gain.setValueAtTime(Math.max(gain.gain.value, 0.0001), now)
+      bodyG.gain.setValueAtTime(Math.max(bodyG.gain.value, 0.0001), now)
+      gain.gain.linearRampToValueAtTime(0.0001, now + 1.2)
+      bodyG.gain.linearRampToValueAtTime(0.0001, now + 1.2)
+      source.stop(now + 1.35)
+      bodySrc.stop(now + 1.35)
+    } catch { /* */ }
+    rainBed = null
+    return
+  }
+  const bed = ensureRainBed()
+  const audio = getContext()
+  const now = audio.currentTime
+  // Quiet under diesel / sea bed — rain is atmosphere, not a wash-out.
+  const peak = 0.022 + next * 0.065
+  const bodyPeak = next > 0.55 ? (next - 0.55) * 0.07 : 0
+  try {
+    bed.gain.gain.cancelScheduledValues(now)
+    bed.bodyG.gain.cancelScheduledValues(now)
+    bed.gain.gain.setValueAtTime(Math.max(bed.gain.gain.value, 0.0001), now)
+    bed.bodyG.gain.setValueAtTime(Math.max(bed.bodyG.gain.value, 0.0001), now)
+    bed.gain.gain.linearRampToValueAtTime(peak, now + 0.6)
+    bed.bodyG.gain.linearRampToValueAtTime(Math.max(0.0001, bodyPeak), now + 0.8)
+  } catch { /* */ }
+}
+
+/**
+ * Deep bassy thunderclap — pressure boom + rolling body, not a bright crack.
+ * @param {{ delay?: number, volume?: number }} [opts]
+ */
+export function playThunder(opts = {}) {
+  ensureSfx()
+  if (!sfxEnabled) return
+  const delay = opts.delay ?? 0
+  const volume = opts.volume ?? 1
+  // Sub pressure — the part you feel more than hear.
+  tone({
+    type: 'sine',
+    freq: 48,
+    freqEnd: 22,
+    duration: 2.8,
+    attack: 0.02,
+    peak: 0.42 * volume,
+    delay
+  })
+  tone({
+    type: 'sine',
+    freq: 72,
+    freqEnd: 28,
+    duration: 2.2,
+    attack: 0.015,
+    peak: 0.28 * volume,
+    delay: delay + 0.02
+  })
+  tone({
+    type: 'triangle',
+    freq: 95,
+    freqEnd: 36,
+    duration: 1.6,
+    attack: 0.01,
+    peak: 0.16 * volume,
+    delay: delay + 0.04
+  })
+  // Body roll — low filtered noise, long.
+  noiseBurst({
+    duration: 2.4,
+    filterFreq: 160,
+    peak: 0.48 * volume,
+    drive: 2.4,
+    delay
+  })
+  noiseBurst({
+    duration: 1.8,
+    filterFreq: 90,
+    peak: 0.38 * volume,
+    drive: 3.2,
+    delay: delay + 0.05
+  })
+  // Distant secondary roll.
+  noiseBurst({
+    duration: 2.6,
+    filterFreq: 70,
+    peak: 0.22 * volume,
+    drive: 1.8,
+    delay: delay + 0.35
+  })
+  // Soft mid grumble so it is not pure sub-woofer.
+  noiseBurst({
+    duration: 1.1,
+    filterFreq: 320,
+    peak: 0.12 * volume,
+    drive: 1.2,
+    delay: delay + 0.08
+  })
+}
+
+/** Kill rain bed (title screen / mute path). */
+export function stopWeatherAudio(fadeOut = 0.8) {
+  if (!rainBed) {
+    rainLevel = 0
+    return
+  }
+  setRainLevel(0)
+  void fadeOut
+}
+
 /**
  * Classic movie sonar ping — the submarine “ping” everyone knows.
  *
