@@ -39,17 +39,28 @@ const SMOKE_FILTER_SVG = `
                dur="16s" repeatCount="indefinite"
                values="0.02 0.045; 0.034 0.062; 0.02 0.045"/>
     </feTurbulence>
-    <!-- A large displacement and only a light blur: the tearing is what makes
-         it smoke. Blur it hard instead and the glyphs merge into one soft slab
-         the shape of the line's bounding box. -->
-    <feDisplacementMap in="SourceGraphic" in2="noise" scale="52"
+    <!-- Slide the noise field upward so the tearing pattern itself travels the
+         same way the layers do. Without this the wisps change shape in place
+         while the layer moves, which fights the sense of flow. -->
+    <feOffset in="noise" dx="0" dy="0" result="noiseShifted">
+      <animate attributeName="dy" dur="6s" repeatCount="indefinite" values="0; -140"/>
+    </feOffset>
+    <!-- Order matters more than magnitude here.
+         Displacing sharp text and then blurring it keeps the letterforms and
+         merely softens their edges, so the result still reads as the word —
+         which is what it looked like. Blurring *first* throws the glyphs away
+         and leaves only a cloud of density where the words were; displacing
+         that cloud then tears it into wisps that owe their shape to the noise
+         rather than to any letter. -->
+    <feGaussianBlur in="SourceGraphic" stdDeviation="7" result="mass"/>
+    <feDisplacementMap in="mass" in2="noiseShifted" scale="95"
                        xChannelSelector="R" yChannelSelector="G" result="torn"/>
-    <feGaussianBlur in="torn" stdDeviation="1.8" result="soft"/>
+    <feGaussianBlur in="torn" stdDeviation="4" result="soft"/>
     <feColorMatrix in="soft" type="matrix" values="
       0 0 0 0 0
       0 0 0 0 0
       0 0 0 0 0
-      0 0 0 0.58 0"/>
+      0 0 0 1.5 -0.12"/>
   </filter>
 </svg>
 `
@@ -159,13 +170,31 @@ const STYLE = `
 
    The turbulence inside the filter animates independently of all of this, so
    even the static layer is never a fixed shape. */
-#main-menu .title-smoke {
-  position: absolute; left: 0; right: 0; top: 0;
-  text-align: center;
+/* A tall, *static* field that all the smoke lives in.
+   The cut has to be in screen space, so it cannot go on the layers — those
+   move, and their mask would ride up with them. This box is anchored to the
+   bottom of the title and reaches far above it, and its mask fades out at its
+   own bottom edge, so nothing ever appears below the letters however the
+   layers inside it drift or scale. */
+#main-menu .title-smoke-field {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  height: 150vh;
   pointer-events: none;
   z-index: -1;
+  -webkit-mask-image: linear-gradient(to top, transparent 0%, #000 5%, #000 100%);
+  mask-image: linear-gradient(to top, transparent 0%, #000 5%, #000 100%);
+}
+#main-menu .title-smoke {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  text-align: center;
+  pointer-events: none;
+  /* Grow upward off the type rather than outward from its middle. */
+  transform-origin: 50% 100%;
   will-change: transform, opacity, filter;
-  animation: titleSmokeRise 13s ease-out infinite;
+  /* Linear, not eased. An ease-out riser covers most of its distance in the
+     first moment and then hangs, which reads as a puff rather than a column —
+     a steady rate is what makes it look like it is flowing. */
+  animation: titleSmokeRise 13s linear infinite;
 }
 #main-menu .title-smoke.r1 { animation-delay: 0s; }
 #main-menu .title-smoke.r2 { animation-delay: -3.25s; }
@@ -178,8 +207,11 @@ const STYLE = `
   animation: titleSmoulder 7s ease-in-out infinite;
 }
 @keyframes titleSmoulder {
-  0%, 100% { opacity: 0.34; transform: translate(0, 0) scale(1); filter: blur(1px); }
-  50%      { opacity: 0.6; transform: translate(4px, -5px) scale(1.05); filter: blur(2.5px); }
+  /* Even the layer that stays drifts upward across its cycle, so nothing in
+     the plume is ever moving down or sitting still. */
+  0%   { opacity: 0.30; transform: translate(0, 2px) scale(1.01);   filter: blur(2.5px); }
+  50%  { opacity: 0.55; transform: translate(3px, -4px) scale(1.05); filter: blur(4px); }
+  100% { opacity: 0.30; transform: translate(6px, -10px) scale(1.10); filter: blur(6px); }
 }
 #main-menu .title-smoke .smoke-line {
   /* Mirrors #main-menu h1 .line — same face, size and tracking, so the smoke
@@ -195,10 +227,18 @@ const STYLE = `
   font-size: 30px; letter-spacing: 14px; margin-bottom: 2px;
 }
 @keyframes titleSmokeRise {
-  0%   { opacity: 0; transform: translate(0, 0) scale(1); filter: blur(0px); }
-  12%  { opacity: 0.7; }
-  55%  { opacity: 0.42; }
-  100% { opacity: 0; transform: translate(38px, -62vh) scale(1.9); filter: blur(16px); }
+  /* Position and scale are spaced evenly so the rise rate stays constant all
+     the way up; only opacity and blur are shaped, and both are held over a
+     long plateau so the column is continuous instead of pulsing. */
+  /* Already blurred at birth. With a linear rise there is no fast opening
+     move to hide behind, so a riser that starts sharp just sits there as a
+     legible second copy of the word — which is exactly what it looked like. */
+  0%   { opacity: 0;    transform: translate(0, 0) scale(1.03);     filter: blur(3.5px); }
+  8%   { opacity: 0.62; transform: translate(3px, -5vh) scale(1.09); filter: blur(4.5px); }
+  25%  { transform: translate(9px, -16vh) scale(1.22);              filter: blur(3px); }
+  50%  { opacity: 0.5;  transform: translate(19px, -32vh) scale(1.46); filter: blur(6.5px); }
+  75%  { opacity: 0.3;  transform: translate(29px, -48vh) scale(1.7);  filter: blur(11px); }
+  100% { opacity: 0;    transform: translate(38px, -64vh) scale(1.94); filter: blur(16px); }
 }
 @media (prefers-reduced-motion: reduce) {
   #main-menu .title-smoke { animation: none; opacity: 0.28; transform: none; }
@@ -535,13 +575,15 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
     <div class="copyright">© Laughing In Purgatory 2026</div>
     <div class="panel main-view">
       <div class="title-block">
-        ${['core', 'r1', 'r2', 'r3', 'r4']
-          .map(
-            (k) => `<div class="title-smoke ${k}" aria-hidden="true">
-          <span class="smoke-line sub">THE</span><span class="smoke-line">DROWNED</span>
-        </div>`
-          )
-          .join('')}
+        <div class="title-smoke-field" aria-hidden="true">
+          ${['core', 'r1', 'r2', 'r3', 'r4']
+            .map(
+              (k) => `<div class="title-smoke ${k}">
+            <span class="smoke-line sub">THE</span><span class="smoke-line">DROWNED</span>
+          </div>`
+            )
+            .join('')}
+        </div>
         <h1><span class="line line-sub" data-text="THE">THE</span><span class="line" data-text="DROWNED">DROWNED</span></h1>
       </div>
       <div class="menu-links">
