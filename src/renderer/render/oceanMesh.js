@@ -300,8 +300,8 @@ void main() {
   if (algae > 0.001) {
     // Thicker in the middle of a slick: it stops looking like water at all and
     // starts looking like a skin on it.
-    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.35 + vec3(0.04, 0.07, 0.0), algae);
-    col = mix(col, bloom, algae * 0.82);
+    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.18 + vec3(0.02, 0.04, 0.0), algae);
+    col = mix(col, bloom, algae * 0.7);
     // A slick damps the chop and kills the sun track — that flat, dead patch
     // is most of how you spot one from a distance.
     col += uSunColor * pow(ndh, 60.0) * 0.06 * sunUp * (1.0 - algae);
@@ -350,7 +350,7 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uSkyColor: { value: new THREE.Color(skyColor ?? 0x8a9499) },
         uFoamColor: { value: new THREE.Color(0xccd8de) },
         // Sickly, not tropical — this is a bloom fed by fallout and run-off.
-        uAlgaeColor: { value: new THREE.Color(0x3f5c2a) },
+        uAlgaeColor: { value: new THREE.Color(0x35502c) },
         uSurf: { value: Array.from({ length: SURF_SLOTS }, () => new THREE.Vector3()) },
         uSurfCount: { value: 0 }
       }

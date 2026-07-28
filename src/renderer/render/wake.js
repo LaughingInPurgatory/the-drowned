@@ -23,8 +23,14 @@ const TRAIL_SEGMENTS = 48
 const TRAIL_LIFETIME = 4.5
 /** Widest the trail gets at full speed, in world units. */
 const TRAIL_MAX_HALF_WIDTH = 9
-/** Sits just above the surface so it is never z-fought by the water. */
-const WAKE_LIFT = 0.22
+/**
+ * Sits just above the surface so it is never z-fought by the water.
+ *
+ * Deliberately tiny. Anything you can actually see lifting reads as a sheet
+ * hovering over the sea rather than foam in it — and because the ribbon
+ * samples `waveHeight` at every vertex, it already follows the swell.
+ */
+const WAKE_LIFT = 0.06
 /** Below this fraction of top speed, a hull barely disturbs anything. */
 const WAKE_THRESHOLD = 0.06
 /** How far apart trail samples are dropped, in world units. */
@@ -34,10 +40,15 @@ const VERTEX = `
 attribute float aFade;
 varying float vFade;
 varying vec2 vUv;
+varying vec2 vWorld;
 void main() {
   vFade = aFade;
   vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  // World XZ, so the foam pattern can be anchored to the *water* rather than
+  // to the ribbon. See the fragment shader.
+  vWorld = wp.xz;
+  gl_Position = projectionMatrix * viewMatrix * wp;
 }
 `
 
@@ -46,22 +57,82 @@ uniform vec3 uColor;
 uniform float uTime;
 varying float vFade;
 varying vec2 vUv;
+varying vec2 vWorld;
 
+// Smooth value noise. The first version of this used a blocky floor()-based
+// hash, which at wake scale showed up as a grid of grey squares astern —
+// unmistakably a texture rather than water.
 float hash21(vec2 p) {
   p = fract(p * vec2(123.34, 456.21));
   p += dot(p, p + 45.32);
   return fract(p.x * p.y);
 }
 
+float valueNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = hash21(i);
+  float b = hash21(i + vec2(1.0, 0.0));
+  float c = hash21(i + vec2(0.0, 1.0));
+  float d = hash21(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+  float v = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += valueNoise(p) * amp;
+    p *= 2.07;
+    amp *= 0.5;
+  }
+  return v;
+}
+
 void main() {
-  // Denser foam along the edges of the band than down the middle — the churn
-  // is thrown outward, and the centre closes over first.
+  // Soft everywhere. A wake has no edge — it thins out until it is water
+  // again — so both axes get a smooth falloff and nothing is ever drawn at
+  // full opacity. The hard-edged version read as a grey ramp bolted to the
+  // hull, which is the single thing that made it look like geometry.
   float edge = abs(vUv.x * 2.0 - 1.0);
-  float band = smoothstep(0.15, 0.95, edge) * 0.75 + 0.25;
-  // Break it up so it reads as foam rather than a painted stripe.
-  float speck = hash21(floor(vUv * vec2(26.0, 220.0)));
-  float foam = band * (0.55 + 0.45 * speck);
-  float a = foam * vFade;
+
+  // Everything textural is sampled in **world space**, not in the ribbon's own
+  // UVs. Sampling in UV space glues the foam to the boat: the pattern slides
+  // along with the hull and never appears to be sitting in the water, which is
+  // the single thing that stopped this reading as a wake however soft its
+  // edges were. Anchored to the world, the ribbon travels through a foam field
+  // that stays put, exactly as broken water does.
+  vec2 w = vWorld * 0.35;
+  // A slow drift and evolution on top, so the churn is alive rather than a
+  // stencil the boat drags across a fixed pattern.
+  vec2 churn = vec2(uTime * 0.25, uTime * -0.19);
+  float clumps = fbm(w + churn);
+  float fine = valueNoise(w * 4.5 + churn * 3.1);
+
+  // Ragged outer boundary. The ribbon is a strip of quads, so its edge is a
+  // dead-straight line, and a straight line is exactly what read as fake —
+  // real white water has a torn, wandering margin. Wobbling the cutoff with a
+  // low-frequency world-space noise removes the ruled edge, and because it is
+  // world-space the ragged edge crawls as you pass instead of being painted on.
+  float wander = fbm(w * 0.42 + churn * 0.6);
+  float outer = 0.62 + wander * 0.42;
+  // Hollow: the churn is thrown outward and the middle closes over first.
+  float across = smoothstep(outer + 0.16, outer - 0.30, edge)
+    * (0.3 + 0.7 * smoothstep(0.06, 0.55, edge));
+
+  // Older water is more broken up: the sheet turns into scattered patches, and
+  // the further outboard it is the sooner that happens — the middle of a wake
+  // stays a solid sheet far longer than its shoulders do.
+  float age = vUv.y;
+  float breakup = mix(0.58, 0.10, age) + edge * 0.22;
+  // The outermost shoulder is the thinnest, most broken water there is: raise
+  // its threshold hard so it survives only where the noise is genuinely high,
+  // and it dissolves into scattered patches instead of a continuous fringe.
+  breakup += smoothstep(0.55, 1.0, edge) * 0.3;
+  float foam = smoothstep(breakup, breakup + 0.40, clumps * 0.78 + fine * 0.3);
+
+  float a = across * foam * vFade * 0.85;
   if (a <= 0.004) discard;
   gl_FragColor = vec4(uColor, a);
 }
@@ -108,14 +179,14 @@ export function createWake() {
   group.frustumCulled = false
 
   const trailGeo = buildStrip(TRAIL_SEGMENTS)
-  const trail = new THREE.Mesh(trailGeo, wakeMaterial(0xdfeae8, 0.85))
+  const trail = new THREE.Mesh(trailGeo, wakeMaterial(0xe8f1f2, 0.85))
   trail.frustumCulled = false
   trail.renderOrder = 2
   group.add(trail)
 
   // Bow arms: two short strips angled off the stem.
   const bowGeos = [buildStrip(10), buildStrip(10)]
-  const bowMat = wakeMaterial(0xf0f6f4, 0.9)
+  const bowMat = wakeMaterial(0xf2f8f8, 0.9)
   const bows = bowGeos.map((g) => {
     const m = new THREE.Mesh(g, bowMat)
     m.frustumCulled = false
@@ -142,6 +213,9 @@ export function createWake() {
    */
   function update(position, heading, speedFraction, hullLength, t, dt) {
     const active = speedFraction > WAKE_THRESHOLD
+    // The foam now animates in the shader, so both materials need the clock.
+    trail.material.uniforms.uTime.value = t
+    bowMat.uniforms.uTime.value = t
 
     // Drop a sample when we have moved far enough. Distance-based, not
     // time-based, so a slow boat leaves a short wake and a fast one a long
@@ -179,7 +253,9 @@ export function createWake() {
       }
       const k = s.age / TRAIL_LIFETIME
       // Widens as it spreads out behind, then the edges lose definition.
-      const half = TRAIL_MAX_HALF_WIDTH * s.speed * (0.35 + k * 0.9)
+      // Widens as it spreads out astern, but not without limit — a wake fans
+      // out over its first few boat-lengths and then just fades.
+      const half = TRAIL_MAX_HALF_WIDTH * s.speed * (0.45 + Math.min(0.75, k * 1.3))
       const nx = Math.cos(s.heading)
       const nz = -Math.sin(s.heading)
       for (const [k2, sign] of [[vi, -1], [vi + 1, 1]]) {
@@ -188,7 +264,9 @@ export function createWake() {
         pos.setXYZ(k2, x, waveHeight(x, z, t) + WAKE_LIFT, z)
         uv.setXY(k2, sign > 0 ? 1 : 0, i / count)
         // Bright at the transom, gone by the time the water has settled.
-        fade.setX(k2, Math.pow(1 - k, 1.4) * Math.min(1, s.speed * 2.2))
+        // Brightest right at the transom, and gone well before the ribbon
+        // runs out — a linear fade leaves a visible cut-off at the tail.
+        fade.setX(k2, Math.pow(1 - k, 2.1) * Math.min(1, s.speed * 2.2))
       }
     }
     pos.needsUpdate = true
@@ -200,9 +278,11 @@ export function createWake() {
     // brighter the harder she is driven.
     const bowX = position[0] + Math.sin(heading) * hullLength * 0.45
     const bowZ = position[2] + Math.cos(heading) * hullLength * 0.45
-    const spread = 0.34
-    const armLen = hullLength * (0.7 + speedFraction * 1.9)
-    const armWidth = 0.7 + speedFraction * 2.4
+    // The Kelvin angle proper. The arms were far too long and far too wide,
+    // which put a pair of solid grey ramps out ahead of the boat.
+    const spread = 0.33
+    const armLen = hullLength * (0.45 + speedFraction * 0.85)
+    const armWidth = 0.35 + speedFraction * 1.1
     for (let b = 0; b < 2; b++) {
       const sign = b === 0 ? -1 : 1
       const a = heading + Math.PI + sign * spread
@@ -215,7 +295,7 @@ export function createWake() {
         const along = (i / segs) * armLen
         const cx = bowX + Math.sin(a) * along
         const cz = bowZ + Math.cos(a) * along
-        const w = armWidth * (0.35 + (i / segs) * 1.0)
+        const w = armWidth * (0.3 + (i / segs) * 1.5)
         const nx = Math.cos(a)
         const nz = -Math.sin(a)
         for (const [vi2, s2] of [[i * 2, -1], [i * 2 + 1, 1]]) {
@@ -223,7 +303,11 @@ export function createWake() {
           const z = cz + nz * w * s2
           p.setXYZ(vi2, x, waveHeight(x, z, t) + WAKE_LIFT, z)
           u.setXY(vi2, s2 > 0 ? 1 : 0, i / segs)
-          f.setX(vi2, active ? (1 - i / segs) * Math.min(1, speedFraction * 2.6) : 0)
+          // Fade in off the stem as well as out along the arm, so it does not
+        // begin with a hard bright line at the bow.
+        const along = i / segs
+        const shape = Math.min(1, along * 4) * Math.pow(1 - along, 1.6)
+        f.setX(vi2, active ? shape * Math.min(1, speedFraction * 2.6) : 0)
         }
       }
       p.needsUpdate = true

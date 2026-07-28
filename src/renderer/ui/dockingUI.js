@@ -1829,7 +1829,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
           <p style="opacity:0.55;font-size:11px;margin:0 0 8px">Missile hardpoints</p>
           ${weaponTable(launchers)}
           <h3 class="armoury-section-title">Combat drones</h3>
-          <p style="opacity:0.7;font-size:12px;margin:0 0 10px">Hulls with drone bays start empty. Buy here, Install into a free bay (or equip from Loadout).</p>
+          <p style="opacity:0.7;font-size:12px;margin:0 0 10px">Hulls with drone bays start empty. Buy a drone here, then install it into a free bay (or equip from Loadout).</p>
           <table>
             <thead><tr><th>Drone</th><th>S/A/H</th><th>Price</th><th>St</th><th>On ship</th><th>Buy</th><th>Install</th><th>Sell</th></tr></thead>
             <tbody>${DRONES.slice()

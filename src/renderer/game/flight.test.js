@@ -129,9 +129,10 @@ test('A and D crab the hull sideways without turning it', () => {
     updateFlight(a, shipClass, new Set(['KeyA']), noMouse(), 1 / 60)
     updateFlight(d, shipClass, new Set(['KeyD']), noMouse(), 1 / 60)
   }
-  // Heading 0 means the bow is along +Z, so starboard is +X.
-  assert.ok(d.position[0] > 0.5, `D should move to starboard, got x=${d.position[0]}`)
-  assert.ok(a.position[0] < -0.5, `A should move to port, got x=${a.position[0]}`)
+  // Heading 0 means the bow is along +Z and up is +Y, so starboard — forward
+  // crossed with up — is -X. This had the sign backwards and swapped A and D.
+  assert.ok(d.position[0] < -0.5, `D should move to starboard, got x=${d.position[0]}`)
+  assert.ok(a.position[0] > 0.5, `A should move to port, got x=${a.position[0]}`)
   assert.ok(Math.abs(a.heading) < 1e-6, 'crabbing must not turn the hull')
   assert.ok(Math.abs(d.heading) < 1e-6, 'crabbing must not turn the hull')
 })
@@ -140,7 +141,7 @@ test('crabbing works dead in the water — that is the point of it', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const s = freshShipState()
   for (let i = 0; i < 60; i++) updateFlight(s, shipClass, new Set(['KeyD']), noMouse(), 1 / 60)
-  assert.ok(s.position[0] > 0.5, 'you must be able to come alongside from a standstill')
+  assert.ok(s.position[0] < -0.5, 'you must be able to come alongside from a standstill')
 })
 
 test('sideways way dies almost immediately once you stop crabbing', () => {

@@ -405,6 +405,10 @@ scene.add(sonarPulse.group)
 // Water on the lens. An artifact of the camera, so it is drawn over the formed
 // image rather than into the world (see render/scene.js setPostOverlay).
 const spray = createSprayOverlay()
+// Scratch for projecting the stem to screen each frame (see the frame loop).
+const _sprayOrigin = new THREE.Vector3()
+const _sprayShipPos = new THREE.Vector3()
+const _sprayQuat = new THREE.Quaternion()
 setPostOverlay((r) => {
   if (!spray.visible) return
   r.render(spray.scene, spray.camera)
@@ -4330,15 +4334,15 @@ window.addEventListener('keydown', (e) => {
       flashToast('No drone bays on this hull')
     } else if (e.code === 'KeyG') {
       const r = summonDrones(gameState)
-      if (!r.ok) flashToast(r.reason || 'Cannot launch drones')
+      if (!r.ok) flashToast(r.reason || 'Cannot launch support drones')
       else {
-        flashToast(`Drones launching (${r.launched})`)
+        flashToast(`Support drones away (${r.launched})`)
         syncDroneMeshes()
       }
     } else {
       const r = recallDrones(gameState)
       if (!r.ok) flashToast('No drones to recall')
-      else flashToast('Drones returning to bay')
+      else flashToast('Support drones returning to bay')
       // Meshes stay until return animation finishes (updatePlayerDrones).
     }
   } else if (e.code === 'Space' && !docked && !dockEffect && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
@@ -5588,7 +5592,21 @@ function animate() {
   // Water over the bow and speed streaks, scaled by how hard you are driving
   // her. Autopilot boosts both: it runs above the hull's own top speed, so
   // speedFraction alone would understate it.
-  spray.update(dt, shipSpeed / Math.max(1e-3, playerShipClass.stats.speed), cruising ? 1 : 0)
+  //
+  // The stem is projected to screen each frame so the spray radiates from where
+  // it is actually being thrown up — off the bow, past the chase camera —
+  // rather than from the middle of the frame.
+  _sprayOrigin
+    .set(0, 0, playerShipClass.hull.length * 0.5)
+    .applyQuaternion(_sprayQuat.fromArray(gameState.player.ship.quaternion))
+    .add(_sprayShipPos.fromArray(gameState.player.ship.position))
+    .project(camera)
+  spray.update(
+    dt,
+    shipSpeed / Math.max(1e-3, playerShipClass.stats.speed),
+    cruising ? 1 : 0,
+    [_sprayOrigin.x, _sprayOrigin.y]
+  )
   // Speed FOV: widens a little as the boat comes up onto the plane, fixed under
   // cruise. Snap when close or nearly stopped so the settle can't smear aim.
   const speedFovBoost =

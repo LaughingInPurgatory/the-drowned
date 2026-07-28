@@ -334,10 +334,13 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
     archetype === 'barge' || archetype === 'tug' || archetype === 'pilot' || archetype === 'hoy'
       ? range(rng, 0.16, 0.22)
       : archetype === 'hydrofoil' || archetype === 'cutter' || archetype === 'corvette'
-        ? range(rng, 0.075, 0.11)
+        // Fast, but still a boat. The old floor of 0.075 put half the Corsairs
+        // past 1:9 and some as fine as 1:15 — that is a racing shell, and it
+        // read as a dart rather than a hull however it was detailed.
+        ? range(rng, 0.105, 0.145)
         : archetype === 'tanker' || archetype === 'container'
           ? range(rng, 0.13, 0.17)
-          : range(rng, 0.11, 0.16)
+          : range(rng, 0.125, 0.175)
   const peakWidth = (length * beamRatio) / 2
 
   const fracs = archetypeFracs(rng, role, archetype)
@@ -349,6 +352,19 @@ function generateHullSilhouette(rng, role, forcedArchetype = null) {
       i >= 3 && i <= 8 && rng() < 0.35 ? range(rng, 0.88, 1.22) : 1
     return Math.max(0.08, f * peakWidth * wobble * midBump)
   })
+  // Normalise so the widest station actually *is* peakWidth. Without this the
+  // archetype's station fractions and the per-station wobble silently scale the
+  // beam down — beamRatio is documented as the number that decides whether a
+  // hull reads as a barge or a launch, but some archetypes peak well below 1.0,
+  // so the finest of them came out at 1:15. That is a racing shell.
+  {
+    const widest = Math.max(...stationWidths)
+    if (widest > 1e-6) {
+      const k = peakWidth / widest
+      for (let i = 0; i < stationWidths.length; i++) stationWidths[i] *= k
+    }
+  }
+
   // Depth of hull relative to beam. Cargo carriers are deep-sided; fast boats
   // are shallow so they can get up and plane.
   const heightRatio =

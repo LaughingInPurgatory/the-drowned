@@ -48,7 +48,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **Islands with shapes** — six landforms (dome, ridge, mesa, sea stack, atoll with a lagoon, scattered cluster) crossed with five materials (bare rock, scrub, drowned town, pre-war works, fresh basalt). Coloured by height, slope and tide line, with talus at the foot and ruins on the high ground where someone used to live.
 - **The Drowned** — pre-war military hulls and ordnance, never sold anywhere. The only way to get them is to salvage an extremely rare blueprint off a sunken warship and build it yourself.
 - **Salvage diving** — work sunken hulls with your deck guns for material; finite yield per hulk, better grades further out, and stripped fields settle again on the campaign clock. In **Security 0–3** there is a **10%** chance per hit of attracting raiders.
-- **Gunnery** — **LMB** fires every deck gun, **RMB** every torpedo tube; shields, armour, hull; boats that circle, break off when hit, run when beaten, and occasionally ram. Raiders may call a truce with you against the Drowned.
+- **Gunnery** — **LMB** fires every gun mount, **RMB** every launcher — deck guns, autocannon and catapults on one, harpoons, torpedoes and depth charges on the other; armour and hull, and nothing grows back; boats that circle, break off when hit, run when beaten, and occasionally ram. Raiders may call a truce with you against the Drowned.
 - **Bounties** — sinking a hostile pays a random credit bounty, higher in lawless water, plus whatever floats up out of the wreck.
 - **Escorts** — hulls with davits can carry launched RIBs; buy at **Boatyard → Armoury**, launch (**G**), recall (**H**). They engage only once shots are exchanged.
 - **Sonar drone** — sound islands and wreck fields for survey data, classification reports, and rare blueprints. Auto-returns after the scan.
@@ -107,8 +107,8 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **Mouse movement** | Rudder — steers even at a standstill |
 | **Alt + mouse** | Free-look around the boat (release Alt to restore the chase seat) |
 | **Alt + Enter** | Toggle fullscreen |
-| **Left click** | Fire all deck guns (can hold with RMB) |
-| **Right click** | Fire all torpedo tubes (can hold with LMB) |
+| **Left click** | Fire all guns (can hold with RMB) |
+| **Right click** | Fire all launchers (can hold with LMB) |
 | **W / S** | Ahead / astern (coasts down when released; astern capped at 25% of ahead) |
 | **S** | While alongside: open/close **Harbour Services** |
 | **A / D** | Crab sideways to port / starboard — works stopped, for coming alongside |
@@ -121,8 +121,8 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **B** | Sounding (or click the region chip) |
 | **F** | Use targeted contact: salvage wreck · come alongside · crack a datacore nodule |
 | **P** | Launch / recover the sonar drone |
-| **G** | Launch escorts (requires escorts in davits) |
-| **H** | Recall escorts |
+| **G** | Launch support drones (requires drones in the bays) |
+| **H** | Recall support drones |
 | **I** | Hold |
 | **J** | Contracts |
 | **F1** | Character sheet |

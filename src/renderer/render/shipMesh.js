@@ -311,27 +311,9 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     return stationHeights[i] + off
   }
 
-  // —— Deck ————————————————————————————————————————————————————————
-  // A flat working surface spanning the hull. Without it you can see straight
-  // down into an open shell, which is the single biggest tell of a fuselage.
-  {
-    const deckSegs = 10
-    const pts = []
-    for (let i = 0; i <= deckSegs; i++) {
-      const f = i / deckSegs
-      pts.push(new THREE.Vector2(Math.max(0.02, halfBeamAt(f) * 0.94), zAt(f)))
-    }
-    const shape = new THREE.Shape()
-    shape.moveTo(pts[0].x, pts[0].y)
-    for (const p of pts) shape.lineTo(p.x, p.y)
-    for (let i = pts.length - 1; i >= 0; i--) shape.lineTo(-pts[i].x, pts[i].y)
-    shape.closePath()
-    const deck = new THREE.Mesh(new THREE.ShapeGeometry(shape), mats.panel)
-    deck.rotation.x = -Math.PI / 2
-    deck.position.y = deckAt(0.5) * 0.96
-    deck.receiveShadow = true
-    group.add(deck)
-  }
+  // No deck slab here any more. The hull lofter builds a real cambered deck as
+  // part of the section (see procgen/hull.js), so laying another one on top of
+  // it just z-fights.
 
   // —— Wheelhouse ——————————————————————————————————————————————————
   // Where it sits is most of a vessel's silhouette: a trawler works its deck

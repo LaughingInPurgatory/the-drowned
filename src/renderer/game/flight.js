@@ -138,7 +138,10 @@ export function updateFlight(shipState, shipClass, keys, mouseAim, dt, skillOpts
   shipState.heading = heading
 
   const forward = _fwd.set(Math.sin(heading), 0, Math.cos(heading)).clone()
-  const starboard = _right.set(Math.cos(heading), 0, -Math.sin(heading)).clone()
+  // Starboard is forward × up. With the bow along +Z and up along +Y that is
+  // -X, not +X — the same fact the chase camera relies on when it notes that
+  // hull local +X is screen-left. Getting the sign wrong swapped A and D.
+  const starboard = _right.set(-Math.cos(heading), 0, Math.sin(heading)).clone()
 
   // Thrust response > 1 so we settle on stats.speed quickly; terminal speed
   // is still exactly `speed` (dragK scales with the same factor).

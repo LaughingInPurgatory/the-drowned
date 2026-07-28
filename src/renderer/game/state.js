@@ -58,7 +58,7 @@ export function createGameState({
       combatEngagedNpcIds: {},
       // Authority reputation 0–10 (see game/security.js). Start clean.
       lawStanding: 10,
-      // Optional base64 data-URL of player portrait (Create Pilot / Character upload).
+      // Optional base64 data-URL of player portrait (Create Skipper / Character upload).
       portraitDataUrl: portraitDataUrl || null,
       // Player-only skills 0–20 (data/skills.js) — raised via skillbooks.
       skills: emptySkills(),

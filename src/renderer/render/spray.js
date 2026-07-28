@@ -33,8 +33,14 @@ const STREAK_LIFETIME = [0.16, 0.42]
 const DROP_SAG = [0.005, 0.035]
 /** Speed (as a fraction of the hull's top) below which nothing comes aboard. */
 const SPRAY_THRESHOLD = 0.35
-/** Speed fraction at which streaks start. Lower than spray — they sell motion. */
-const STREAK_THRESHOLD = 0.2
+/**
+ * Speed fraction at which streaks start.
+ *
+ * High on purpose. At cruising speed they read as scratches on the lens rather
+ * than a sense of motion — this is an effect for when you are really moving,
+ * and under autopilot, not for pottering about the harbour.
+ */
+const STREAK_THRESHOLD = 0.72
 /** NDC/sec a droplet is dragged toward the edge, at full speed. */
 const RADIAL_DRAG = 0.55
 /** NDC/sec a streak travels outward, at full speed. */
@@ -74,7 +80,11 @@ void main() {
   // glass rather than just sliding down it.
   vec2 d = normalize(vDir + vec2(1e-5, 0.0));
   vec2 local = vec2(dot(uv, vec2(d.y, -d.x)), dot(uv, d));
-  local.y /= max(0.25, vStretch);
+  // Stretch by *narrowing across* the direction of travel, never by widening
+  // along it. Dividing local.y by the stretch shrank the coordinate until
+  // nothing exceeded the cutoff any more, so the discard never fired and every
+  // droplet drew as a solid square the size of its whole point sprite.
+  local.x *= max(1.0, vStretch);
   float r = length(local);
   if (r > 0.5) discard;
 
@@ -83,7 +93,7 @@ void main() {
     // ends so it has no hard cap.
     float spine = smoothstep(0.5, 0.0, abs(local.x) * 2.0);
     float along = smoothstep(0.5, 0.12, abs(local.y));
-    float a = spine * along * vAlpha * 0.5;
+    float a = spine * along * vAlpha * 0.28;
     if (a <= 0.002) discard;
     gl_FragColor = vec4(vec3(0.82, 0.9, 0.94), a);
     return;
@@ -150,14 +160,23 @@ export function createSprayOverlay() {
   let carry = 0
   let streakCarry = 0
 
-  /** Unit vector from screen centre to (x, y), guarding the exact centre. */
+  // Where the water is coming *from*, in NDC. Under the chase camera the bow is
+  // a little below screen centre, and everything thrown up by it flies out past
+  // the lens from there — not from the middle of the frame. The frame loop
+  // projects the stem each frame and hands it over; this is the fallback for
+  // anything that does not.
+  const origin = [0, -0.25]
+
+  /** Unit vector from the emission point to (x, y), guarding coincidence. */
   function outward(x, y) {
-    const len = Math.hypot(x, y)
+    const dx = x - origin[0]
+    const dy = y - origin[1]
+    const len = Math.hypot(dx, dy)
     if (len < 1e-4) {
       const a = Math.random() * Math.PI * 2
       return [Math.cos(a), Math.sin(a)]
     }
-    return [x / len, y / len]
+    return [dx / len, dy / len]
   }
 
   function spawn(strength = 1) {
@@ -169,9 +188,10 @@ export function createSprayOverlay() {
     d.life = d.maxLife
     d.sag = DROP_SAG[0] + Math.random() * (DROP_SAG[1] - DROP_SAG[0])
     d.size = (6 + Math.random() * 22) * (0.6 + strength * 0.6)
-    const x = (Math.random() - 0.5) * 1.95
-    // Weighted toward the lower half, where spray off the bow actually lands.
-    const y = -0.15 + (Math.random() - 0.5) * 1.5
+    // Landing spread over the glass, but biased toward the bow — that is where
+    // it is being thrown from, so that is where most of it hits.
+    const x = origin[0] * 0.5 + (Math.random() - 0.5) * 1.95
+    const y = origin[1] * 0.5 + (Math.random() - 0.5) * 1.5
     positions[i * 3] = x
     positions[i * 3 + 1] = y
     positions[i * 3 + 2] = 0
@@ -194,12 +214,14 @@ export function createSprayOverlay() {
     d.life = d.maxLife
     d.sag = 0
     d.size = (14 + Math.random() * 26) * (0.5 + strength * 0.9)
-    // Start close in and let the radial motion throw them at the edges — that
-    // is what makes it read as coming *at* you rather than drifting past.
+    // Born at the bow and thrown outward past the lens. Starting them close to
+    // the stem and letting the radial motion carry them to the edges is what
+    // makes it read as water coming *at* you off the bow rather than a pattern
+    // drifting across the screen.
     const angle = Math.random() * Math.PI * 2
-    const r = 0.05 + Math.random() * 0.45
-    const x = Math.cos(angle) * r * 1.6
-    const y = Math.sin(angle) * r
+    const r = 0.04 + Math.random() * 0.34
+    const x = origin[0] + Math.cos(angle) * r * 1.6
+    const y = origin[1] + Math.sin(angle) * r
     positions[i * 3] = x
     positions[i * 3 + 1] = y
     positions[i * 3 + 2] = 0
@@ -228,8 +250,16 @@ export function createSprayOverlay() {
    * @param {number} boost extra sense-of-speed on top, 0–1. Autopilot passes 1:
    *   you are going faster than the hull's own top speed, so the streaks should
    *   not be capped by it.
+   * @param {number[]} [emitFrom] the bow's position in NDC, so spray radiates
+   *   from where it is actually being thrown up rather than from screen centre.
    */
-  function update(dt, speedFraction = 0, boost = 0) {
+  function update(dt, speedFraction = 0, boost = 0, emitFrom = null) {
+    if (emitFrom) {
+      // Clamp: once the bow swings off-screen (hard turn, free-look) an
+      // unbounded origin sends every droplet across the frame in one direction.
+      origin[0] = Math.max(-0.8, Math.min(0.8, emitFrom[0]))
+      origin[1] = Math.max(-0.9, Math.min(0.6, emitFrom[1]))
+    }
     // Accumulate spray with speed. Below the threshold the bow is not throwing
     // anything up, so nothing lands and what is there dries off.
     const over = Math.max(0, speedFraction - SPRAY_THRESHOLD) / (1 - SPRAY_THRESHOLD)
@@ -250,7 +280,7 @@ export function createSprayOverlay() {
       Math.max(0, speedFraction - STREAK_THRESHOLD) / (1 - STREAK_THRESHOLD) + boost
     )
     if (rush > 0.01) {
-      streakCarry += rush * rush * 55 * dt
+      streakCarry += rush * rush * rush * 34 * dt
       while (streakCarry >= 1) {
         streakCarry -= 1
         spawnStreak(rush)
@@ -285,6 +315,11 @@ export function createSprayOverlay() {
         sizes[i] = d.size
         const px = positions[i * 3]
         const py = positions[i * 3 + 1]
+        // Keep the streak pointing along its own travel as it goes, so a long
+        // one curves out of the frame rather than staying on its birth bearing.
+        const [ndx, ndy] = outward(px, py)
+        dirs[i * 2] = ndx
+        dirs[i * 2 + 1] = ndy
         if (Math.abs(px) > 1.35 || Math.abs(py) > 1.35) d.life = 0
         continue
       }
