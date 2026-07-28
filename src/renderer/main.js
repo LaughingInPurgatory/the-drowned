@@ -1446,38 +1446,85 @@ function updateBodyVisibility() {
 /**
  * Everything in the world the sea breaks against, as flat circles.
  *
- * Built once when the world's meshes are (nothing moves), then handed to the
- * ocean shader each frame so it can pick the nearest few — see
- * oceanMesh.setSurfObstacles. Islands use their traced coastline rather than
- * `body.radius`, which is the whole disc including the shelf and would put the
- * surf line well out to sea.
+ * Fine-grained on purpose: one circle per *thing*, not one per body. A single
+ * circle drawn round a whole harbour cannot foam against its mole, its piles
+ * or the rocks at its foot, and those are what the water is actually breaking
+ * on — it just fills the footprint with white instead.
+ *
+ * The static half is built once when the world's meshes are, since nothing in
+ * it moves. Vessels are added per frame.
  */
-let surfObstacles = []
+let staticSurfObstacles = []
+const _surfBounds = new THREE.Box3()
+const _surfSize = new THREE.Vector3()
+
 function rebuildSurfObstacles() {
   const world = getWorld(gameState.galaxy)
-  surfObstacles = []
+  staticSurfObstacles = []
   for (const body of world?.bodies ?? []) {
-    let radius = 0
-    if (body.kind === 'island') radius = islandMaxShoreline(body)
-    // Harbours and shoals have no radius of their own; size them off the mesh
-    // that actually got built, so the surf hugs the quay it is breaking on.
-    else if (body.kind === 'port' || body.kind === 'outpost') {
+    if (body.kind === 'island') {
+      // The traced coastline, not `body.radius` — that is the whole disc
+      // including the shelf, and would put the surf line well out to sea.
+      const r = islandMaxShoreline(body)
+      if (r > 0) staticSurfObstacles.push({ x: body.position[0], z: body.position[2], radius: r })
+      continue
+    }
+    if (body.kind === 'wreckField') {
+      // Every hulk individually. A field is a scatter of separate wrecks with
+      // open water between them, so one circle over the lot would foam the gaps.
+      for (const rock of getAsteroidRocks(body)) {
+        staticSurfObstacles.push({
+          x: body.position[0] + rock.position[0],
+          z: body.position[2] + rock.position[2],
+          radius: rock.collisionRadius * 0.8
+        })
+      }
+      continue
+    }
+    if (body.kind === 'port' || body.kind === 'outpost') {
       const mesh = bodyMeshes.get(body.id)
       if (!mesh) continue
       _surfBounds.setFromObject(mesh)
       _surfBounds.getSize(_surfSize)
-      radius = Math.max(_surfSize.x, _surfSize.z) * 0.5
-    } else if (body.kind === 'wreckField') {
-      // A shoal breaks water across the whole scatter, not just at its middle.
-      radius = (body.radius ?? 0) * 0.75
-    }
-    if (radius > 0) {
-      surfObstacles.push({ x: body.position[0], z: body.position[2], radius })
+      const r = Math.max(_surfSize.x, _surfSize.z) * 0.5
+      if (r > 0) staticSurfObstacles.push({ x: body.position[0], z: body.position[2], radius: r })
     }
   }
 }
-const _surfBounds = new THREE.Box3()
-const _surfSize = new THREE.Vector3()
+
+/**
+ * The static list plus everything afloat right now.
+ *
+ * Hulls get a foam collar too — a boat sitting in the water with no disturbance
+ * at its waterline looks pasted on, the same way an island did before it had a
+ * shoreline. This is separate from the wake, which is what a hull leaves
+ * *behind*; this is what it displaces where it sits.
+ */
+const _surfFrame = []
+function currentSurfObstacles() {
+  _surfFrame.length = 0
+  for (const o of staticSurfObstacles) _surfFrame.push(o)
+  const ship = gameState?.player?.ship
+  if (ship && !docked) {
+    _surfFrame.push({
+      x: ship.position[0],
+      z: ship.position[2],
+      radius: getShipCollisionRadius(playerShipClass) * 0.55
+    })
+  }
+  for (const npc of gameState?.npcs ?? []) {
+    if (npc.destroyed) continue
+    let r = 8
+    try {
+      r = getShipCollisionRadius(getShipClass(npc.shipClassId)) * 0.55
+    } catch {
+      /* unknown class — a nominal collar is better than none */
+    }
+    _surfFrame.push({ x: npc.position[0], z: npc.position[2], radius: r })
+  }
+  return _surfFrame
+}
+
 
 /** Spawn / top-up police patrols (stations Sec 3–6, warp gates Sec 4–6). */
 function refreshStationPolicePatrols() {
@@ -5508,7 +5555,7 @@ function animate() {
     syncMeshToEntity(playerMesh, gameState.player.ship)
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
     updateBodyVisibility()
-  ocean.setSurfObstacles(surfObstacles, camera)
+  ocean.setSurfObstacles(currentSurfObstacles(), camera)
     applyDockOrbitCamera()
     refreshEnvironment(gameState.simTime)
     render()
@@ -5985,7 +6032,7 @@ function animate() {
   // Harbour beacons pulse. Land does not animate.
   for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
   updateBodyVisibility()
-  ocean.setSurfObstacles(surfObstacles, camera)
+  ocean.setSurfObstacles(currentSurfObstacles(), camera)
   // Depleted rocks "explode" (see onProjectileHit) and stay hidden until
   // their own respawn delay passes — isRockAlive is the single source of
   // truth for that, shared with targeting (getTargetableEntities/resolveTarget).

@@ -446,12 +446,60 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     mastScale: 0.06
   })
 
+  // —— Bulwark ————————————————————————————————————————————————————
+  // A solid wall standing up from the deck edge, following the sheer.
+  //
+  // This is the single detail that stops a hull reading as a raft. Seen from
+  // the chase camera you look *down* at a boat, and with a bare flat deck there
+  // is no side to see — the water meets the deck and the whole thing looks
+  // awash. Thin stanchions do not fix that at any distance; a solid strake
+  // does, because it gives the deck an edge that stands proud of the sea.
+  const bulwarkH = depth * 0.34
+  {
+    const segs = 16
+    const thickness = Math.max(0.06, beam * 0.05)
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < segs; i++) {
+        const f0 = 0.04 + (i / segs) * 0.9
+        const f1 = 0.04 + ((i + 1) / segs) * 0.9
+        const x0 = sx * halfBeamAt(f0) * 0.97
+        const x1 = sx * halfBeamAt(f1) * 0.97
+        const z0 = zAt(f0)
+        const z1 = zAt(f1)
+        const dx = x1 - x0
+        const dz = z1 - z0
+        const run = Math.hypot(dx, dz)
+        if (run < 1e-4) continue
+        // The sheer rises toward the bow, so each segment sits at its own
+        // deck height rather than one level all the way along.
+        const y = (deckAt(f0) + deckAt(f1)) * 0.5
+        const panel = add(
+          new THREE.Mesh(new THREE.BoxGeometry(thickness, bulwarkH, run * 1.06), mats.panel)
+        )
+        panel.position.set((x0 + x1) * 0.5, y + bulwarkH * 0.42, (z0 + z1) * 0.5)
+        panel.rotation.y = Math.atan2(dx, dz)
+      }
+    }
+    // Capping rail along the top of the strake — a bright line that reads the
+    // sheer from a distance.
+    for (const sx of [-1, 1]) {
+      const cap = add(
+        new THREE.Mesh(
+          new THREE.BoxGeometry(thickness * 1.5, depth * 0.05, length * 0.86),
+          mats.accent
+        )
+      )
+      cap.position.set(sx * halfBeamAt(0.5) * 0.97, deckAt(0.5) + bulwarkH * 0.9, zAt(0.5))
+    }
+  }
+
   // —— Railings ————————————————————————————————————————————————————
-  // A stanchion every so often with two rails through them. This is what makes
-  // the deck read as a place a person could stand.
+  // A stanchion every so often with two rails through them, standing on top of
+  // the bulwark. This is what makes the deck read as a place a person could
+  // stand.
   {
     const posts = 9 + (kit % 5)
-    const railY = deckAt(0.5) * 0.96
+    const railY = deckAt(0.5) * 0.96 + bulwarkH
     const stanchionH = depth * 0.3
     for (let i = 0; i < posts; i++) {
       const f = 0.06 + (i / (posts - 1)) * 0.86

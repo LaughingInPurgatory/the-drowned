@@ -1268,7 +1268,7 @@ const HULL_DEPTH_SCALE = 2
  * half in it". Raising every hull to a floor here lifts the flat ones without
  * flattening the sheer the roster went to the trouble of drawing.
  */
-const MIN_FREEBOARD_FRACTION = 0.32
+const MIN_FREEBOARD_FRACTION = 0.42
 /** Rise of the deck line toward the bow on hulls that had none authored. */
 const DEFAULT_SHEER = 0.22
 

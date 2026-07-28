@@ -14,11 +14,14 @@ const SEGMENTS = 200
 // point each frame, which shimmers. Snapping the centre to a quantum holds the
 // sample points still between steps.
 const CENTER_SNAP = 4
-// How many obstacles the surf pass can consider at once. Only what is in sight
-// matters, and the disc is refreshed every frame, so a small window is plenty —
-// this is a fixed-size uniform array, and every slot costs the fragment shader
-// a distance test per pixel.
-const SURF_SLOTS = 12
+// How many obstacles the surf pass can consider at once.
+//
+// Enough for every individual thing near the boat rather than one circle per
+// body: each wreck hulk, each vessel, each harbour. A single circle round a
+// whole structure cannot foam against the parts of it, and the parts are what
+// the water is actually breaking on. Each slot costs one distance test per
+// pixel, with an early-out for anything not close to its own band.
+const SURF_SLOTS = 28
 // Past this there is nothing to see through the fog anyway.
 const SURF_RANGE = 5000
 
@@ -241,13 +244,24 @@ float surfAt(vec2 p) {
     if (i >= uSurfCount) break;
     vec3 o = uSurf[i];
     if (o.z <= 0.0) continue;
+    // Signed distance to the obstacle's edge: negative inside, positive out.
     float d = length(p - o.xy) - o.z;
-    if (d > 90.0) continue;
-    // Widest band on the biggest obstacles: a shoal makes a thin line of broken
-    // water, a headland makes a surf zone you can see from miles off.
-    float band = clamp(o.z * 0.14, 9.0, 80.0);
-    // Squared falloff — heaped right at the edge, thinning fast going out.
-    float k = 1.0 - clamp(d / band, 0.0, 1.0);
+
+    // Surf is a *band along the edge*, not a filled disc.
+    //
+    // The falloff used to be one-sided, so every point inside the circle got
+    // full strength — which turned a harbour, whose footprint circle covers the
+    // whole structure, into a solid white blob of water with a hard rim. Water
+    // breaks *where it meets* the thing; a few boat-lengths inside the
+    // footprint there is nothing to break on.
+    float outward = clamp(o.z * 0.55, 3.5, 40.0);
+    // Shorter on the inside — the lee of an obstacle is calmer than its face.
+    float inward = outward * 0.5;
+    float band = d >= 0.0 ? outward : inward;
+    if (abs(d) > band) continue;
+    float k = 1.0 - clamp(abs(d) / band, 0.0, 1.0);
+    // Cubic rather than squared: tighter to the edge, so the band reads as a
+    // line of broken water instead of a wide smear.
     surf = max(surf, k * k);
   }
   return surf;
@@ -262,12 +276,24 @@ void main() {
   float shadeDetail = 1.0 - smoothstep(2500.0, 9000.0, dist);
   vec3 N = seaNormal(vWorldPos.xz, uTime);
 
-  // Lay the ripple slope on top of the swell normal. Perturbing the normal is
-  // exactly equivalent to having displaced by that height field, at none of
-  // the vertex cost, and it is what gives the surface texture at close range.
-  float rippleFade = 1.0 - smoothstep(120.0, 2000.0, dist);
+  // Two normals, not one.
+  //
+  // The ripple field is microfacet detail. Feeding it into the *body* shading
+  // makes the surface grainy — light and dark speckle across the colour, which
+  // is exactly what sand looks like. Real water shows its ripples as
+  // **sparkle**: the facets are far too small to shade individually, but they
+  // catch the sun and the sky and glitter.
+  //
+  // So the swell normal drives colour, fresnel and reflection, and the detailed
+  // normal drives only the specular lobes. That one split is the difference
+  // between a wet beach and open water.
+  float rippleFade = 1.0 - smoothstep(120.0, 2600.0, dist);
   vec2 rs = rippleSlope(vWorldPos.xz, uTime, rippleFade);
-  N = normalize(vec3(N.x - rs.x, N.y, N.z - rs.y));
+  vec3 Ndetail = normalize(vec3(N.x - rs.x, N.y, N.z - rs.y));
+  Ndetail = normalize(mix(vec3(0.0, 1.0, 0.0), Ndetail, shadeDetail));
+  // A trace of the ripple in the shading normal keeps the surface from looking
+  // plasticky, but only a trace.
+  N = normalize(mix(N, Ndetail, 0.18));
   N = normalize(mix(vec3(0.0, 1.0, 0.0), N, shadeDetail));
 
   vec3 V = normalize(cameraPosition - vWorldPos);
@@ -312,16 +338,16 @@ void main() {
   // Specular. Two lobes: a tight sun track, and a broad sheen off the ripple
   // field that reads as glitter when the surface is busy.
   vec3 H = normalize(uSunDir + V);
-  float ndh = max(dot(N, H), 0.0);
+  float ndh = max(dot(Ndetail, H), 0.0);
   float sunUp = smoothstep(-0.08, 0.12, uSunDir.y);
   col += uSunColor * pow(ndh, 300.0) * 3.0 * sunUp;
-  col += uSunColor * pow(ndh, 24.0) * 0.16 * sunUp;
+  col += uSunColor * pow(ndh, 18.0) * 0.30 * sunUp;
 
   // Moonlight. The same two-lobe treatment as the sun — a tight track and a
   // broad sheen — because a moon path on water is the same phenomenon, just
   // far dimmer and colder. Without it a night sea is a flat black sheet.
   vec3 MH = normalize(uMoonDir + V);
-  float ndmh = max(dot(N, MH), 0.0);
+  float ndmh = max(dot(Ndetail, MH), 0.0);
   float moonUp = smoothstep(-0.06, 0.10, uMoonDir.y);
   vec3 moonTint = vec3(0.72, 0.80, 0.95);
   col += moonTint * pow(ndmh, 340.0) * 1.1 * moonUp * uMoonBright;
@@ -361,7 +387,7 @@ void main() {
   // Whitecaps. Steepness picks where they can form; a noise field decides
   // whether one actually has, so the foam breaks up instead of painting a
   // smooth band along every wave back.
-  float steepness = 1.0 - N.y;
+  float steepness = 1.0 - seaNormal(vWorldPos.xz, uTime).y;
   float foamMask = smoothstep(0.085, 0.21, steepness);
   float breakup = noised(vWorldPos.xz * 0.55 + vec2(uTime * 0.22, uTime * -0.16)).x;
   breakup += noised(vWorldPos.xz * 1.9 - vec2(uTime * 0.4)).x * 0.5;
