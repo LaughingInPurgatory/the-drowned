@@ -36,8 +36,13 @@ jobs:
           - os: ubuntu-24.04-arm
             args: --linux AppImage --arm64
             artifacts: 'release/*.AppImage'
+          # Separate jobs so each arch produces a distinctly named installer
+          # (combined --x64 --arm64 only uploaded one Setup.exe).
           - os: windows-latest
-            args: --win nsis --x64 --arm64
+            args: --win nsis --x64
+            artifacts: 'release/*.exe'
+          - os: windows-latest
+            args: --win nsis --arm64
             artifacts: 'release/*.exe'
 
     runs-on: ${{ matrix.os }}
