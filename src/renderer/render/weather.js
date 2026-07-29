@@ -12,7 +12,8 @@ import * as THREE from 'three'
  * sort of weather window rather than a fresh roll every boot.
  */
 
-const MAX_DROPS = 340
+/** Many fine streaks rather than a few huge dashes. */
+const MAX_DROPS = 900
 
 /** Seconds of clear / thunderstorm windows (campaign time). No plain rain. */
 const CLEAR_RANGE = [140, 420]
@@ -38,17 +39,15 @@ varying float vAlpha;
 varying float vStretch;
 void main() {
   vec2 uv = gl_PointCoord - 0.5;
-  // Streaks fall mostly downward: compress X, stretch Y.
-  uv.x *= uAspect * (0.48 + vStretch * 0.12);
-  uv.y *= 1.0 / max(vStretch, 0.5);
+  // Thin streaks: narrow X, modest Y stretch — not giant rods.
+  uv.x *= uAspect * (0.72 + vStretch * 0.08);
+  uv.y *= 1.0 / max(vStretch, 0.65);
   float d = length(uv);
-  float core = smoothstep(0.5, 0.05, d);
-  // Soft head so a drop is a dash, not a hard rod.
-  float tip = smoothstep(0.55, 0.0, abs(uv.y + 0.12));
+  float core = smoothstep(0.48, 0.06, d);
+  float tip = smoothstep(0.52, 0.0, abs(uv.y + 0.1));
   float a = core * tip * vAlpha;
-  if (a < 0.012) discard;
-  // Brighter cool-white so streaks read against dark sea/sky.
-  gl_FragColor = vec4(0.88, 0.92, 0.98, a * 0.88);
+  if (a < 0.015) discard;
+  gl_FragColor = vec4(0.86, 0.9, 0.96, a * 0.72);
 }
 `
 
@@ -265,9 +264,9 @@ export function createWeather() {
     positions[i * 3] = (Math.random() * 2 - 1) * 1.08
     positions[i * 3 + 1] = 1.05 + Math.random() * 0.25
     positions[i * 3 + 2] = 0
-    // Bigger streaks — need to read on a dark overcast sky.
-    sizes[i] = 16 + Math.random() * 34 * intensity
-    stretch[i] = 3.0 + Math.random() * 4.8 * intensity
+    // Small, dense drops (was 16–50px rods that read as fat rain).
+    sizes[i] = 3.5 + Math.random() * 5.5 * (0.55 + intensity * 0.45)
+    stretch[i] = 1.35 + Math.random() * 1.6 * (0.6 + intensity * 0.4)
     alphas[i] = 0
   }
 
@@ -327,9 +326,9 @@ export function createWeather() {
       hemiMul
     }
 
-    // Rain spawn rate — only once it is actually raining, not during prelude.
+    // Rain spawn rate — denser field of small drops in storms.
     if (wx.rain > 0.02) {
-      const rate = wx.rain * wx.rain * (wx.storm > 0.2 ? 150 : 88)
+      const rate = wx.rain * wx.rain * (wx.storm > 0.2 ? 520 : 280)
       spawnCarry += rate * dt
       while (spawnCarry >= 1) {
         spawnCarry -= 1

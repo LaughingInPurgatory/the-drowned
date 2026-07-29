@@ -2,6 +2,33 @@ import * as THREE from 'three'
 
 let loader = null
 const cache = {}
+/** Optional hook fired after any map finishes loading (session can re-upload). */
+let textureReadyHook = null
+let textureReadyHookQueued = false
+
+/**
+ * Register a callback invoked (debounced) whenever a texture finishes loading.
+ * Used by the session to re-upload maps that bound mid-flight on Continue.
+ */
+export function setTextureReadyHook(fn) {
+  textureReadyHook = typeof fn === 'function' ? fn : null
+}
+
+function notifyTextureReady() {
+  if (!textureReadyHook || textureReadyHookQueued) return
+  textureReadyHookQueued = true
+  // Coalesce a burst of JPEG completions into one refresh next frame.
+  const run = () => {
+    textureReadyHookQueued = false
+    try {
+      textureReadyHook?.()
+    } catch {
+      /* */
+    }
+  }
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(run)
+  else setTimeout(run, 0)
+}
 
 // One shared, read-only texture triple (or quadruple with metalness) per
 // surface prefix rather than a clone per body — keeps GPU memory bounded
@@ -16,10 +43,37 @@ const cache = {}
 // suites transitively import this module (via asteroidFieldMesh.js's
 // getAsteroidRocks) but run under plain Node with no DOM, and never
 // actually build a mesh, so they must never trigger a real texture load.
-// Configure wrap/colorSpace only in the load callback. Setting those on an
-// empty Texture marks needsUpdate before image data exists, which spams
-// "Texture marked for update but no image data found" every frame until load.
-function configureMap(tex, { srgb = false, repeatU = 1, repeatV = 1 } = {}) {
+//
+// Never set needsUpdate on a texture that has no image yet — that spams
+// "Texture marked for update but no image data found" every frame and can
+// leave materials sampling empty maps until a hard reload.
+function textureHasImage(tex) {
+  const img = tex?.image
+  if (!img) return false
+  // HTMLImageElement: must be fully loaded — width alone can be non-zero on a
+  // broken/incomplete decode and still triggers Three's empty-upload warning.
+  if (typeof img.complete === 'boolean') {
+    return img.complete && (img.naturalWidth > 0 || img.width > 0)
+  }
+  if (img.data && typeof img.width === 'number' && img.width > 0) return true
+  if (typeof img.width === 'number' && img.width > 0 && typeof img.height === 'number' && img.height > 0) {
+    return true
+  }
+  return false
+}
+
+/** Resolve public/ textures against the page origin (dev server + packaged). */
+function resolveTextureUrl(relPath) {
+  const clean = String(relPath || '').replace(/^\.\//, '')
+  if (typeof window === 'undefined') return clean
+  try {
+    return new URL(clean, window.location.href).href
+  } catch {
+    return clean.startsWith('/') ? clean : `/${clean}`
+  }
+}
+
+function applyMapSettings(tex, { srgb = false, repeatU = 1, repeatV = 1 } = {}, markUpdate = false) {
   if (srgb) tex.colorSpace = THREE.SRGBColorSpace
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
   tex.repeat.set(repeatU, repeatV)
@@ -28,21 +82,39 @@ function configureMap(tex, { srgb = false, repeatU = 1, repeatV = 1 } = {}) {
   tex.minFilter = THREE.LinearMipmapLinearFilter
   tex.magFilter = THREE.LinearFilter
   tex.generateMipmaps = true
-  tex.needsUpdate = true
+  if (markUpdate && textureHasImage(tex)) tex.needsUpdate = true
   return tex
 }
 
+/** Full configure once the image is present (load callback). */
+function configureMap(tex, opts = {}) {
+  return applyMapSettings(tex, opts, true)
+}
+
 function loadMap(url, opts = {}) {
-  // Configure the placeholder immediately so wrap/colorSpace are right the
-  // moment the image arrives (and so we never leave a 0-size default that
-  // reads as a solid tint when multiplied by vertex colour).
+  // Soft-configure the placeholder (wrap / colour space) without forcing a
+  // GPU upload. needsUpdate only after the image actually arrives.
+  // Clones made while the load is in-flight share this texture's Source; when
+  // the image lands we re-configure those clones so they actually show up.
+  const resolved = resolveTextureUrl(url)
   const tex = loader.load(
-    url,
-    (t) => configureMap(t, opts),
+    resolved,
+    (t) => {
+      configureMap(t, opts)
+      const clones = t.userData?._mapClones
+      if (clones?.length) {
+        for (const c of clones) configureMap(c, opts)
+        clones.length = 0
+      }
+      notifyTextureReady()
+    },
     undefined,
-    () => console.warn('[textures] failed to load', url)
+    () => console.warn('[textures] failed to load', resolved)
   )
-  return configureMap(tex, opts)
+  tex.userData = tex.userData ?? {}
+  tex.userData._mapClones = []
+  tex.userData._srcUrl = resolved
+  return applyMapSettings(tex, opts, false)
 }
 
 function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {}) {
@@ -52,6 +124,8 @@ function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {
   // maps rather than throwing, so mesh builders stay callable in tests.
   if (typeof document === 'undefined') return undefined
   loader ??= new THREE.TextureLoader()
+  // Prefer absolute-from-origin paths so Electron file:// and Vite dev both hit
+  // public/textures without depending on the current route fragment.
   const opts = { repeatU, repeatV }
   const map = loadMap(`textures/${prefix}_color.jpg`, { ...opts, srgb: true })
   const normalMap = loadMap(`textures/${prefix}_normal.jpg`, opts)
@@ -151,16 +225,121 @@ export function getWaterNormalMap() {
   if (cache[key]) return cache[key]
   if (typeof document === 'undefined') return undefined
   loader ??= new THREE.TextureLoader()
-  const tex = loader.load('textures/water_normal.jpg', (t) => {
-    t.wrapS = t.wrapT = THREE.RepeatWrapping
-    t.repeat.set(1, 1)
-    t.anisotropy = 8
-    t.minFilter = THREE.LinearMipmapLinearFilter
-    t.magFilter = THREE.LinearFilter
-    t.generateMipmaps = true
-    t.needsUpdate = true
-  })
+  const waterUrl = resolveTextureUrl('textures/water_normal.jpg')
+  const tex = loader.load(
+    waterUrl,
+    (t) => {
+      t.wrapS = t.wrapT = THREE.RepeatWrapping
+      t.repeat.set(1, 1)
+      t.anisotropy = 8
+      t.minFilter = THREE.LinearMipmapLinearFilter
+      t.magFilter = THREE.LinearFilter
+      t.generateMipmaps = true
+      t.needsUpdate = true
+      notifyTextureReady()
+    },
+    undefined,
+    () => console.warn('[textures] failed to load', waterUrl)
+  )
+  // Placeholder wrap only — no needsUpdate until the image lands.
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  cache[key] = tex
+  return tex
+}
+
+/**
+ * Seamless organic algae / phytoplankton film for ocean surface slicks.
+ *
+ * Procedural (no extra asset): green-brown mottling, soft filaments, and
+ * density holes so blooms read as living scum rather than a flat tint.
+ * G.channel ≈ density (shader uses it as a mask); R/B carry olive–rust variety.
+ */
+export function getAlgaeAlbedoMap() {
+  const key = 'algae|albedo|v1'
+  if (cache[key]) return cache[key]
+  if (typeof document === 'undefined') return undefined
+
+  const size = 512
+  const canvas = document.createElement('canvas')
+  canvas.width = canvas.height = size
+  const ctx = canvas.getContext('2d')
+  const img = ctx.createImageData(size, size)
+  const d = img.data
+
+  // Seamless value noise via torus wrap.
+  const hash = (x, y) => {
+    const ix = ((x % size) + size) % size
+    const iy = ((y % size) + size) % size
+    const n = Math.sin(ix * 127.1 + iy * 311.7) * 43758.5453
+    return n - Math.floor(n)
+  }
+  const smoothNoise = (x, y) => {
+    const x0 = Math.floor(x)
+    const y0 = Math.floor(y)
+    const fx = x - x0
+    const fy = y - y0
+    const u = fx * fx * (3 - 2 * fx)
+    const v = fy * fy * (3 - 2 * fy)
+    const a = hash(x0, y0)
+    const b = hash(x0 + 1, y0)
+    const c = hash(x0, y0 + 1)
+    const d0 = hash(x0 + 1, y0 + 1)
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d0) * u * v
+  }
+  const fbm = (x, y, octaves = 5) => {
+    let amp = 0.5
+    let freq = 1
+    let sum = 0
+    let norm = 0
+    for (let i = 0; i < octaves; i++) {
+      sum += smoothNoise(x * freq, y * freq) * amp
+      norm += amp
+      amp *= 0.5
+      freq *= 2.03
+    }
+    return sum / norm
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      // World-space-ish UVs in [0, size) — wrap seamlessly via hash.
+      const nx = x * 0.035
+      const ny = y * 0.035
+      // Broad density clumps (slick thickness).
+      let dens = fbm(nx * 0.55, ny * 0.55, 4)
+      // Filament streaks — elongated along one axis then another.
+      const filA = fbm(nx * 2.4 + ny * 0.35, ny * 0.9, 3)
+      const filB = fbm(nx * 0.8, ny * 2.6 - nx * 0.4, 3)
+      dens = dens * 0.55 + filA * 0.28 + filB * 0.17
+      // Speckle / holes so it isn't a solid paint slab.
+      const holes = fbm(nx * 6.5, ny * 6.2, 2)
+      dens *= 0.55 + holes * 0.55
+      dens = Math.max(0, Math.min(1, (dens - 0.22) / 0.62))
+
+      // Colour: olive–emerald live film → yellow-brown dying scum in thin areas.
+      const live = dens
+      const r = Math.floor(28 + live * 55 + (1 - live) * 70)
+      const g = Math.floor(48 + live * 110 + (1 - live) * 40)
+      const b = Math.floor(22 + live * 35)
+      const i = (y * size + x) * 4
+      d[i] = r
+      d[i + 1] = g
+      d[i + 2] = b
+      // Alpha unused by sampler as albedo — still pack density for debugging.
+      d[i + 3] = Math.floor(dens * 255)
+    }
+  }
+  ctx.putImageData(img, 0, 0)
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.colorSpace = THREE.SRGBColorSpace
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+  tex.repeat.set(1, 1)
+  tex.anisotropy = 8
+  tex.minFilter = THREE.LinearMipmapLinearFilter
+  tex.magFilter = THREE.LinearFilter
+  tex.generateMipmaps = true
+  tex.needsUpdate = true
   cache[key] = tex
   return tex
 }
@@ -393,6 +572,68 @@ export function getStationTextures(role) {
 }
 
 /**
+ * Kick every map set a session is likely to need so JPEG decode starts before
+ * (or as) world/ship meshes are built. Safe to call on New Game and Continue.
+ */
+export function preloadCommonTextures() {
+  if (typeof document === 'undefined') return
+  for (const key of Object.keys(ARCHETYPE_PREFIX)) {
+    try {
+      getSurfaceTextures(key)
+    } catch {
+      /* */
+    }
+  }
+  for (const role of Object.keys(STATION_ROLE)) {
+    try {
+      getStationTextures(role)
+    } catch {
+      /* */
+    }
+  }
+  try {
+    getPropTextures('bark')
+    getPropTextures('boulder')
+    getPropTextures('concrete')
+    getPlantTextures('foliage')
+    getWaterNormalMap()
+    getAlgaeAlbedoMap()
+  } catch {
+    /* */
+  }
+}
+
+/**
+ * Force GPU re-upload of every cached map that already has image data.
+ * Call after loading a save / building meshes so materials that bound maps
+ * mid-flight still light up when the JPEGs finish, and so Continue reuses
+ * title-screen textures cleanly.
+ */
+export function reuploadReadyTextures() {
+  const touch = (tex) => {
+    if (tex && textureHasImage(tex)) tex.needsUpdate = true
+  }
+  for (const entry of Object.values(cache)) {
+    if (!entry) continue
+    // Water normal is stored as a raw Texture; map sets are plain objects.
+    if (entry.isTexture) {
+      touch(entry)
+      continue
+    }
+    touch(entry.map)
+    touch(entry.normalMap)
+    touch(entry.roughnessMap)
+    touch(entry.metalnessMap)
+    touch(entry.aoMap)
+  }
+}
+
+// Note: do not clear the global texture cache on session start.
+// force-reloading every JPEG + regenerating procedural maps (algae, wear)
+// on the main thread froze Continue for seconds and left a black frame.
+// reuploadReadyTextures() is enough to push already-decoded maps to the GPU.
+
+/**
  * Clone station maps so each mesh can have its own offset/rotation without
  * fighting the shared GPU image. Image data stays shared.
  */
@@ -408,7 +649,14 @@ export function cloneStationMaps(maps, { offsetU = 0, offsetV = 0, rot = 0 } = {
     if (rot) c.rotation = rot
     c.center.set(0.5, 0.5)
     c.anisotropy = Math.max(tex.anisotropy || 1, 16)
-    c.needsUpdate = true
+    if (textureHasImage(tex)) {
+      c.needsUpdate = true
+    } else {
+      // Load still in flight — queue for the original's onLoad to configure us.
+      tex.userData = tex.userData ?? {}
+      tex.userData._mapClones = tex.userData._mapClones ?? []
+      tex.userData._mapClones.push(c)
+    }
     return c
   }
   // Only include defined maps — spreading undefined keys into Material warns.

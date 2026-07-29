@@ -59,7 +59,7 @@ export const SKILLS = [
     id: 'thrust',
     name: 'Engine Rigging',
     bookName: 'Skillbook: Engine Rigging',
-    description: 'Each level: +5% top speed and +4% autopilot speed (player only).'
+    description: 'Each level: +5% top speed (player only).'
   },
   {
     id: 'drones',

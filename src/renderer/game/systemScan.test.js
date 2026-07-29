@@ -11,6 +11,8 @@ import {
   anomalyEpochAt,
   isDatacoreType,
   rareOreTierForSystem,
+  idealProbeScanRadius,
+  PROBE_SIGNAL_RANGE_MUL,
   SITE_BLUEPRINT_CHANCE,
   SITE_SKILLBOOK_CHANCE,
   SYSTEM_SCAN_PROBE_COUNT,
@@ -121,6 +123,14 @@ test('isDatacoreType covers all three datacore-family types only', () => {
   assert.ok(isDatacoreType('alien_datacore'))
   assert.ok(!isDatacoreType('alien_incursion'))
   assert.ok(!isDatacoreType('ore_anomaly'))
+})
+
+test('idealProbeScanRadius matches sea-scale scan math (~3.3 km fresh)', () => {
+  assert.ok(Math.abs(idealProbeScanRadius(0) - 3250) < 1)
+  assert.ok(Math.abs(idealProbeScanRadius(1) - 1710) < 1)
+  assert.equal(PROBE_SIGNAL_RANGE_MUL, 2.4)
+  // Map rings must stay well inside the 80 km world — not space-era 12 km defaults.
+  assert.ok(idealProbeScanRadius(0) < 5000)
 })
 
 test('probe signal rises when probes are near the anomaly', () => {

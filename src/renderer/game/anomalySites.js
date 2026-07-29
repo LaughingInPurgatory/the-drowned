@@ -12,7 +12,8 @@ import {
 } from './systemScan.js'
 import { ALIEN_SHIP_CLASSES } from '../data/shipClasses.js'
 
-export const SITE_ACTIVATION_RANGE = 12000
+/** How close the boat must be before an anomaly site arms waves / combat. */
+export const SITE_ACTIVATION_RANGE = 3500
 /** Approach range to hack a sealed nodule with F (generous so the site is usable). */
 export const NODULE_PROBE_RANGE = 1000
 
@@ -30,7 +31,7 @@ export function spawnAlienIncursionWave(rng, anomaly, waveIndex, systemBodies, c
     const d = 300 + rng() * 450
     const position = [
       base[0] + Math.cos(ang) * d,
-      base[1] + (rng() - 0.5) * 200,
+      0,
       base[2] + Math.sin(ang) * d
     ]
     const hull =
@@ -71,7 +72,7 @@ export function spawnGuardWave(
     const d = minDist + rng() * (maxDist - minDist)
     const position = [
       base[0] + Math.cos(ang) * d,
-      base[1] + (rng() - 0.5) * 200,
+      0,
       base[2] + Math.sin(ang) * d
     ]
     const npc = spawnNpc(rng, { position, faction, coreFraction, bodies: systemBodies })

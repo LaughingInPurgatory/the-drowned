@@ -3,12 +3,14 @@
  * Opened from the radar "Region Sonar Scan" button.
  */
 import * as THREE from 'three'
-import { getSystem } from '../procgen/world.js'
+import { getSystem, WORLD_RADIUS } from '../procgen/world.js'
 import {
   SYSTEM_SCAN_PROBE_COUNT,
   ensureSystemAnomalies,
   updateSystemScan,
-  computeProbeSignal
+  computeProbeSignal,
+  idealProbeScanRadius,
+  PROBE_SIGNAL_RANGE_MUL
 } from '../game/systemScan.js'
 import { getShipClass } from '../data/shipClasses.js'
 import { escapeHtml } from './escapeHtml.js'
@@ -159,7 +161,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       <div class="ssm-body">
         <div class="ssm-canvas-wrap">
           <canvas class="ssm-canvas"></canvas>
-          <div class="ssm-hint">WASD pan · Drag rotate · Scroll zoom · Select probe · Click map to place · Form probes ON the bright purple rings</div>
+          <div class="ssm-hint">WASD pan · Drag rotate · Scroll zoom · Select probe · Click map to place · Form on the bright purple ring (~3 km from a fresh signal)</div>
           <div class="ssm-legend">
             <div class="lg-a">◆ PURPLE = Anomalous Signal</div>
             <div class="lg-p">◇ CYAN = Scan probes</div>
@@ -212,20 +214,20 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
   const scene = new THREE.Scene()
-  const camera = new THREE.PerspectiveCamera(50, 1, 200, 5e6)
-  camera.position.set(0, 90000, 140000)
+  // Sea-scale map: world is 80 km radius — not a star system.
+  const camera = new THREE.PerspectiveCamera(50, 1, 20, 220000)
+  camera.position.set(0, 12000, 18000)
   camera.lookAt(0, 0, 0)
 
   const ambient = new THREE.AmbientLight(0xcce8ff, 1.55)
   scene.add(ambient)
-  const sun = new THREE.PointLight(0xfff4cc, 3.2, 0, 0)
-  sun.position.set(0, 0, 0)
+  const sun = new THREE.DirectionalLight(0xfff4cc, 1.4)
+  sun.position.set(8000, 14000, 4000)
   scene.add(sun)
   const hemi = new THREE.HemisphereLight(0xaaccff, 0x334466, 0.9)
   scene.add(hemi)
-  // Extra fill so dark map regions still read markers
-  const fill = new THREE.DirectionalLight(0xb0d0ff, 0.55)
-  fill.position.set(40000, 80000, 20000)
+  const fill = new THREE.DirectionalLight(0xb0d0ff, 0.45)
+  fill.position.set(-6000, 9000, -3000)
   scene.add(fill)
 
   const bodyGroup = new THREE.Group()
@@ -240,14 +242,14 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   // Placement grid (rebuilt to player Y on open)
   let gridHelper = null
 
-  /** @type {{ id: number, active: boolean, position: number[], mesh: THREE.Mesh }[]} */
+  /** @type {{ id: number, active: boolean, position: number[], mesh: THREE.Object3D }[]} */
   let probes = []
   let selectedProbe = 0
   let raf = 0
   let lastT = 0
-  let orbitYaw = 0.6
-  let orbitPitch = 0.55
-  let orbitDist = 180000
+  let orbitYaw = 0.55
+  let orbitPitch = 0.72
+  let orbitDist = 14000
   let dragging = false
   let lastX = 0
   let lastY = 0
@@ -255,8 +257,8 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   let focusTarget = null
   /** Held WASD codes while map is open. */
   const panKeys = new Set()
-  /** Ideal probe ring radius (matches systemScan idealR for unknown). */
-  const IDEAL_PROBE_R = 12000
+  /** Fresh-signal ideal ring — same as idealProbeScanRadius(0). */
+  const FRESH_PROBE_R = idealProbeScanRadius(0)
 
   function shipClass() {
     try {
@@ -272,15 +274,13 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       const root = new THREE.Group()
       root.visible = false
       probeGroup.add(root)
-      // Bright solid core — large so visible across the system map
       const core = new THREE.Mesh(
-        new THREE.OctahedronGeometry(2800, 0),
+        new THREE.OctahedronGeometry(45, 0),
         new THREE.MeshBasicMaterial({ color: 0xd0ffff })
       )
       root.add(core)
-      // Wire shell for readability at distance
       const shell = new THREE.Mesh(
-        new THREE.OctahedronGeometry(4200, 0),
+        new THREE.OctahedronGeometry(70, 0),
         new THREE.MeshBasicMaterial({
           color: 0x40d0ff,
           wireframe: true,
@@ -289,9 +289,8 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         })
       )
       root.add(shell)
-      // Wide scan ring (placement aid)
       const ring = new THREE.Mesh(
-        new THREE.RingGeometry(7000, 9500, 48),
+        new THREE.RingGeometry(110, 160, 40),
         new THREE.MeshBasicMaterial({
           color: 0x5ee6ff,
           transparent: true,
@@ -302,9 +301,8 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       )
       ring.rotation.x = -Math.PI / 2
       root.add(ring)
-      // Outer soft disc
       const disc = new THREE.Mesh(
-        new THREE.CircleGeometry(8000, 32),
+        new THREE.CircleGeometry(140, 28),
         new THREE.MeshBasicMaterial({
           color: 0x40b0ff,
           transparent: true,
@@ -314,11 +312,11 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         })
       )
       disc.rotation.x = -Math.PI / 2
-      disc.position.y = -20
+      disc.position.y = -4
       root.add(disc)
-      // Vertical pin so probes pop against the ecliptic
+      // Short pin above the water plane
       const pin = new THREE.Mesh(
-        new THREE.CylinderGeometry(220, 220, 14000, 6),
+        new THREE.CylinderGeometry(8, 8, 280, 6),
         new THREE.MeshBasicMaterial({
           color: 0x60e8ff,
           transparent: true,
@@ -326,6 +324,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           depthWrite: false
         })
       )
+      pin.position.y = 140
       root.add(pin)
       probes.push({
         id: i,
@@ -341,18 +340,15 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   function deployFormation() {
     ensureProbes()
     const ship = gameState.player.ship.position
-    const baseR = 18000
+    // Tight ring around the boat — player then moves probes onto signal rings.
+    const baseR = 900
     for (let i = 0; i < probes.length; i++) {
       const a = (i / probes.length) * Math.PI * 2
       const p = probes[i]
       p.active = true
-      p.position = [
-        ship[0] + Math.cos(a) * baseR,
-        ship[1] + 2000,
-        ship[2] + Math.sin(a) * baseR
-      ]
+      p.position = [ship[0] + Math.cos(a) * baseR, 0, ship[2] + Math.sin(a) * baseR]
       p.mesh.visible = true
-      p.mesh.position.fromArray(p.position)
+      p.mesh.position.set(p.position[0], 0, p.position[2])
     }
     renderProbeList()
   }
@@ -371,7 +367,16 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         const st = p.active ? 'DEPLOYED' : 'BAY'
         return `<div class="ssm-probe${i === selectedProbe ? ' active' : ''}" data-i="${i}">
           <div class="lab">PROBE ${i + 1}</div>
-          <div>${st}${p.active ? ` · ${Math.round(Math.hypot(...p.position) / 1000)}km from star` : ''}</div>
+          <div>${st}${
+            p.active
+              ? ` · ${Math.round(
+                  Math.hypot(
+                    p.position[0] - gameState.player.ship.position[0],
+                    p.position[2] - gameState.player.ship.position[2]
+                  ) / 1000
+                )}km from ship`
+              : ''
+          }</div>
         </div>`
       })
       .join('')
@@ -405,53 +410,32 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
     if (!system) return
     const ship = gameState.player.ship.position
+    const y0 = 0
 
-    // Bright star + corona
-    const starMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(11000, 28, 20),
-      new THREE.MeshBasicMaterial({ color: 0xfff0a8 })
+    // Haven Reach centre marker (not a star — world origin)
+    const home = new THREE.Mesh(
+      new THREE.SphereGeometry(90, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xffe8a0 })
     )
-    bodyGroup.add(starMesh)
-    const corona = new THREE.Mesh(
-      new THREE.SphereGeometry(20000, 24, 16),
-      new THREE.MeshBasicMaterial({
-        color: 0xffc060,
-        transparent: true,
-        opacity: 0.32,
-        depthWrite: false
-      })
-    )
-    bodyGroup.add(corona)
+    home.position.set(0, y0, 0)
+    bodyGroup.add(home)
 
     for (const b of system.bodies) {
-      if (b.kind === 'warpGate') {
-        // Compact cyan torus markers so gates are readable
-        const g = new THREE.Mesh(
-          new THREE.TorusGeometry(4000, 700, 8, 24),
-          new THREE.MeshBasicMaterial({ color: 0x80e0ff, wireframe: true })
-        )
-        g.position.fromArray(b.position)
-        g.lookAt(0, b.position[1], 0)
-        bodyGroup.add(g)
-        continue
-      }
-      let r = 2400
+      if (b.kind === 'warpGate') continue
+      let r = 70
       let color = 0x9ac0e8
       if (b.kind === 'island') {
-        r = Math.min(10000, Math.max(3200, (b.radius ?? 2000) * 0.3))
+        r = Math.min(420, Math.max(60, (b.radius ?? 800) * 0.12))
         color = 0xb8d8ff
-      } else if (b.kind === 'island') {
-        r = 2000
-        color = 0xd0d8e8
       } else if (b.kind === 'port' || b.kind === 'outpost') {
-        r = 2400
+        r = b.kind === 'port' ? 55 : 40
         color = 0x70ffff
       } else if (b.kind === 'wreckField') {
-        r = 4500
+        r = Math.min(180, Math.max(50, (b.radius ?? 200) * 0.35))
         color = 0xc8b8a0
       }
       const m = new THREE.Mesh(
-        new THREE.SphereGeometry(r, 16, 12),
+        new THREE.SphereGeometry(r, 12, 10),
         new THREE.MeshBasicMaterial({
           color,
           wireframe: b.kind === 'wreckField',
@@ -459,34 +443,33 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           opacity: b.kind === 'wreckField' ? 0.85 : 1
         })
       )
-      m.position.fromArray(b.position)
+      m.position.set(b.position[0], y0, b.position[2])
       bodyGroup.add(m)
-      // Halo so small bodies stay visible at long range
       if (b.kind === 'island' || b.kind === 'port' || b.kind === 'outpost') {
         const halo = new THREE.Mesh(
-          new THREE.SphereGeometry(r * 1.5, 12, 10),
+          new THREE.SphereGeometry(r * 1.45, 10, 8),
           new THREE.MeshBasicMaterial({
             color,
             transparent: true,
-            opacity: 0.22,
+            opacity: 0.2,
             depthWrite: false
           })
         )
-        halo.position.fromArray(b.position)
+        halo.position.set(b.position[0], y0, b.position[2])
         bodyGroup.add(halo)
       }
     }
 
-    // Player ship — large bright green marker
+    // Player ship — green cone on the water
     const pm = new THREE.Mesh(
-      new THREE.ConeGeometry(2800, 7000, 8),
+      new THREE.ConeGeometry(55, 140, 8),
       new THREE.MeshBasicMaterial({ color: 0x60ff90 })
     )
-    pm.position.fromArray(ship)
+    pm.position.set(ship[0], y0 + 40, ship[2])
     pm.rotation.x = Math.PI / 2
     bodyGroup.add(pm)
     const pRing = new THREE.Mesh(
-      new THREE.RingGeometry(4500, 6000, 40),
+      new THREE.RingGeometry(90, 130, 36),
       new THREE.MeshBasicMaterial({
         color: 0x7fe0a0,
         transparent: true,
@@ -496,11 +479,10 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       })
     )
     pRing.rotation.x = -Math.PI / 2
-    pRing.position.set(ship[0], ship[1] - 40, ship[2])
+    pRing.position.set(ship[0], y0 - 2, ship[2])
     bodyGroup.add(pRing)
-    // Ship pin
     const shipPin = new THREE.Mesh(
-      new THREE.CylinderGeometry(300, 300, 16000, 6),
+      new THREE.CylinderGeometry(6, 6, 220, 6),
       new THREE.MeshBasicMaterial({
         color: 0x60ff90,
         transparent: true,
@@ -508,33 +490,34 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         depthWrite: false
       })
     )
-    shipPin.position.fromArray(ship)
+    shipPin.position.set(ship[0], y0 + 110, ship[2])
     bodyGroup.add(shipPin)
 
-    // Large system-wide placement grid (star-centered) so far anomalies still have a floor
-    gridHelper = new THREE.GridHelper(400000, 40, 0x4a80b0, 0x243858)
-    gridHelper.position.set(0, ship[1] - 80, 0)
+    // Local sea grid (world-sized would be unreadable at boat scale)
+    const gridSize = Math.min(WORLD_RADIUS * 1.2, 60000)
+    gridHelper = new THREE.GridHelper(gridSize, 30, 0x4a80b0, 0x243858)
+    gridHelper.position.set(ship[0], y0 - 8, ship[2])
     if (Array.isArray(gridHelper.material)) {
       gridHelper.material.forEach((m) => {
         m.transparent = true
-        m.opacity = 0.55
+        m.opacity = 0.45
         m.depthWrite = false
       })
     } else if (gridHelper.material) {
       gridHelper.material.transparent = true
-      gridHelper.material.opacity = 0.55
+      gridHelper.material.opacity = 0.45
       gridHelper.material.depthWrite = false
     }
     guideGroup.add(gridHelper)
 
-    // Radial range rings from star (distance cues)
+    // Range rings around the ship (local distance cues)
     for (const [r, op] of [
-      [50000, 0.2],
-      [100000, 0.16],
-      [150000, 0.12]
+      [2000, 0.22],
+      [5000, 0.16],
+      [10000, 0.12]
     ]) {
       const rr = new THREE.Mesh(
-        new THREE.RingGeometry(r - 400, r + 400, 64),
+        new THREE.RingGeometry(r - 25, r + 25, 64),
         new THREE.MeshBasicMaterial({
           color: 0x3a6088,
           transparent: true,
@@ -544,7 +527,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         })
       )
       rr.rotation.x = -Math.PI / 2
-      rr.position.y = ship[1] - 60
+      rr.position.set(ship[0], y0 - 4, ship[2])
       guideGroup.add(rr)
     }
   }
@@ -567,18 +550,16 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       const live = computeProbeSignal(a, probePos, cls)
       const sig = Math.max(a.signal ?? 0, live)
 
-      // Always highly visible — unscanned sites are huge purple beacons so
-      // you can form probes on the ideal-range rings without hunting pixels.
+      // Purple beacons sized for sea-scale framing (not multi-km space markers).
       const col = known
         ? a.type === 'alien_incursion'
           ? 0xff5533
           : 0xff90ff
         : 0xe070ff
-      const coreR = known ? 6500 : 5500 + sig * 3500
+      const coreR = known ? 90 : 70 + sig * 50
       const group = new THREE.Group()
-      group.position.fromArray(a.position)
+      group.position.set(a.position[0], 0, a.position[2])
 
-      // Solid bright diamond core
       const core = new THREE.Mesh(
         new THREE.IcosahedronGeometry(coreR, 1),
         new THREE.MeshBasicMaterial({
@@ -589,7 +570,6 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         })
       )
       group.add(core)
-      // Wire overlay for depth
       const wire = new THREE.Mesh(
         new THREE.IcosahedronGeometry(coreR * 1.08, 1),
         new THREE.MeshBasicMaterial({
@@ -600,27 +580,25 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         })
       )
       group.add(wire)
-
-      // Outer glow sphere
       const glow = new THREE.Mesh(
-        new THREE.SphereGeometry(coreR * 1.7, 16, 12),
+        new THREE.SphereGeometry(coreR * 1.7, 14, 10),
         new THREE.MeshBasicMaterial({
           color: col,
           transparent: true,
-          opacity: known ? 0.35 : 0.28 + pulse * 0.2,
+          opacity: known ? 0.32 : 0.26 + pulse * 0.18,
           depthWrite: false
         })
       )
       group.add(glow)
 
-      // Ideal probe-formation rings at scan ranges (matches computeProbeSignal idealR ≈ 12km)
-      // Outer ring = max useful range (~4× ideal); middle = ideal; inner = tight lock.
-      const idealR = known ? 5000 : IDEAL_PROBE_R
+      // Rings match computeProbeSignal / idealProbeScanRadius exactly.
+      // mul 1.0 = ideal (bright place-here); outer = PROBE_SIGNAL_RANGE_MUL falloff edge.
+      const idealR = idealProbeScanRadius(a.signal ?? 0)
       for (const [mul, thickness, op] of [
-        [0.45, 600, 0.55],
-        [1.0, 900, 0.95], // primary place-here ring
-        [2.0, 700, 0.55],
-        [3.5, 500, 0.35]
+        [0.45, 35, 0.5],
+        [1.0, 55, 0.95],
+        [1.6, 40, 0.5],
+        [PROBE_SIGNAL_RANGE_MUL, 30, 0.32]
       ]) {
         const mid = idealR * mul
         const ring = new THREE.Mesh(
@@ -637,10 +615,9 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         group.add(ring)
       }
 
-      // Thick vertical beacon beam (very hard to miss)
-      const spikeH = 50000
+      const spikeH = 900
       const spike = new THREE.Mesh(
-        new THREE.CylinderGeometry(500, 900, spikeH, 8),
+        new THREE.CylinderGeometry(12, 22, spikeH, 8),
         new THREE.MeshBasicMaterial({
           color: col,
           transparent: true,
@@ -648,11 +625,10 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           depthWrite: false
         })
       )
-      spike.position.y = spikeH * 0.35
+      spike.position.y = spikeH * 0.45
       group.add(spike)
-      // Thin bright core of the beam
       const spikeCore = new THREE.Mesh(
-        new THREE.CylinderGeometry(180, 180, spikeH * 1.1, 6),
+        new THREE.CylinderGeometry(5, 5, spikeH * 1.05, 6),
         new THREE.MeshBasicMaterial({
           color: 0xffffff,
           transparent: true,
@@ -660,37 +636,35 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           depthWrite: false
         })
       )
-      spikeCore.position.y = spikeH * 0.35
+      spikeCore.position.y = spikeH * 0.45
       group.add(spikeCore)
 
-      // Ground pad — bright disc you place around
       const pad = new THREE.Mesh(
-        new THREE.CircleGeometry(idealR * 1.05, 48),
+        new THREE.CircleGeometry(idealR * 1.02, 48),
         new THREE.MeshBasicMaterial({
           color: col,
           transparent: true,
-          opacity: 0.18 + pulse * 0.1,
+          opacity: 0.14 + pulse * 0.08,
           side: THREE.DoubleSide,
           depthWrite: false
         })
       )
       pad.rotation.x = -Math.PI / 2
-      pad.position.y = -40
+      pad.position.y = -3
       group.add(pad)
 
-      // Crosshair arms on the placement plane
       for (const rot of [0, Math.PI / 2]) {
         const arm = new THREE.Mesh(
-          new THREE.BoxGeometry(idealR * 2.2, 200, 500),
+          new THREE.BoxGeometry(idealR * 2.05, 8, 18),
           new THREE.MeshBasicMaterial({
             color: 0xffc0ff,
             transparent: true,
-            opacity: 0.65,
+            opacity: 0.55,
             depthWrite: false
           })
         )
         arm.rotation.y = rot
-        arm.position.y = -20
+        arm.position.y = -1
         group.add(arm)
       }
 
@@ -698,18 +672,13 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       group.userData.core = core
       anomalyGroup.add(group)
 
-      // Always draw probe → anomaly guide lines so formation is obvious
       for (const p of probes) {
         if (!p.active) continue
-        const d = Math.hypot(
-          p.position[0] - a.position[0],
-          p.position[1] - a.position[1],
-          p.position[2] - a.position[2]
-        )
-        const near = d < idealR * 4
+        const d = Math.hypot(p.position[0] - a.position[0], p.position[2] - a.position[2])
+        const near = d < idealR * PROBE_SIGNAL_RANGE_MUL
         const pts = [
-          new THREE.Vector3(...p.position),
-          new THREE.Vector3(...a.position)
+          new THREE.Vector3(p.position[0], 0, p.position[2]),
+          new THREE.Vector3(a.position[0], 0, a.position[2])
         ]
         const line = new THREE.Line(
           new THREE.BufferGeometry().setFromPoints(pts),
@@ -747,32 +716,51 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         : sig > 0.08
           ? 'Anomalous Signal'
           : 'Unidentified'
-      const distKm = Math.round(
-        Math.hypot(
-          a.position[0] - gameState.player.ship.position[0],
-          a.position[1] - gameState.player.ship.position[1],
-          a.position[2] - gameState.player.ship.position[2]
-        ) / 1000
+      const distM = Math.hypot(
+        a.position[0] - gameState.player.ship.position[0],
+        a.position[2] - gameState.player.ship.position[2]
       )
-      return `<div class="ssm-sig-row" data-anomaly-id="${escapeHtml(a.id)}" style="cursor:pointer" title="Click to focus camera">
-          <span class="nm${a.fullyScanned ? ' done' : ''}">◆ ${nm}</span>
-          <span>${a.fullyScanned ? 'LOCKED' : `${Math.round(sig * 100)}% · ${distKm}km`}</span>
+      const distLabel =
+        distM >= 10000 ? `${(distM / 1000).toFixed(1)}km` : `${Math.round(distM)}m`
+      const idealKm = (idealProbeScanRadius(a.signal ?? 0) / 1000).toFixed(1)
+      const isWp = gameState.player.waypointBodyId === a.id
+      return `<div class="ssm-sig-row" data-anomaly-id="${escapeHtml(a.id)}" style="cursor:pointer" title="${a.fullyScanned ? 'Click to focus · double-click to set waypoint' : `Click to focus · ideal ring ~${idealKm} km`}">
+          <span class="nm${a.fullyScanned ? ' done' : ''}">◆ ${nm}${isWp ? ' · WP' : ''}</span>
+          <span>${a.fullyScanned ? 'LOCKED' : `${Math.round(sig * 100)}% · ${distLabel}`}</span>
           <div class="ssm-bar"><i style="width:${pct}%"></i></div>
         </div>`
     })
     sigListEl.innerHTML = rows.length
       ? rows.join('') +
-        `<div style="margin-top:8px;font-size:10px;opacity:0.65;line-height:1.4">Click a signal to center the map. Place probes on the bright purple ring (~12 km from the beacon).</div>`
+        `<div style="margin-top:8px;font-size:10px;opacity:0.65;line-height:1.4">Click a signal to center. Locked: double-click sets waypoint. Place probes on the bright purple ring (ideal ≈ ${(FRESH_PROBE_R / 1000).toFixed(1)} km for a fresh signal; shrinks as it locks).</div>`
       : `<div style="opacity:0.5;font-size:11px">No signatures in this region.</div>`
     sigListEl.querySelectorAll('.ssm-sig-row[data-anomaly-id]').forEach((el) => {
       el.addEventListener('click', () => {
         const id = el.dataset.anomalyId
         const a = list.find((x) => x.id === id)
         if (!a) return
-        focusTarget = [...a.position]
-        // Frame close enough to see rings and place probes
-        orbitDist = Math.max(45000, Math.min(160000, IDEAL_PROBE_R * 8))
-        orbitPitch = 0.85
+        focusTarget = [a.position[0], 0, a.position[2]]
+        // Frame the ideal ring with a little margin
+        const idealR = idealProbeScanRadius(a.signal ?? 0)
+        orbitDist = Math.max(4500, Math.min(22000, idealR * PROBE_SIGNAL_RANGE_MUL * 1.35 + 2000))
+        orbitPitch = 0.82
+      })
+      el.addEventListener('dblclick', (e) => {
+        e.preventDefault()
+        const id = el.dataset.anomalyId
+        const a = list.find((x) => x.id === id)
+        if (!a?.fullyScanned) return
+        if (gameState.player.waypointBodyId === a.id) {
+          gameState.player.waypointBodyId = null
+          gameState.player.waypointPosition = null
+          hooks.onWaypointChange?.({ id: null, name: a.displayName, set: false })
+        } else {
+          if (hooks.canSetWaypoint && !hooks.canSetWaypoint()) return
+          gameState.player.waypointBodyId = a.id
+          gameState.player.waypointPosition = null
+          hooks.onWaypointChange?.({ id: a.id, name: a.displayName || 'Anomalous Signal', set: true })
+        }
+        renderSignals()
       })
     })
   }
@@ -821,52 +809,43 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     const p = ensureFocusTarget()
     p[0] += fwdX * forward + rightX * strafe
     p[2] += fwdZ * forward + rightZ * strafe
-    // Keep Y on the placement plane (ship altitude).
-    p[1] = gameState.player.ship.position[1]
+    // Placement plane is the sea surface.
+    p[1] = 0
   }
 
   /**
-   * Center the map on the system star (local origin) and zoom so bodies /
-   * anomalies around the star fit in view.
+   * Center on the player and zoom to nearby water + any signals within ~20 km.
    */
   function frameSystem() {
     const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
     const ship = gameState.player.ship.position
-    // Star is at local origin; keep look-at on the ecliptic plane at ship altitude.
-    focusTarget = [0, ship[1], 0]
-    if (!system) {
-      orbitDist = 180000
-      orbitPitch = 0.95
-      return
+    focusTarget = [ship[0], 0, ship[2]]
+    let maxD = 6000
+    if (system) {
+      for (const b of system.bodies ?? []) {
+        if (!b?.position) continue
+        if (b.kind === 'warpGate') continue
+        const d = Math.hypot(b.position[0] - ship[0], b.position[2] - ship[2])
+        if (d < 20000 && d > maxD) maxD = d
+      }
+      for (const a of ensureSystemAnomalies(system, gameState.galaxy)) {
+        if (a.status === 'completed' || a.status === 'despawning') continue
+        const d = Math.hypot(a.position[0] - ship[0], a.position[2] - ship[2])
+        if (d < 35000 && d > maxD) maxD = d
+      }
     }
-    let maxD = 50000
-    for (const b of system.bodies ?? []) {
-      if (!b.position) continue
-      const d = Math.hypot(b.position[0], b.position[2])
-      if (d > maxD) maxD = d
-    }
-    const anomalies = ensureSystemAnomalies(system, gameState.galaxy).filter(
-      (a) => a.status !== 'completed' && a.status !== 'despawning'
-    )
-    for (const a of anomalies) {
-      const d = Math.hypot(a.position[0], a.position[2])
-      if (d > maxD) maxD = d
-    }
-    // Also keep the player in frame when they're far from the star.
-    const shipD = Math.hypot(ship[0], ship[2])
-    if (shipD > maxD) maxD = shipD
-    // High overhead so rings / grid read clearly
-    orbitPitch = 0.95
-    orbitDist = Math.max(90000, Math.min(500000, maxD * 1.65 + 35000))
+    orbitPitch = 0.78
+    orbitDist = Math.max(7000, Math.min(42000, maxD * 1.35 + 3500))
   }
 
   function placeSelectedProbeAt(world) {
     const p = probes[selectedProbe]
     if (!p) return
     p.active = true
-    p.position = [world.x, world.y, world.z]
+    // Always on the water plane
+    p.position = [world.x, 0, world.z]
     p.mesh.visible = true
-    p.mesh.position.copy(world)
+    p.mesh.position.set(world.x, 0, world.z)
     renderProbeList()
   }
 
@@ -876,9 +855,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     const y = -((clientY - rect.top) / rect.height) * 2 + 1
     const ray = new THREE.Raycaster()
     ray.setFromCamera(new THREE.Vector2(x, y), camera)
-    // Horizontal plane at player Y
-    const y0 = gameState.player.ship.position[1]
-    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -y0)
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
     const hit = new THREE.Vector3()
     if (ray.ray.intersectPlane(plane, hit)) return hit
     return null
@@ -966,7 +943,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     (e) => {
       e.preventDefault()
       orbitDist *= e.deltaY > 0 ? 1.12 : 1 / 1.12
-      orbitDist = Math.max(25000, Math.min(900000, orbitDist))
+      orbitDist = Math.max(2500, Math.min(90000, orbitDist))
     },
     { passive: false }
   )

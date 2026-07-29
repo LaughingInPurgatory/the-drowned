@@ -1,4 +1,4 @@
-import { dropMission, missionNavTarget, setWaypointForMission, acceptMission } from '../game/missions.js'
+import { dropMission, missionNavTarget, acceptMission } from '../game/missions.js'
 import { findBody, getSystem } from '../procgen/world.js'
 import { escapeHtml } from './escapeHtml.js'
 import { gameConfirm, gameNotice } from './gameDialog.js'
@@ -230,7 +230,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
     if (!active.length) {
       body.innerHTML = `
         <div class="empty">No missions in progress.<br/>Pick up work on the Available tab when near a harbour.</div>
-        <div class="footer-note">Set Waypoint only works while you are in the objective region. Objectives complete automatically.</div>
+        <div class="footer-note">Set waypoints on the sea chart (M) or Overview. Objectives complete automatically.</div>
       `
       return
     }
@@ -257,26 +257,14 @@ export function createMissionsUI(container, gameState, hooks = {}) {
           ${renderLog(m)}
           <div class="status progress">${progress}</div>
           <div class="mission-actions">
-            <button class="track" data-id="${m.id}">Set Waypoint</button>
             <button class="drop" data-id="${m.id}">Drop Mission</button>
           </div>
         </div>
       `
     }).join('') + `
-      <div class="footer-note">Drop Mission abandons the contract with no reward. Investigations: sonar pulse the target (P). Each lead raises the payout 5%.</div>
+      <div class="footer-note">Drop Mission abandons the contract with no reward. Set waypoints on the sea chart (M), Overview, or Region Sonar. Investigations: sonar pulse the target (P). Each lead raises the payout 5%.</div>
     `
 
-    body.querySelectorAll('.track').forEach((btn) =>
-      btn.addEventListener('click', async () => {
-        try {
-          if (hooks.canSetWaypoint && !hooks.canSetWaypoint()) return
-          setWaypointForMission(gameState, btn.dataset.id)
-          render()
-        } catch (err) {
-          await gameNotice('Waypoint', err.message)
-        }
-      })
-    )
     body.querySelectorAll('.drop').forEach((btn) =>
       btn.addEventListener('click', async () => {
         const mission = gameState.missions.active.find((m) => m.id === btn.dataset.id)

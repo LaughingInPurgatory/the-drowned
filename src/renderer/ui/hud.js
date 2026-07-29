@@ -208,6 +208,19 @@ const STYLE = `
   margin-right: 6px;
 }
 #hud .system-label .nearest-body .nb-name { color: var(--ui-bright); }
+#hud .system-label .waypoint-line {
+  display: none; margin-top: 5px; font-size: 11px; letter-spacing: 0.8px;
+  color: #ffe14a; opacity: 0.95;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.95), 0 0 8px rgba(255,225,74,0.35), 0 2px 4px rgba(0,0,0,0.75);
+  white-space: nowrap; max-width: 42vw; overflow: hidden; text-overflow: ellipsis;
+}
+#hud .system-label .waypoint-line.visible { display: block; }
+#hud .system-label .waypoint-line .wp-tag {
+  color: #ffe14a; opacity: 0.8; letter-spacing: 1.2px; text-transform: uppercase; font-size: 9px;
+  margin-right: 6px;
+}
+#hud .system-label .waypoint-line .wp-name { color: #fff6a8; }
+#hud.docked .system-label .waypoint-line { display: none !important; }
 #hud .system-label .sys-scan-hint {
   display: block; margin-top: 7px; padding-top: 6px;
   border-top: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.28);
@@ -303,6 +316,7 @@ export function createHud(container) {
     <div class="system-label" role="button" tabindex="0" title="Sounding (B)" aria-label="Sounding">
       <span class="sys-name">—</span>
       <span class="nearest-body"><span class="nb-name"></span></span>
+      <span class="waypoint-line"><span class="wp-tag">Waypoint:</span><span class="wp-name"></span></span>
       <span class="sys-scan-hint">Sounding (B)</span>
     </div>
     <div class="target-panel" aria-live="polite">
@@ -393,12 +407,15 @@ export function createHud(container) {
   const systemNameEl = hud.querySelector('.system-label .sys-name')
   const nearestBodyEl = hud.querySelector('.system-label .nearest-body')
   const nearestBodyNameEl = hud.querySelector('.system-label .nearest-body .nb-name')
+  const waypointLineEl = hud.querySelector('.system-label .waypoint-line')
+  const waypointNameEl = hud.querySelector('.system-label .waypoint-line .wp-name')
   const targetPanel = hud.querySelector('.target-panel')
   const targetNameEl = hud.querySelector('.target-panel .tp-name')
   const targetMetaEl = hud.querySelector('.target-panel .tp-meta')
   const targetBarsEl = hud.querySelector('.target-panel .tp-bars')
   let lastSystemLabelKey = null
   let lastNearestBodyName = undefined
+  let lastWaypointName = undefined
 
   function pct(value, max) {
     return Math.max(0, Math.min(100, (value / max) * 100))
@@ -418,7 +435,7 @@ export function createHud(container) {
    * and how policed the water around it is.
    */
   function formatSystemLabel(placeName, securityRating) {
-    const name = placeName || 'Open water'
+    const name = placeName || 'Open Water'
     if (securityRating == null || !Number.isFinite(securityRating)) return name
     const sec = Math.max(0, Math.min(6, Math.floor(securityRating)))
     let cls = 'sec-low'
@@ -433,7 +450,17 @@ export function createHud(container) {
     // nearestBodyName: string when within HUD proximity of an island /
     // station/settlement; null/undefined hides the line.
     // securityRating: 0–6 system security shown beside the name.
-    update(shipState, shipClass, speed, forwardSpeed, systemName = null, nearestBodyName = null, securityRating = null) {
+    // waypointName: active chart/overview waypoint; null hides the line.
+    update(
+      shipState,
+      shipClass,
+      speed,
+      forwardSpeed,
+      systemName = null,
+      nearestBodyName = null,
+      securityRating = null,
+      waypointName = null
+    ) {
       const maxAr = (typeof shipState.maxArmor === 'number' && shipState.maxArmor > 0)
         ? shipState.maxArmor
         : shipClass.stats.armor
@@ -481,6 +508,18 @@ export function createHud(container) {
         } else {
           nearestBodyNameEl.textContent = ''
           nearestBodyEl.classList.remove('visible')
+        }
+      }
+
+      const wpName = waypointName || null
+      if (wpName !== lastWaypointName) {
+        lastWaypointName = wpName
+        if (wpName && waypointLineEl && waypointNameEl) {
+          waypointNameEl.textContent = wpName
+          waypointLineEl.classList.add('visible')
+        } else if (waypointLineEl && waypointNameEl) {
+          waypointNameEl.textContent = ''
+          waypointLineEl.classList.remove('visible')
         }
       }
 

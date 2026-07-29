@@ -13,9 +13,9 @@ import {
  * The sea chart.
  *
  * One sea, so one map: a plan view of the whole world with every harbour,
- * outpost, island and wreck field on it. Click a place to set a waypoint;
- * scroll to zoom; drag to pan. Anything not yet visited is drawn faintly —
- * you know it is there, not what it is.
+ * outpost, island and wreck field on it. Opens centred on your boat (bright
+ * yellow mark); drag to pan, scroll to zoom. Click a place to set a waypoint.
+ * Unvisited marks are drawn faintly.
  */
 
 const STYLE = `
@@ -96,7 +96,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
       <div class="sc-header">
         <div>
           <div class="sc-title">SEA CHART</div>
-          <div class="sc-sub">Click a mark to set a waypoint · drag to pan · scroll to zoom</div>
+          <div class="sc-sub">Opens on you · drag to pan · scroll to zoom · click a mark for a waypoint</div>
         </div>
         <button class="sc-close">Close</button>
       </div>
@@ -113,6 +113,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
             <div><i style="background:#ff8a3d"></i> Contract</div>
             <div><i style="background:#c9a227"></i> Your goods</div>
             <div><i style="background:#7fe0a0"></i> Waypoint</div>
+            <div><i style="background:#ffe14a; box-shadow:0 0 6px #ffe14a; border-radius:2px"></i> You (heading)</div>
           </div>
           <div class="sc-hint">Faint marks are places you have not been to yet.<br/>Double-click the chart to recentre on your boat.</div>
         </div>
@@ -182,13 +183,15 @@ export function createSeaChart(container, gameState, hooks = {}) {
   }
 
   function centreOnPlayer() {
-    const p = gameState.player.ship.position
-    centreX = p[0]
-    centreZ = p[2]
+    const p = gameState.player?.ship?.position
+    if (!p) return
+    centreX = Number(p[0]) || 0
+    centreZ = Number(p[2]) || 0
   }
 
   function draw() {
     if (!open) return
+    // Pan/zoom free while open; only show() recentres on the boat.
     const rect = canvas.getBoundingClientRect()
     const w = rect.width
     const h = rect.height
@@ -318,22 +321,46 @@ export function createSeaChart(container, gameState, hooks = {}) {
       }
     }
 
-    // Your boat, with its heading.
+    // You — bright yellow mark with heading.
+    // Chart maps world +X → right, +Z → down; ship heading 0 is +Z. Local tip
+    // on +Y then rotate(-heading) aims the bow the right way on the plan.
     {
       const p = gameState.player.ship.position
       const [x, y] = worldToScreen(p[0], p[2])
-      const heading = gameState.player.ship.heading ?? 0
+      const heading = Number(gameState.player.ship.heading)
+      const yaw = Number.isFinite(heading) ? heading : 0
       ctx.save()
-      ctx.translate(x, y)
-      ctx.rotate(-heading)
-      ctx.fillStyle = '#ffffff'
+      // Soft glow under the arrow
+      const glow = ctx.createRadialGradient(x, y, 0, x, y, 16)
+      glow.addColorStop(0, 'rgba(255, 225, 74, 0.9)')
+      glow.addColorStop(0.4, 'rgba(255, 200, 40, 0.35)')
+      glow.addColorStop(1, 'rgba(255, 200, 40, 0)')
+      ctx.fillStyle = glow
       ctx.beginPath()
-      ctx.moveTo(0, -8)
-      ctx.lineTo(5, 6)
-      ctx.lineTo(0, 3)
-      ctx.lineTo(-5, 6)
+      ctx.arc(x, y, 16, 0, Math.PI * 2)
+      ctx.fill()
+      // Directional arrow (tip = bow / heading)
+      ctx.translate(x, y)
+      ctx.rotate(-yaw)
+      ctx.fillStyle = '#ffe14a'
+      ctx.strokeStyle = '#1a1200'
+      ctx.lineWidth = 1.6
+      ctx.beginPath()
+      ctx.moveTo(0, 11) // tip forward (+Z on chart when heading 0)
+      ctx.lineTo(7, -8)
+      ctx.lineTo(0, -4)
+      ctx.lineTo(-7, -8)
       ctx.closePath()
       ctx.fill()
+      ctx.stroke()
+      // Bright core so it still reads as “you” when zoomed out
+      ctx.beginPath()
+      ctx.arc(0, -1, 3.2, 0, Math.PI * 2)
+      ctx.fillStyle = '#fff6a8'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.85)'
+      ctx.lineWidth = 1
+      ctx.stroke()
       ctx.restore()
     }
 
@@ -461,7 +488,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
       const rect = canvas.getBoundingClientRect()
       const px = e.clientX - rect.left
       const py = e.clientY - rect.top
-      // Zoom about the cursor, so you can drill into a coast without chasing it.
+      // Zoom about the cursor so you can drill into a coast without chasing it.
       const [wx, wz] = screenToWorld(px, py)
       const factor = Math.exp(-e.deltaY * 0.0016)
       zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * factor))
@@ -488,11 +515,15 @@ export function createSeaChart(container, gameState, hooks = {}) {
     requestAnimationFrame(resize)
   }
 
-  function hide() {
+  /**
+   * @param {{ silent?: boolean }} [opts] silent: close without onClose (e.g. pause
+   *   already owns flight mode / must not reenter helm).
+   */
+  function hide(opts = {}) {
     if (!open) return
     open = false
     root.classList.remove('open')
-    hooks.onClose?.()
+    if (!opts.silent) hooks.onClose?.()
   }
 
   return {

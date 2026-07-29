@@ -253,9 +253,28 @@ export function deserializeGameState(data) {
   ship.position[1] = 0
   if (!Array.isArray(ship.velocity) || ship.velocity.length !== 3) {
     ship.velocity = [0, 0, 0]
+  } else {
+    ship.velocity[1] = 0
   }
   if (!Array.isArray(ship.quaternion) || ship.quaternion.length !== 4) {
     ship.quaternion = [0, 0, 0, 1]
+  }
+  // Heading is authoritative for surface boats; recover from quaternion when
+  // an older free-flight save omitted it so wake / helm / attitude work on load.
+  if (typeof ship.heading !== 'number' || !Number.isFinite(ship.heading)) {
+    const qx = ship.quaternion[0]
+    const qy = ship.quaternion[1]
+    const qz = ship.quaternion[2]
+    const qw = ship.quaternion[3]
+    // Local +Z through the saved orientation → yaw about world Y.
+    const fx = 2 * (qx * qz + qw * qy)
+    const fz = 1 - 2 * (qx * qx + qy * qy)
+    // Prefer atan2 of the horizontal forward when the quat is valid.
+    if (Number.isFinite(fx) && Number.isFinite(fz) && fx * fx + fz * fz > 1e-10) {
+      ship.heading = Math.atan2(fx, fz)
+    } else {
+      ship.heading = 0
+    }
   }
   ship.throttle ??= 0
   // Weapon cooldowns are absolute simTime timestamps. After offline catch-up

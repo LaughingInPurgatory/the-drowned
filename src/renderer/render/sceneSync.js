@@ -8,8 +8,6 @@ const CHASE_OFFSET = new THREE.Vector3(0, 14, -38)
 // How fast the seat height chases the waterline. Low enough to smooth the
 // swell, high enough that cresting a wave is still felt.
 const SEAT_HEAVE_SMOOTHING = 2.4
-// Slightly tighter seat in supercruise so we don't read as "pulling way out".
-const CRUISE_SEAT_SCALE = 0.88
 /**
  * World point the seat looks at, guns aim at, and the reticle represents:
  * shipPos + shipForward * AIM_LOOK_AHEAD. Must match main.js combat aim.
@@ -17,7 +15,7 @@ const CRUISE_SEAT_SCALE = 0.88
 export const AIM_LOOK_AHEAD = 400
 const ZOOM_MIN = 0.35
 const ZOOM_MAX = 3.2
-/** Metres above local wave height the camera may not cross. */
+/** Metres above ship waterline the camera may not cross. */
 const CAMERA_WATER_CLEARANCE = 2.8
 // Smooth idle-orbit blend when looking at the hull vs combat aim.
 const ORBIT_BLEND_SPEED = 4.5
@@ -119,17 +117,6 @@ export function isChaseIdleOrbit() {
 }
 
 /**
- * Keep a world position above the live sea surface (and a small clearance).
- * Close zoom / steep turret elevation must not put the seat under the swell.
- */
-function clampAboveWaterline(pos) {
-  const surface = waveHeight(pos.x, pos.z)
-  const minY = surface + CAMERA_WATER_CLEARANCE
-  if (pos.y < minY) pos.y = minY
-  return pos
-}
-
-/**
  * Hard-snap the chase seat to the ship (no lerp). Also rebuilds orientation
  * from a clean basis so a previous bay lookAt can't linger.
  * @param {THREE.Camera} camera
@@ -217,12 +204,13 @@ export function orientCameraToward(camera, target, preferredUp) {
  */
 export function syncChaseCamera(camera, shipState, { cruising = false, forceSnap = false, dt = 1 / 60 } = {}) {
   // Heading only. The hull's own quaternion carries wave pitch and heel, and
-  // riding those would shake the camera with every swell and heel it over in
-  // every turn — the seat follows where the boat is *pointed*, nothing else.
+  // riding those would shake the camera with every swell — the seat follows
+  // where the boat is *pointed*, nothing else.
+  // `cruising` kept for call-site compatibility (same seat as hand helm).
+  void cruising
   _headingQ.setFromAxisAngle(_worldUp, headingOf(shipState))
   const shipPos = new THREE.Vector3().fromArray(shipState.position)
-  // Cruise: don't pull the seat further out — stay near normal zoom (or slightly closer).
-  const seat = chaseZoom * (cruising ? CRUISE_SEAT_SCALE : 1)
+  const seat = chaseZoom
 
   // Ship-local seat, then turret orbit, then world orientation.
   _offset.copy(CHASE_OFFSET).multiplyScalar(seat)
@@ -252,33 +240,34 @@ export function syncChaseCamera(camera, shipState, { cruising = false, forceSnap
     }
   }
   _offset.applyQuaternion(_headingQ)
-  const desiredPos = shipPos.clone().add(_offset)
-  // Ride a smoothed waterline rather than the hull's instantaneous height, so
-  // the view does not bob a metre and a half with every crest.
-  if (!Number.isFinite(smoothedSeatY) || forceSnap) smoothedSeatY = desiredPos.y
-  else smoothedSeatY += (desiredPos.y - smoothedSeatY) * Math.min(1, dt * SEAT_HEAVE_SMOOTHING)
-  desiredPos.y = smoothedSeatY
-  // Hard floor: never put the seat under the swell (steep turret + close zoom).
-  clampAboveWaterline(desiredPos)
-  if (desiredPos.y > smoothedSeatY) smoothedSeatY = desiredPos.y
 
-  // Hard-snap the ideal chase seat — soft lerp lagged behind mouse turns and
-  // biased the view left/right instead of staying with the gun.
-  camera.position.copy(desiredPos)
-  clampAboveWaterline(camera.position)
+  // Hard-snap XZ to the ship every frame. Only vertical rides a smoothed waterline.
+  const desiredY = shipPos.y + _offset.y
+  if (!Number.isFinite(smoothedSeatY) || forceSnap) smoothedSeatY = desiredY
+  else smoothedSeatY += (desiredY - smoothedSeatY) * Math.min(1, dt * SEAT_HEAVE_SMOOTHING)
+
+  // Floor against the *ship* waterline — not a wave sample under the camera.
+  const waterline = Number.isFinite(shipPos.y)
+    ? shipPos.y
+    : waveHeight(shipPos.x, shipPos.z)
+  const minY = waterline + CAMERA_WATER_CLEARANCE
+  if (smoothedSeatY < minY) smoothedSeatY = minY
+
+  camera.position.set(shipPos.x + _offset.x, smoothedSeatY, shipPos.z + _offset.z)
 
   // The horizon stays level. A boat heels; the camera does not go with it.
   _shipUp.copy(_worldUp)
 
   // Combat looks along the turret (reticle = guns). Idle orbit frames the hull.
+  // Seat height and look-height share the same CHASE_OFFSET.y * seat scale.
+  const seatHeight = CHASE_OFFSET.y * seat
   const combatLook = idleOrbitBlend < 0.05
   if (combatLook) {
     lookAlongTurret(shipState, shipPos, _lookAt, AIM_LOOK_AHEAD)
-    // Keep heave-smoothed horizon base, then add turret elevation.
-    _lookAt.y = smoothedSeatY - CHASE_OFFSET.y * chaseZoom + Math.sin(turretPitch) * AIM_LOOK_AHEAD
+    _lookAt.y = smoothedSeatY - seatHeight + Math.sin(turretPitch) * AIM_LOOK_AHEAD
   } else {
     getShipAimPoint(shipState, _lookAt, AIM_LOOK_AHEAD)
-    _lookAt.y = smoothedSeatY - CHASE_OFFSET.y * chaseZoom
+    _lookAt.y = smoothedSeatY - seatHeight
   }
   _lookHull.copy(shipPos)
   const blendTarget = idleOrbitBlend

@@ -26,17 +26,18 @@ const SUN_TILT = 0.42
  */
 const KEYS = [
   {
-    // Deep night. Not black — an overcast sea at night still carries some light.
+    // Deep night. Thin, damaged atmosphere — dark enough for cosmic colour
+    // (nebulae / dust) to read through the tears, not a pure black void.
     at: -0.35,
-    zenith: 0x080e1c,
-    horizon: 0x141c28,
-    fog: 0x151d29,
-    fogDensity: 0.00042,
+    zenith: 0x060a16,
+    horizon: 0x121820,
+    fog: 0x121820,
+    fogDensity: 0.0004,
     sun: 0x9fb4d8,
     sunIntensity: 0.16,
-    hemiSky: 0x2b3850,
-    hemiGround: 0x0e1518,
-    hemiIntensity: 0.42,
+    hemiSky: 0x283448,
+    hemiGround: 0x0c1014,
+    hemiIntensity: 0.4,
     env: 0.25,
     seaDeep: 0x040b18,
     seaCrest: 0x0d2136,
@@ -232,12 +233,16 @@ export function clockLabel(t) {
 }
 
 /**
- * Sky dome + cloud deck + stars, as one shader.
+ * Sky dome + cloud deck + stars + night nebulae / cosmic dust, as one shader.
  *
  * The clouds are a drifting FBM sampled on a plane above the viewer, which is
  * what makes them read as a deck at altitude rather than a texture painted on
  * the inside of a dome. They are lit from the sun direction, so at dawn they
  * catch it on one side exactly as the sea does.
+ *
+ * At night the damaged atmosphere opens onto space: soft multi-hue nebulae,
+ * a faint galactic band, and brown dust lanes that eat stars — all driven by
+ * `uStars` so they clear with the dawn.
  */
 export const SKY_SHADER = {
   vertex: `
@@ -299,13 +304,73 @@ export const SKY_SHADER = {
       // halfway up the dome.
       vec3 c = mix(uHorizon, uZenith, pow(max(d.y, 0.0), 0.42));
 
-      // Stars, before the clouds so the deck occludes them.
+      // How much of the sky is open to space (night / twilight). Zero by day.
+      float openSky = uStars * smoothstep(0.0, 0.18, d.y);
+      float dustLane = 0.0;
+
+      // --- Damaged atmosphere: nebulae + cosmic dust -----------------------
+      // Soft multi-hue gas and dark dust lanes, only when day has thinned
+      // enough for the stars. FBM on the dome so it turns with the view.
+      if (openSky > 0.02) {
+        vec2 sp = d.xz / max(d.y * 0.55 + 0.38, 0.08);
+
+        // Large, slow nebula fields.
+        float n1 = fbm(sp * 0.48 + vec2(uTime * 0.0009, -uTime * 0.00055));
+        float n2 = fbm(sp * 1.05 + vec2(13.7, 5.1) - vec2(uTime * 0.0004, uTime * 0.00025));
+        float n3 = fbm(sp * 2.2 + 29.4);
+        float nebMask = smoothstep(0.46, 0.74, n1 * 0.62 + n2 * 0.38);
+        nebMask *= smoothstep(0.02, 0.28, d.y);
+        float filaments = smoothstep(0.35, 0.8, n3);
+        nebMask *= 0.45 + filaments * 0.55;
+
+        // Magenta / cyan gas with dusty amber veins (torn upper air + ion glow).
+        vec3 nebViolet = vec3(0.52, 0.16, 0.68);
+        vec3 nebCyan = vec3(0.10, 0.42, 0.78);
+        vec3 nebAmber = vec3(0.58, 0.30, 0.12);
+        float hue = smoothstep(0.28, 0.72, n2);
+        float warm = smoothstep(0.4, 0.78, n3);
+        vec3 nebCol = mix(mix(nebViolet, nebCyan, hue), nebAmber, warm * 0.4);
+        c += nebCol * nebMask * openSky * 0.42 * (0.55 + n3 * 0.55);
+
+        // Faint galactic band — denser stars/gas scar across the dome.
+        float bandAxis = sp.x * 0.38 + sp.y * 0.72;
+        float band = exp(-bandAxis * bandAxis * 5.5);
+        float bandGrain = fbm(sp * 3.4 + vec2(uTime * 0.0003, 8.2));
+        float milky = band * smoothstep(0.28, 0.7, bandGrain);
+        c += vec3(0.42, 0.48, 0.72) * milky * openSky * 0.28;
+        // Dusty core of the band (darker lane down the middle).
+        float rift = band * smoothstep(0.55, 0.2, abs(bandAxis) * 3.5 + bandGrain * 0.3);
+        c = mix(c, c * vec3(0.55, 0.5, 0.48), rift * openSky * 0.55);
+
+        // Cosmic dust lanes — brown/grey veils that eat light and stars.
+        float dust = fbm(sp * 0.85 + vec2(-uTime * 0.00065, uTime * 0.0004));
+        float dustFine = fbm(sp * 2.6 + 17.0);
+        dustLane = smoothstep(0.44, 0.8, dust) * (0.5 + dustFine * 0.5);
+        dustLane *= mix(0.35, 1.0, nebMask * 0.5 + milky * 0.6);
+        dustLane *= smoothstep(0.0, 0.15, d.y);
+        vec3 dustCol = vec3(0.16, 0.12, 0.1);
+        c = mix(c, dustCol, dustLane * openSky * 0.62);
+
+        // Sparse particulate glitter (high-altitude dust catching starlight).
+        vec2 gritCell = floor(sp * 160.0);
+        float grit = hash21(gritCell);
+        if (grit > 0.9935) {
+          vec2 gj = vec2(hash21(gritCell + 2.1), hash21(gritCell + 7.9));
+          float gdist = length(fract(sp * 160.0) - gj);
+          float speck = smoothstep(0.28, 0.0, gdist);
+          c += vec3(0.75, 0.68, 0.55) * speck * (grit - 0.9935) * 55.0 * openSky * 0.2;
+        }
+      }
+
+      // Stars after nebulae/dust so dust lanes thin them and gas sits behind.
+      // Clouds still occlude them later.
       if (uStars > 0.001 && d.y > 0.0) {
         vec2 sp = d.xz / max(d.y * 0.6 + 0.4, 0.05);
+        float starVis = (1.0 - dustLane * 0.85) * uStars;
         vec2 grid = sp * 90.0;
         vec2 cell = floor(grid);
         float star = hash21(cell);
-        if (star > 0.988) {
+        if (star > 0.988 && starVis > 0.02) {
           // Put the star at a random point *inside* its cell and fall off with
           // distance from it. Lighting the whole cell — which is what this used
           // to do — draws every star as a square, and at this cell size they
@@ -314,8 +379,22 @@ export const SKY_SHADER = {
           float dist = length(fract(grid) - jitter);
           float point = smoothstep(0.34, 0.0, dist);
           float twinkle = 0.7 + 0.3 * sin(uTime * 2.0 + star * 90.0);
-          c += vec3(0.85, 0.9, 1.0) * (star - 0.988) * 70.0 * point * twinkle * uStars
+          // Slight colour variety — not all ice-white.
+          vec3 starTint = mix(vec3(0.75, 0.85, 1.0), vec3(1.0, 0.9, 0.75), hash21(cell + 19.0));
+          c += starTint * (star - 0.988) * 70.0 * point * twinkle * starVis
              * smoothstep(0.0, 0.25, d.y);
+        }
+        // Denser field of dimmer background stars when the sky is fully open.
+        if (starVis > 0.4) {
+          vec2 grid2 = sp * 160.0;
+          vec2 cell2 = floor(grid2);
+          float s2 = hash21(cell2 + 41.0);
+          if (s2 > 0.994) {
+            vec2 j2 = vec2(hash21(cell2 + 1.3), hash21(cell2 + 5.7));
+            float p2 = smoothstep(0.22, 0.0, length(fract(grid2) - j2));
+            c += vec3(0.7, 0.78, 1.0) * p2 * (s2 - 0.994) * 35.0 * starVis
+               * smoothstep(0.05, 0.35, d.y);
+          }
         }
       }
 

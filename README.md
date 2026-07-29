@@ -37,7 +37,7 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **One seamless sea** — a fixed canonical seed builds the same **160 km** disk for every player (radius **80 km** from the centre, open water past the rim). Roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields** (~330 places in all). No regions, no jumps, no loading seam. Home is always **Haven Reach** at the middle; remoteness (and difficulty) climb toward the edge.
 - **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on steep crests; the sun lays a track across it. No painted foam collars on shores or quays — just open water and the wake.
 - **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them. Deck guns free-traverse a full 360°.
-- **Autopilot (C)** — hand the helm over and it comes round onto your waypoint, holds the course, **steers around islands**, and eases off as it closes. About 1.5× a hand-steered passage: enough that you are not holding W across an ocean, not so much that the sea stops mattering. Same diesel note as under the helm — no separate “cruise” bed.
+- **Cruise Control (C)** — holds way at normal top speed. **A/D still helm** while under way; **W/S/Q/E cancel** cruise and hand the boat back. Guns, sonar, drones, and other keys stay free. **Steers around islands** when you are not helming. No speed boost and no waypoint required — waypoints are a separate orange cue from the **sea chart**, **Overview**, or **Region Sonar**.
 - **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars come out. Harbour lamps and mast lights carry the night.
 - **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does. Fair skies most of the time; **occasional thunderstorms** load the deck dark, sheet rain across the glass, flash lightning through the fog, and answer with deep thunder over the water.
 - **How far out you are is the difficulty curve** — Haven Reach is policed and picked over. The further you sail, the worse the law, the harder the raiders, and the better the salvage still lying on the bottom.
@@ -123,9 +123,8 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **Tab** | Target under crosshair, or cycle nearby contacts |
 | **Shift+Tab** | Clear target lock |
 | **Backspace** | Clear target lock |
-| **Ctrl/Cmd + Tab** | Set waypoint on whatever is under the crosshair (any on-screen contact) |
-| **C** | Toggle autopilot (requires a waypoint) |
-| **M** | Sea chart |
+| **C** | Cruise Control — holds way; A/D steer; W/S/Q/E cancel |
+| **M** | Sea chart (click a mark to set a waypoint) |
 | **B** | Region sonar scan — lock Anomalous Signals (or click the region chip) |
 | **F** | Use targeted contact: salvage wreck · come alongside · crack a datacore nodule |
 | **P** | Sonar pulse — sound the water around a nearby island or wreck field |

@@ -133,11 +133,11 @@ const MINE_HIT_PAD = 14
 // steel does not grow back. Repairs are a yard job (game/economy.js repairShip).
 
 const ATTACK_RANGE = 250
-// Anomaly-spawned guards/waves (tagged npc.anomalySiteId) actively hunt the
-// player across the whole site instead of waiting for point-blank range —
-// otherwise they just sit in 'patrol' near their spawn point until the
-// player happens to fly within the generic 250m engagement range.
-const ANOMALY_GUARD_ATTACK_RANGE = 2200
+// Anomaly-spawned guards/waves (tagged npc.anomalySiteId) hunt a bit further
+// than normal contacts so a site fight starts as you approach the cluster —
+// not the old space-era multi-km radius.
+const ANOMALY_GUARD_ATTACK_RANGE = 550
+const ANOMALY_GUARD_DISENGAGE_RANGE = 850
 const DISENGAGE_RANGE = 375
 const FIRE_RANGE = 200
 const FIRE_CONE_DOT = 0.9
@@ -398,8 +398,28 @@ export function fireProjectile(
   }
 }
 
+/**
+ * Horizontal bump radius for a hull.
+ *
+ * LOA/2 was far too fat — boats ghost-bumped with a clear lane of water between
+ * them. Use midships half-beam (plus a short length factor) so side-swipes match
+ * the visible beam while bow-on contacts still register.
+ */
 export function getShipCollisionRadius(shipClass) {
-  return shipClass.hull.length / 2
+  const hull = shipClass?.hull
+  const length = Math.max(6, Number(hull?.length) || 16)
+  const widths = hull?.stationWidths
+  let halfBeam = 0
+  if (widths?.length) {
+    for (const w of widths) {
+      const n = Number(w)
+      if (Number.isFinite(n) && n > halfBeam) halfBeam = n
+    }
+  }
+  if (halfBeam < 0.4) halfBeam = length * 0.07
+  // Slightly past the plating so strakes still touch; never larger than ~0.32 LOA.
+  const r = halfBeam * 1.25 + length * 0.1
+  return Math.max(2.4, Math.min(length * 0.32, r))
 }
 
 // Scratch vectors — closestDistanceToSegment used to clone 3–4 Vector3s per
@@ -810,7 +830,12 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
   ) {
     npc.aiState = 'attack'
   }
-  else if (npc.aiState === 'attack' && distance >= DISENGAGE_RANGE) npc.aiState = 'patrol'
+  else if (
+    npc.aiState === 'attack' &&
+    distance >= (npc.anomalySiteId != null ? ANOMALY_GUARD_DISENGAGE_RANGE : DISENGAGE_RANGE)
+  ) {
+    npc.aiState = 'patrol'
+  }
 
   let forward
   if (npc.aiState === 'attack' && opponent) {

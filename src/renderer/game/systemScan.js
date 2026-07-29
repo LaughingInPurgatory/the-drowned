@@ -10,6 +10,7 @@ import {
 } from './crafting.js'
 import { tryRollSkillbookDrop, getSkillDef } from './skills.js'
 import { oreTierForField } from './mining.js'
+import { WORLD_RADIUS } from '../procgen/world.js'
 
 export const SYSTEM_SCAN_PROBE_COUNT = 4
 /** Base seconds of “lock” progress needed at full strength (explorer reduces). */
@@ -72,8 +73,8 @@ function hashString(str) {
 function systemRng(systemId, epoch = 0) {
   // Epoch is the reshuffle window — each window re-rolls presence, type, and
   // count independently (not a like-for-like replace of the previous sites).
-  // v3: open-space placement (clear of planets / moons / stations / star).
-  return mulberry32(hashString(`anomaly-v3:${systemId}:e${epoch}`))
+  // v4: sea-surface placement inside WORLD_RADIUS (not space orbits).
+  return mulberry32(hashString(`anomaly-v4:${systemId}:e${epoch}`))
 }
 
 /** Integer anomaly generation from campaign simTime. */
@@ -141,89 +142,76 @@ export function tickGalaxyAnomalies(galaxy, simTime) {
   return { refreshed: true, epoch }
 }
 
-// Keep sites in open volume — not hugging the star or a planet/moon/station.
-// (System orbits typically sit ~100k–340k from the primary.)
-const ANOMALY_MIN_STAR_DIST = 75000
-const ANOMALY_MIN_BODY_PAD = 22000
-const ANOMALY_MIN_SITE_SEP = 18000
-const ANOMALY_PLACE_ATTEMPTS = 56
+// Sea placement: open water inside WORLD_RADIUS, clear of land/ports/fields.
+// (Space-era star-orbit constants left the sites outside the 80 km sea with
+// huge Y offsets — players never saw them.)
+const ANOMALY_MIN_HOME_DIST = WORLD_RADIUS * 0.12
+const ANOMALY_MIN_BODY_PAD = 1800
+const ANOMALY_MIN_SITE_SEP = 6000
+const ANOMALY_PLACE_ATTEMPTS = 64
+/** Migration stamp: re-place space-era / off-sea sites once. */
+const ANOMALY_SEA_MIGRATE_TAG = 'sea-v4'
 
 function bodyClearanceRadius(body) {
   if (!body) return 0
-  // Prefer explicit radius; stations/settlements may be small on body.radius.
   const r = Number(body.radius)
   if (Number.isFinite(r) && r > 0) return r
-  if (body.kind === 'port') return 3400
-  if (body.kind === 'outpost') return 200
-  if (body.kind === 'warpGate') return 140
-  return 500
+  if (body.kind === 'port') return 220
+  if (body.kind === 'outpost') return 90
+  if (body.kind === 'wreckField') return 280
+  if (body.kind === 'island') return 800
+  return 200
+}
+
+/** Horizontal distance on the sea (Y is always the waterline). */
+function horizDist(a, b) {
+  return Math.hypot((a[0] ?? 0) - (b[0] ?? 0), (a[2] ?? 0) - (b[2] ?? 0))
 }
 
 /**
- * True when `pos` sits in open system space: well clear of the star and every
- * planet / moon / station / belt / gate shell.
+ * True when `pos` sits in open water: inside the world, clear of home waters
+ * centre, and well clear of every island / harbour / wreck field.
  */
 export function isAnomalyOpenSpace(pos, system, { extraPositions = [], minBodyPad = ANOMALY_MIN_BODY_PAD } = {}) {
   if (!pos || pos.length < 3) return false
-  const starDist = Math.hypot(pos[0], pos[1], pos[2])
-  if (starDist < ANOMALY_MIN_STAR_DIST) return false
+  const r = Math.hypot(pos[0], pos[2])
+  if (r < ANOMALY_MIN_HOME_DIST) return false
+  if (r > WORLD_RADIUS * 0.98) return false
+  // Sites live on the surface — reject leftover space-era altitude.
+  if (Math.abs(pos[1] ?? 0) > 40) return false
   for (const body of system?.bodies ?? []) {
     if (!body?.position) continue
     const need = bodyClearanceRadius(body) + minBodyPad
-    const d = Math.hypot(
-      pos[0] - body.position[0],
-      pos[1] - body.position[1],
-      pos[2] - body.position[2]
-    )
-    if (d < need) return false
+    if (horizDist(pos, body.position) < need) return false
   }
   for (const other of extraPositions) {
     if (!other || other === pos) continue
-    const d = Math.hypot(pos[0] - other[0], pos[1] - other[1], pos[2] - other[2])
-    if (d < ANOMALY_MIN_SITE_SEP) return false
+    if (horizDist(pos, other) < ANOMALY_MIN_SITE_SEP) return false
   }
   return true
 }
 
 /**
- * Local position in open system volume — not near planets/moons/stations/sun.
- * Uses body layout when available so sites can sit between orbits or beyond
- * the outer system, not only on the planetary ring.
+ * Local position on the open sea — surface only, inside WORLD_RADIUS.
  */
 function randomAnomalyPosition(rng, system = null, occupied = []) {
-  const bodies = system?.bodies ?? []
-  let maxBodyR = 140000
-  for (const b of bodies) {
-    if (!b?.position) continue
-    const r = Math.hypot(b.position[0], b.position[1], b.position[2])
-    if (r > maxBodyR) maxBodyR = r
-  }
-  // Open volume from outside the star exclusion out past the outermost body.
-  const rMin = ANOMALY_MIN_STAR_DIST + 15000
-  const rMax = Math.max(rMin + 80000, maxBodyR * 1.45)
+  const rMin = ANOMALY_MIN_HOME_DIST + 800
+  const rMax = WORLD_RADIUS * 0.94
 
   for (let attempt = 0; attempt < ANOMALY_PLACE_ATTEMPTS; attempt++) {
-    // Mix mid-system (gaps between orbits) and deep outer volume.
-    const outerBias = attempt > ANOMALY_PLACE_ATTEMPTS * 0.45
-    const r = outerBias
-      ? range(rng, Math.max(rMin, maxBodyR * 0.85), rMax)
-      : range(rng, rMin, rMax)
+    const r = range(rng, rMin, rMax)
     const theta = rng() * Math.PI * 2
-    // Mostly ecliptic, with occasional high-latitude outliers (deep space).
-    const ySpan = outerBias ? maxBodyR * 0.12 : maxBodyR * 0.06
-    const y = range(rng, -ySpan, ySpan)
-    const pos = [r * Math.cos(theta), y, r * Math.sin(theta)]
+    const pos = [r * Math.cos(theta), 0, r * Math.sin(theta)]
     if (isAnomalyOpenSpace(pos, system, { extraPositions: occupied })) return pos
   }
 
-  // Fallback: far beyond outermost body on a random bearing (always open).
-  const r = maxBodyR * 1.5 + range(rng, 30000, 90000)
+  // Fallback: mid-outer ring on a random bearing (always surface).
+  const r = range(rng, WORLD_RADIUS * 0.45, WORLD_RADIUS * 0.9)
   const theta = rng() * Math.PI * 2
-  const y = range(rng, -maxBodyR * 0.1, maxBodyR * 0.1)
-  return [r * Math.cos(theta), y, r * Math.sin(theta)]
+  return [r * Math.cos(theta), 0, r * Math.sin(theta)]
 }
 
-/** Re-place nodule offsets when a datacore site moves. */
+/** Re-place nodule offsets when a datacore site moves (surface cluster). */
 function reanchorNodules(anomaly, newPos, rng) {
   if (!anomaly?.nodules?.length) return
   for (let n = 0; n < anomaly.nodules.length; n++) {
@@ -232,67 +220,99 @@ function reanchorNodules(anomaly, newPos, rng) {
     const d = 280 + rng() * 420
     nodule.position = [
       newPos[0] + Math.cos(ang) * d,
-      newPos[1] + (rng() - 0.5) * 80,
+      0,
       newPos[2] + Math.sin(ang) * d
     ]
   }
 }
 
-/** True only when sitting inside a planet/moon/station/belt/gate shell + pad. */
+/** True when sitting inside an island / harbour / field shell + pad. */
 function isTooCloseToABody(pos, system, minBodyPad = ANOMALY_MIN_BODY_PAD) {
   for (const body of system?.bodies ?? []) {
     if (!body?.position) continue
     const need = bodyClearanceRadius(body) + minBodyPad
-    const d = Math.hypot(
-      pos[0] - body.position[0],
-      pos[1] - body.position[1],
-      pos[2] - body.position[2]
-    )
-    if (d < need) return true
+    if (horizDist(pos, body.position) < need) return true
+  }
+  return false
+}
+
+/** Sites rolled under the space placer (off-map or high Y) need re-seeding. */
+function anomalyNeedsSeaFix(pos, system, occupied) {
+  if (!pos) return true
+  if (Math.abs(pos[1] ?? 0) > 40) return true
+  if (Math.hypot(pos[0], pos[2]) > WORLD_RADIUS * 0.98) return true
+  if (Math.hypot(pos[0], pos[2]) < ANOMALY_MIN_HOME_DIST * 0.5) return true
+  if (isTooCloseToABody(pos, system)) return true
+  if (!isAnomalyOpenSpace(pos, system, { extraPositions: occupied, minBodyPad: ANOMALY_MIN_BODY_PAD * 0.5 })) {
+    // Allow already-scanned sites that are merely a bit close; still fix altitude.
+    return Math.abs(pos[1] ?? 0) > 5
   }
   return false
 }
 
 /**
- * One-time migration: move still-hidden sites that were rolled next to bodies
- * under the old placer into open space (preserves scanned/active progress).
- * Only runs when the system has bodies — pure test fixtures are left alone.
+ * Migration: move sites that still use space-era positions (off the sea /
+ * airborne) onto open water. Preserves scanned/active progress.
  */
 function migrateCrowdedHiddenAnomalies(system, epoch) {
   if (!system?.spatialAnomalies?.length) return
-  if (system.anomalyOpenSpaceMigrated === epoch) return
+  if (system.anomalySeaMigrated === ANOMALY_SEA_MIGRATE_TAG && system.anomalyOpenSpaceMigrated === epoch) {
+    return
+  }
   if (!system.bodies?.length) {
     system.anomalyOpenSpaceMigrated = epoch
+    system.anomalySeaMigrated = ANOMALY_SEA_MIGRATE_TAG
     return
   }
   const rng = systemRng(system.id, epoch)
   const occupied = []
   for (const a of system.spatialAnomalies) {
     if (!a?.position) continue
-    if (a.fullyScanned || a.status === 'active' || a.status === 'scanned' || a.status === 'completed' || a.status === 'despawning') {
+    // Snap Y to the surface for every live site.
+    if (Math.abs(a.position[1] ?? 0) > 0.01) {
+      a.position = [a.position[0], 0, a.position[2]]
+      if (a.nodules?.length) {
+        for (const n of a.nodules) {
+          if (n?.position) n.position = [n.position[0], 0, n.position[2]]
+        }
+      }
+      if (a.oreFieldId) {
+        const field = system.bodies?.find((b) => b.id === a.oreFieldId)
+        if (field?.position) field.position = [field.position[0], 0, field.position[2]]
+      }
+    }
+    // Re-place only still-hidden sites that are unusable on the sea.
+    const progress =
+      a.fullyScanned ||
+      a.status === 'active' ||
+      a.status === 'scanned' ||
+      a.status === 'completed' ||
+      a.status === 'despawning'
+    if (progress) {
       occupied.push(a.position)
       continue
     }
-    // Don't force-move for star-only distance; only sites hugging a real body.
-    if (!isTooCloseToABody(a.position, system) && isAnomalyOpenSpace(a.position, system, { extraPositions: occupied })) {
-      occupied.push(a.position)
-      continue
-    }
-    if (!isTooCloseToABody(a.position, system)) {
+    if (!anomalyNeedsSeaFix(a.position, system, occupied)) {
       occupied.push(a.position)
       continue
     }
     const next = randomAnomalyPosition(rng, system, occupied)
     a.position = next
     reanchorNodules(a, next, rng)
+    if (a.oreFieldId) {
+      const field = system.bodies?.find((b) => b.id === a.oreFieldId)
+      if (field) field.position = [...next]
+    }
     occupied.push(next)
   }
   system.anomalyOpenSpaceMigrated = epoch
+  system.anomalySeaMigrated = ANOMALY_SEA_MIGRATE_TAG
 }
 
 /**
  * Roll / ensure spatial anomalies for a system (idempotent within an epoch).
- * 20% of systems get 1–4 sites; lower security bias toward more.
+ * Full sea worlds always get 2–6 surface sites; sparse fixtures keep a 20%
+ * presence roll for unit tests.
  *
  * @param {object} system
  * @param {number | { anomalyEpoch?: number }} [epochOrGalaxy=0]
@@ -306,28 +326,43 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
     (system.anomalyEpoch ?? epoch) === epoch
   ) {
     system.anomalyEpoch = epoch
-    // Old saves: nudge still-hidden sites off planets/stations into open space.
-    migrateCrowdedHiddenAnomalies(system, epoch)
-    return system.spatialAnomalies
+    // Old saves: empty list on the full sea (20% space-era presence roll) or
+    // off-map sites — re-seed once under the sea placer so Region Sonar has work.
+    const fullWorld = (system.bodies?.length ?? 0) >= 20
+    if (
+      fullWorld &&
+      system.spatialAnomalies.length === 0 &&
+      system.anomalySeaMigrated !== ANOMALY_SEA_MIGRATE_TAG
+    ) {
+      delete system.spatialAnomalies
+      delete system.anomalyEpoch
+      // Fall through to roll below.
+    } else {
+      migrateCrowdedHiddenAnomalies(system, epoch)
+      return system.spatialAnomalies
+    }
   }
 
   const rng = systemRng(system.id, epoch)
   const sec = Math.max(0, Math.min(6, Math.floor(system.securityRating ?? 2)))
-  // 20% base presence
-  if (rng() >= 0.2) {
+  // One-sea world always needs signals to find. Sparse test fixtures (no
+  // bodies) keep the old 20% presence so unit tests still sample empties.
+  const fullWorld = (system.bodies?.length ?? 0) >= 20
+  if (!fullWorld && rng() >= 0.2) {
     system.spatialAnomalies = []
     system.anomalyEpoch = epoch
     system.anomalyOpenSpaceMigrated = epoch
+    system.anomalySeaMigrated = ANOMALY_SEA_MIGRATE_TAG
     return system.spatialAnomalies
   }
 
-  // Lower security rating → more sites. Sec 0–1: weight high, Sec 5–6: often 1.
+  // Lower security rating → more sites. Full sea: always at least 2.
   const lowSecurityBias = 1 - sec / 6
-  let count = 1
-  if (rng() < 0.35 + lowSecurityBias * 0.45) count = 2
-  if (rng() < 0.2 + lowSecurityBias * 0.35) count = 3
-  if (rng() < 0.08 + lowSecurityBias * 0.25) count = 4
-  count = Math.min(4, Math.max(1, count))
+  let count = fullWorld ? 2 : 1
+  if (rng() < 0.35 + lowSecurityBias * 0.45) count = fullWorld ? 3 : 2
+  if (rng() < 0.2 + lowSecurityBias * 0.35) count = fullWorld ? 4 : 3
+  if (rng() < 0.08 + lowSecurityBias * 0.25) count = fullWorld ? 5 : 4
+  count = Math.min(fullWorld ? 6 : 4, Math.max(fullWorld ? 2 : 1, count))
 
   const anomalies = []
   const occupied = []
@@ -389,7 +424,7 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
           id: `${id}-nodule-${n}`,
           position: [
             position[0] + Math.cos(ang) * d,
-            position[1] + (rng() - 0.5) * 80,
+            0,
             position[2] + Math.sin(ang) * d
           ],
           status: 'sealed', // sealed | open | destroyed
@@ -425,6 +460,7 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
   system.spatialAnomalies = anomalies
   system.anomalyEpoch = epoch
   system.anomalyOpenSpaceMigrated = epoch
+  system.anomalySeaMigrated = ANOMALY_SEA_MIGRATE_TAG
   return anomalies
 }
 
@@ -455,6 +491,19 @@ export function systemScanBonuses(shipClass) {
 }
 
 /**
+ * Ideal probe standoff for a given signal read (0..1).
+ * Fresh / unknown ≈ 3.25 km; fully known ≈ 1.7 km. Region Sonar map rings
+ * and deploy hints must use this — same formula as computeProbeSignal.
+ */
+export function idealProbeScanRadius(signalKnown = 0) {
+  const known = Math.max(0, Math.min(1, signalKnown ?? 0))
+  return 2800 * (1 - known * 0.55) + 450
+}
+
+/** Soft falloff ends at this multiple of idealProbeScanRadius (no contribution beyond). */
+export const PROBE_SIGNAL_RANGE_MUL = 2.4
+
+/**
  * Signal strength at an anomaly given probe world positions.
  * Probes closer + clustered around the signal raise strength.
  */
@@ -462,26 +511,24 @@ export function computeProbeSignal(anomaly, probePositions, shipClass = null) {
   if (!anomaly || !probePositions?.length) return 0
   const bonus = systemScanBonuses(shipClass).signalBonus
   const ax = anomaly.position[0]
-  const ay = anomaly.position[1]
   const az = anomaly.position[2]
 
   // Ideal scan radius shrinks as signal is better known (close-in).
-  // Short range on purpose — Region Sonar needs you to steam closer to map more.
-  const known = anomaly.signal ?? 0
-  const idealR = 2800 * (1 - known * 0.55) + 450
+  // Horizontal only: anomalies and probes sit on the sea surface.
+  const idealR = idealProbeScanRadius(anomaly.signal ?? 0)
 
   let score = 0
   let inRange = 0
   const dists = []
   for (const p of probePositions) {
     if (!p?.active) continue
-    const d = Math.hypot(p.position[0] - ax, p.position[1] - ay, p.position[2] - az)
+    const d = Math.hypot(p.position[0] - ax, p.position[2] - az)
     dists.push(d)
-    // Soft falloff: full contribution inside idealR, zero past 2.4×
+    // Soft falloff: full contribution inside idealR, zero past PROBE_SIGNAL_RANGE_MUL×
     const t = d / idealR
-    if (t < 2.4) {
+    if (t < PROBE_SIGNAL_RANGE_MUL) {
       inRange++
-      score += Math.max(0, 1 - t / 2.4)
+      score += Math.max(0, 1 - t / PROBE_SIGNAL_RANGE_MUL)
     }
   }
   if (!inRange) return 0

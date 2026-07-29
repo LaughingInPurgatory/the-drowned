@@ -2,9 +2,11 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
 import {
+  updateCruiseControl,
   updateAutopilot,
   aimAroundObstacles,
   ignoreBodyAsCruiseObstacle,
+  cruiseCancelKeysHeld,
   AUTOPILOT_SPEED_MULTIPLIER,
   AUTOPILOT_RAMP_UP_S,
   autopilotRampUpFactor,
@@ -16,93 +18,115 @@ import { getShipClass, STARTER_SHIP_CLASS_ID } from '../data/shipClasses.js'
 const DT = 1 / 60
 
 function afloat(position = [0, 0, 0]) {
-  return { position, velocity: [0, 0, 0], quaternion: [0, 0, 0, 1], supercruiseElapsed: 0 }
+  return { position, velocity: [0, 0, 0], quaternion: [0, 0, 0, 1], supercruiseElapsed: 0, heading: 0 }
 }
 
-test('autopilot runs the boat toward the waypoint and reports arrival', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const shipState = afloat()
-
-  let arrived = false
-  for (let i = 0; i < 6000 && !arrived; i++) {
-    arrived = updateAutopilot(shipState, shipClass, [0, 0, 500], DT)
-  }
-
-  assert.equal(arrived, true, 'should reach the arrival threshold in reasonable time')
-  assert.ok(shipState.position[2] > 0, 'should have made way toward the waypoint')
-})
-
-test('autopilot speed is about AUTOPILOT_SPEED_MULTIPLIER times normal handling speed', () => {
-  // The handling model's damping means a boat settles well below its nominal
-  // stats.speed cap (that cap is a ceiling, not a speed it reaches), so the
-  // ratio is measured against real cruising speed rather than the cap.
+test('cruise control has no speed boost over hand-steered full ahead', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
 
   const manualState = afloat()
   for (let i = 0; i < 600; i++) {
-    updateFlight(manualState, shipClass, new Set(["KeyW"]), DT)
+    updateFlight(manualState, shipClass, new Set(['KeyW']), DT)
   }
   const manualSpeed = Math.hypot(...manualState.velocity)
 
   const cruiseState = afloat()
+  cruiseState.heading = 0
   let peakCruise = 0
   for (let i = 0; i < 600; i++) {
-    updateAutopilot(cruiseState, shipClass, [0, 0, 50_000_000], DT)
+    updateCruiseControl(cruiseState, shipClass, DT)
     peakCruise = Math.max(peakCruise, Math.hypot(...cruiseState.velocity))
   }
 
   const ratio = peakCruise / manualSpeed
   assert.ok(
-    ratio > AUTOPILOT_SPEED_MULTIPLIER * 0.9 && ratio < AUTOPILOT_SPEED_MULTIPLIER * 1.1,
-    `expected ~${AUTOPILOT_SPEED_MULTIPLIER}x, got ${ratio.toFixed(2)}x`
+    ratio > 0.85 && ratio < 1.15,
+    `expected ~1x hand speed, got ${ratio.toFixed(2)}x (multiplier constant is ${AUTOPILOT_SPEED_MULTIPLIER})`
   )
 })
 
-test('autopilot spools up over AUTOPILOT_RAMP_UP_S and eases off on approach', () => {
+test('cruise spools up over AUTOPILOT_RAMP_UP_S', () => {
   assert.equal(autopilotRampUpFactor(0), 0)
   assert.ok(autopilotRampUpFactor(AUTOPILOT_RAMP_UP_S / 2) > 0.4)
   assert.ok(autopilotRampUpFactor(AUTOPILOT_RAMP_UP_S / 2) < 0.7)
   assert.equal(autopilotRampUpFactor(AUTOPILOT_RAMP_UP_S), 1)
   assert.equal(autopilotRampUpFactor(AUTOPILOT_RAMP_UP_S + 5), 1)
 
-  const cruiseTop = 100 * AUTOPILOT_SPEED_MULTIPLIER
+  // Approach helper still defined for callers; cruise itself does not decelerate.
+  const cruiseTop = 100
   assert.ok(autopilotApproachFactor(1e9, 60, cruiseTop) > 0.99)
   assert.ok(autopilotApproachFactor(80, 60, cruiseTop) < 0.35)
 })
 
-test('already inside the arrival ring returns true without moving', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  assert.equal(updateAutopilot(afloat(), shipClass, [0, 0, 10], DT), true)
-})
-
-test('a custom arrival range is respected, for big harbours and islands', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  assert.equal(updateAutopilot(afloat(), shipClass, [0, 0, 200], DT, 250), true)
-  assert.equal(updateAutopilot(afloat(), shipClass, [0, 0, 200], DT, 60), false)
-})
-
-test('autopilot never lifts the hull off the water or pitches the bow', () => {
+test('cruise control never lifts the hull off the water or pitches the bow', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const shipState = afloat([0, 0, 0])
+  shipState.heading = 0
   for (let i = 0; i < 900; i++) {
-    updateAutopilot(shipState, shipClass, [4000, 0, 9000], DT, 60, null, 0, null, null, i * DT)
+    updateCruiseControl(shipState, shipClass, DT, null, 0, null, i * DT)
     assert.equal(shipState.velocity[1], 0, 'no vertical way under cruise')
   }
   const f = new THREE.Vector3(0, 0, 1).applyQuaternion(
     new THREE.Quaternion().fromArray(shipState.quaternion)
   )
-  assert.ok(Math.abs(f.y) < 0.4, `bow pitched to ${f.y} under autopilot`)
+  assert.ok(Math.abs(f.y) < 0.4, `bow pitched to ${f.y} under cruise`)
 })
 
-test('autopilot steers toward a waypoint off the beam and gets there', () => {
+test('cruise control holds the engaged heading (no waypoint seek)', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const shipState = afloat([0, 0, 0])
-  const target = [6000, 0, -6000]
-  let arrived = false
-  for (let i = 0; i < 200000 && !arrived; i++) {
-    arrived = updateAutopilot(shipState, shipClass, target, DT, 120)
+  // Point south-east and engage — should keep going that way, not turn to origin.
+  shipState.heading = Math.PI / 4
+  for (let i = 0; i < 400; i++) {
+    updateCruiseControl(shipState, shipClass, DT)
   }
-  assert.equal(arrived, true, 'should come round onto a waypoint abaft the beam')
+  assert.ok(shipState.position[0] > 20, 'should make way on the engaged heading (+X)')
+  assert.ok(shipState.position[2] > 20, 'should make way on the engaged heading (+Z)')
+  // Heading should stay near the engaged course (avoidance may nudge slightly).
+  const err = Math.abs(
+    Math.atan2(Math.sin(shipState.heading - Math.PI / 4), Math.cos(shipState.heading - Math.PI / 4))
+  )
+  assert.ok(err < 0.35, `heading drifted too far: ${shipState.heading}`)
+})
+
+test('cruiseCancelKeysHeld is true for thrust/strafe, false for helm A/D', () => {
+  assert.equal(cruiseCancelKeysHeld(new Set(['KeyW'])), true)
+  assert.equal(cruiseCancelKeysHeld(new Set(['KeyS'])), true)
+  assert.equal(cruiseCancelKeysHeld(new Set(['KeyQ'])), true)
+  assert.equal(cruiseCancelKeysHeld(new Set(['KeyE'])), true)
+  assert.equal(cruiseCancelKeysHeld(new Set(['KeyA'])), false)
+  assert.equal(cruiseCancelKeysHeld(new Set(['KeyD'])), false)
+  assert.equal(cruiseCancelKeysHeld(new Set()), false)
+})
+
+test('A/D under cruise turns the boat without needing a waypoint', () => {
+  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
+  const shipState = afloat([0, 0, 0])
+  shipState.heading = 0
+  shipState.supercruiseElapsed = AUTOPILOT_RAMP_UP_S
+  // Build a little way first so rudder has authority.
+  for (let i = 0; i < 120; i++) {
+    updateCruiseControl(shipState, shipClass, DT)
+  }
+  const before = shipState.heading
+  for (let i = 0; i < 180; i++) {
+    updateCruiseControl(shipState, shipClass, DT, null, 0, null, i * DT, new Set(['KeyA']))
+  }
+  // Port helm should increase heading (turn left / toward +X from north).
+  const delta = Math.atan2(Math.sin(shipState.heading - before), Math.cos(shipState.heading - before))
+  assert.ok(delta > 0.15, `expected port turn, delta=${delta}`)
+})
+
+test('legacy updateAutopilot is cruise control (ignores target, never arrives)', () => {
+  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
+  const shipState = afloat()
+  shipState.heading = 0
+  // Close “target” used to mean arrival; cruise never reports arrived.
+  assert.equal(updateAutopilot(shipState, shipClass, [0, 0, 10], DT), false)
+  for (let i = 0; i < 120; i++) {
+    assert.equal(updateAutopilot(shipState, shipClass, [0, 0, 10], DT), false)
+  }
+  assert.ok(shipState.position[2] > 5, 'should keep going past the old arrival ring')
 })
 
 test('aimAroundObstacles leaves a clear track alone', () => {
@@ -112,8 +136,6 @@ test('aimAroundObstacles leaves a clear track alone', () => {
 })
 
 test('aimAroundObstacles steers around something on the track', () => {
-  // The autopilot is slow enough that carrying straight through an island would
-  // read as sailing through land — it has to actually give way.
   const bodies = [{ id: 'blocker', kind: 'island', position: [0, 0, 400], radius: 80 }]
   const target = new THREE.Vector3(0, 0, 3000)
   const aim = aimAroundObstacles(new THREE.Vector3(), target, bodies, 5)
@@ -122,12 +144,13 @@ test('aimAroundObstacles steers around something on the track', () => {
   assert.equal(aim.y, 0, 'the aim point stays on the water')
 })
 
-test('aimAroundObstacles commits to the approach once close in', () => {
-  // Near the destination its own surroundings look like obstructions; without
-  // this the boat circles the harbour instead of coming alongside.
+test('aimAroundObstacles commits to the approach once close in (with a dest)', () => {
   const bodies = [{ id: 'blocker', kind: 'island', position: [0, 0, 150], radius: 80 }]
   const target = new THREE.Vector3(0, 0, 300)
-  assert.deepEqual(aimAroundObstacles(new THREE.Vector3(), target, bodies, 5).toArray(), target.toArray())
+  assert.deepEqual(
+    aimAroundObstacles(new THREE.Vector3(), target, bodies, 5, null, target, 60).toArray(),
+    target.toArray()
+  )
 })
 
 test('aimAroundObstacles does not avoid the place it is heading for', () => {
@@ -147,78 +170,17 @@ test('the island a coastal harbour sits against is not treated as an obstruction
   assert.equal(ignoreBodyAsCruiseObstacle(elsewhere, harbourPos, 'port-1', 120), false)
 })
 
-test('autopilot reaches a harbour tucked against its own island', () => {
+test('cruise control does not auto-steer around islands (hold course only)', () => {
   const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
   const shipRadius = shipClass.hull.length / 2
-  const shipState = { ...afloat([0, 0, -8000]), supercruiseElapsed: AUTOPILOT_RAMP_UP_S }
-  const island = { id: 'island-1', kind: 'island', position: [0, 0, 0], radius: 1000 }
-  const harbour = { id: 'port-1', kind: 'port', position: [1300, 0, 0] }
-  const arrivalRange = 260 + shipRadius + 220
-
-  let arrived = false
-  for (let i = 0; i < 200000 && !arrived; i++) {
-    arrived = updateAutopilot(
-      shipState,
-      shipClass,
-      harbour.position,
-      DT,
-      arrivalRange,
-      [island, harbour],
-      shipRadius,
-      'port-1'
-    )
+  const shipState = afloat([0, 0, 0])
+  shipState.heading = 0
+  const blocker = { id: 'blocker', kind: 'island', position: [0, 0, 800], radius: 120 }
+  for (let i = 0; i < 4000; i++) {
+    updateCruiseControl(shipState, shipClass, DT, [blocker], shipRadius, null, i * DT)
   }
-  assert.equal(arrived, true, 'should arrive without circling the island forever')
-})
-
-test('autopilot still arrives with something on the track (it runs through)', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-  const shipRadius = shipClass.hull.length / 2
-  const shipState = afloat()
-  const blocker = { id: 'blocker', kind: 'island', position: [40, 0, 8000], radius: 100 }
-  const dest = { id: 'dest', kind: 'island', position: [0, 0, 25000], radius: 30 }
-  const arrivalRange = 30 + shipRadius + 220
-
-  let arrived = false
-  for (let i = 0; i < 200000 && !arrived; i++) {
-    arrived = updateAutopilot(shipState, shipClass, [0, 0, 25000], DT, arrivalRange, [blocker, dest], shipRadius, 'dest')
-  }
-  assert.equal(arrived, true, 'should arrive even with an island on the track')
-})
-
-test('the decel ramp does not scale with the arrival ring', () => {
-  // A big island has an arrival ring kilometres across. Sizing the ramp off it
-  // made the autopilot crawl from 6 km out and feel slower than steering by
-  // hand — the ring says *where* to stop, not how long stopping takes.
-  const topSpeed = 51
-  for (const arrivalRange of [60, 350, 900, 3000]) {
-    // Measured from the ring, not the centre.
-    assert.equal(autopilotApproachFactor(arrivalRange + 800, arrivalRange, topSpeed), 1,
-      `should still be at full speed 800m outside a ${arrivalRange}m ring`)
-  }
-})
-
-test('the autopilot is never slower than steering by hand', () => {
-  const shipClass = getShipClass(STARTER_SHIP_CLASS_ID)
-
-  const manual = afloat()
-  for (let i = 0; i < 900; i++) {
-    updateFlight(manual, shipClass, new Set(["KeyW"]), DT)
-  }
-  const handSteered = Math.hypot(...manual.velocity)
-
-  // Long enough to reach terminal speed, short enough to be an ordinary hop.
-  for (const [dist, arrivalRange] of [[1500, 350], [4000, 900], [9000, 3000]]) {
-    const s = afloat()
-    let peak = 0
-    for (let i = 0; i < 40000; i++) {
-      if (updateAutopilot(s, shipClass, [0, 0, dist], DT, arrivalRange)) break
-      peak = Math.max(peak, Math.hypot(...s.velocity))
-    }
-    assert.ok(
-      peak > handSteered,
-      `${dist}m leg into a ${arrivalRange}m ring peaked at ${peak.toFixed(1)}, ` +
-        `below the ${handSteered.toFixed(1)} a helmsman gets`
-    )
-  }
+  // Dead-ahead course — no lateral dodge from obstacle avoidance.
+  assert.ok(shipState.position[2] > 400, `z=${shipState.position[2]}`)
+  assert.ok(Math.abs(shipState.position[0]) < 5, `x drifted to ${shipState.position[0]}`)
+  assert.ok(Math.abs(shipState.heading) < 0.05, `heading drifted to ${shipState.heading}`)
 })

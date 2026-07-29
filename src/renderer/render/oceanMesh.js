@@ -1,6 +1,6 @@
 import * as THREE from 'three'
 import { seaShaderChunk, SEA_MAX_AMPLITUDE } from '../world/sea.js'
-import { getWaterNormalMap } from './textures.js'
+import { getWaterNormalMap, getAlgaeAlbedoMap } from './textures.js'
 
 // Radius the water reaches. Well past the fog wall — the surface must still be
 // there when a crest lifts the camera, or you get a hole at the horizon.
@@ -112,6 +112,9 @@ uniform float uSearchCosInner;
 // Micro-detail normal map (CC0). Dual-scroll, fades with distance — not albedo.
 uniform sampler2D uWaterNormal;
 uniform float uWaterNormalStrength;
+// Organic algae film (procedural seamless albedo). Density + colour variety.
+uniform sampler2D uAlgaeMap;
+uniform float uAlgaeMapStrength;
 varying vec3 vWorldPos;
 varying float vDetail;
 #include <fog_pars_fragment>
@@ -207,25 +210,34 @@ vec2 rippleSlope(vec2 p, float t, float fade) {
 /**
  * Algae bloom mask, 0 outside a bloom and up to 1 in the thick of one.
  *
- * Two scales of noise multiplied together: a big slow one that decides *where*
- * a bloom is at all — they want to be rare and hundreds of metres across — and
- * a finer one that gives the patch a ragged, streaky edge instead of a blob.
- * The whole field drifts, very slowly, because a bloom moves with the water.
+ * Real surface blooms form large, rare fields broken into wind-rows (Langmuir
+ * streaks) with ragged edges — not round green blobs. Big noise chooses *where*,
+ * anisotropic streaks carve the rows, fine noise frays the margin. The whole
+ * field drifts slowly with the current.
  *
  * Purely cosmetic. Nothing in the game logic knows these exist.
  */
 float algaeMask(vec2 p, float t) {
-  vec2 drift = vec2(t * 0.06, t * -0.035);
-  // Where. Threshold high so most of the sea is clear water.
-  float region = noised(p * 0.0016 + drift * 0.1).x;
-  // ('patch' is a GLSL reserved word — hence 'slick'.)
-  // Rarer blooms so most of the sea stays clear water.
-  float slick = smoothstep(0.28, 0.52, region);
+  vec2 drift = vec2(t * 0.045, t * -0.028);
+  // Where: rare multi-kilometre fields (most of the sea stays clear).
+  float region = noised(p * 0.0011 + drift * 0.08).x;
+  region += noised(p * 0.00045 - drift * 0.05).x * 0.45;
+  float slick = smoothstep(0.34, 0.58, region);
   if (slick <= 0.001) return 0.0;
-  // Shape. Streaks pulled out along the drift, the way a slick actually lies.
-  float streak = noised(p * vec2(0.006, 0.018) + drift).x;
-  streak += noised(p * vec2(0.021, 0.058) - drift * 1.7).x * 0.5;
-  return slick * smoothstep(-0.18, 0.34, streak);
+
+  // Langmuir / wind-row streaks — elongated, slightly curved bands inside the field.
+  vec2 rowUv = p * vec2(0.0032, 0.014) + drift;
+  float rows = noised(rowUv).x;
+  rows += noised(p * vec2(0.009, 0.031) - drift * 1.3).x * 0.55;
+  // Cross-swell freckling so rows are not perfect paint lines.
+  float freckle = noised(p * 0.042 + drift * 2.1).x;
+  float band = smoothstep(-0.12, 0.38, rows + freckle * 0.22);
+
+  // Soft holes / thin spots inside the slick (living film, not solid paint).
+  float voids = noised(p * 0.019 - drift).x;
+  float body = smoothstep(0.05, 0.55, band) * (0.55 + 0.45 * smoothstep(0.15, 0.7, voids));
+
+  return slick * body;
 }
 
 void main() {
@@ -336,23 +348,41 @@ void main() {
   col += moonTint * pow(ndmh, 340.0) * 1.1 * moonUp * uMoonBright;
   col += moonTint * pow(ndmh, 26.0) * 0.055 * moonUp * uMoonBright;
 
-  // Algae. Ash and run-off feed it, so the drowned world is thick with the
-  // stuff — scattered slicks of green sitting on top of the water rather than
-  // in it, which is why this tints the surface *after* the fresnel and
-  // scattering and before open-sea whitecaps.
+  // Algae / phytoplankton film — sparse wind-rows of organic scum on the
+  // surface (after fresnel/scatter, before whitecaps). Textured, not a flat tint.
   float algae = algaeMask(vWorldPos.xz, uTime) * shadeDetail;
-  // Algae is not bioluminescent. Without tying it to the light level the slicks
-  // glow bright green in the middle of the night, which is the one thing on the
-  // whole sea that was lighting itself.
+  // Not bioluminescent — dies with the light (no neon night slicks).
   float dayLight = clamp(uSunDir.y * 1.7 + 0.22, 0.06, 1.0);
-  if (algae > 0.001) {
-    // Thicker in the middle of a slick: it stops looking like water at all and
-    // starts looking like a skin on it.
-    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.18 + vec3(0.02, 0.04, 0.0), algae) * dayLight;
-    col = mix(col, bloom, algae * 0.7);
-    // A slick damps the chop and kills the sun track — that flat, dead patch
-    // is most of how you spot one from a distance.
-    col += uSunColor * pow(ndh, 60.0) * 0.06 * sunUp * (1.0 - algae);
+  if (algae > 0.001 && uAlgaeMapStrength > 0.001) {
+    // Dual-scale organic film; slow drift so the scum feels carried by current.
+    vec2 aDrift = vec2(uTime * 0.008, uTime * -0.0055);
+    vec2 uvA = vWorldPos.xz * 0.014 + aDrift;
+    vec2 uvB = vWorldPos.xz * 0.038 - aDrift * 1.4 + vec2(0.37, 0.19);
+    vec3 texA = texture2D(uAlgaeMap, uvA).rgb;
+    vec3 texB = texture2D(uAlgaeMap, uvB).rgb;
+    vec3 film = mix(texA, texB, 0.42);
+    // Density from green channel + luminance — holes where the film is thin.
+    float dens = clamp(film.g * 0.72 + dot(film, vec3(0.12, 0.55, 0.08)), 0.0, 1.0);
+    algae *= mix(0.35, 1.0, smoothstep(0.12, 0.78, dens));
+    algae = clamp(algae, 0.0, 1.0);
+
+    // Live olive-emerald vs dying yellow-brown edges (thin film).
+    vec3 liveCol = mix(uAlgaeColor * 0.85, film * 1.15, 0.55);
+    vec3 deadCol = mix(film * vec3(1.15, 0.95, 0.55), uAlgaeColor * vec3(1.1, 0.85, 0.4), 0.4);
+    vec3 bloom = mix(deadCol, liveCol, dens) * dayLight;
+    // Slight desat so it sits in the water instead of plastic green.
+    bloom = mix(vec3(dot(bloom, vec3(0.3, 0.5, 0.2))), bloom, 0.88);
+
+    // Thick centre is a skin; thin edges only stain the water.
+    float cover = algae * mix(0.45, 0.88, dens) * uAlgaeMapStrength;
+    col = mix(col, bloom, cover);
+    // Slicks damp chop and kill the sun path — flat dead water is the tell.
+    col *= 1.0 - algae * dens * 0.12;
+    col += uSunColor * pow(ndh, 55.0) * 0.05 * sunUp * (1.0 - algae * dens);
+  } else if (algae > 0.001) {
+    // Fallback if the map failed to build (headless / missing canvas).
+    vec3 bloom = mix(uAlgaeColor, uAlgaeColor * 1.15 + vec3(0.03, 0.05, 0.0), algae) * dayLight;
+    col = mix(col, bloom, algae * 0.65);
   }
 
   // Whitecaps only on steeper crests — no object-tied shoreline "surf foam"
@@ -363,7 +393,7 @@ void main() {
   breakup += noised(vWorldPos.xz * 1.9 - vec2(uTime * 0.4)).x * 0.5;
   // Algae holds the surface together, so a slick foams far less than clear
   // water at the same steepness.
-  float foam = foamMask * smoothstep(-0.05, 0.35, breakup) * shadeDetail * (1.0 - algae * 0.75);
+  float foam = foamMask * smoothstep(-0.05, 0.35, breakup) * shadeDetail * (1.0 - algae * 0.85);
   col = mix(col, uFoamColor, clamp(foam, 0.0, 0.38));
 
   // Searchlight *reflection* on the water — same two-lobe treatment as the
@@ -417,6 +447,16 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
   )
   fallbackNormal.needsUpdate = true
   const waterNormal = getWaterNormalMap() ?? fallbackNormal
+  // Soft olive fallback if canvas algae map fails (tests / no DOM).
+  const fallbackAlgae = new THREE.DataTexture(
+    new Uint8Array([44, 74, 40, 255]),
+    1,
+    1,
+    THREE.RGBAFormat
+  )
+  fallbackAlgae.colorSpace = THREE.SRGBColorSpace
+  fallbackAlgae.needsUpdate = true
+  const algaeMap = getAlgaeAlbedoMap() ?? fallbackAlgae
 
   const material = new THREE.ShaderMaterial({
     uniforms: THREE.UniformsUtils.merge([
@@ -435,8 +475,8 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uSkyColor: { value: new THREE.Color(skyColor ?? 0x8a9499) },
         uZenithColor: { value: new THREE.Color(0x3a6e96) },
         uFoamColor: { value: new THREE.Color(0xd8e6ec) },
-        // Thin coastal slicks — kept muted so they don't muddy the whole sea.
-        uAlgaeColor: { value: new THREE.Color(0x2c4a32) },
+        // Base tint for blooms — texture supplies olive / brown variety.
+        uAlgaeColor: { value: new THREE.Color(0x3a5c38) },
         // Searchlight off until the player hits L.
         uSearchPos: { value: new THREE.Vector3(0, 0, 0) },
         uSearchDir: { value: new THREE.Vector3(0, -1, 0) },
@@ -447,7 +487,9 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uSearchCosInner: { value: Math.cos(0.1) },
         uWaterNormal: { value: waterNormal },
         // Keep subtle — photo normals overpower analytic swell if too strong.
-        uWaterNormalStrength: { value: 0.22 }
+        uWaterNormalStrength: { value: 0.22 },
+        uAlgaeMap: { value: algaeMap },
+        uAlgaeMapStrength: { value: 1.0 }
       }
     ]),
     vertexShader: VERTEX,

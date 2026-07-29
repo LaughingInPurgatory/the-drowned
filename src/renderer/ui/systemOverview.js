@@ -223,15 +223,18 @@ export function createSystemOverview(container, gameState, hooks = {}) {
     if (!id || !gameState?.player) return
     let name = null
     const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    name = system?.bodies.find((b) => b.id === id)?.name ?? 'Waypoint'
+    name =
+      system?.bodies.find((b) => b.id === id)?.name ??
+      overviewAnomalies(system, gameState.galaxy).find((a) => a.id === id)?.displayName ??
+      'Waypoint'
 
     if (gameState.player.waypointBodyId === id) {
-      // Clear is always allowed (including during supercruise).
       gameState.player.waypointBodyId = null
       gameState.player.waypointPosition = null
       hooks.onWaypointChange?.({ id: null, name, set: false })
     } else {
-      // A new waypoint would redirect the autopilot mid-passage — blocked under way.
+      // Waypoints are a nav cue only — Cruise Control holds heading, so setting
+      // a mark mid-passage is always allowed.
       if (hooks.canSetWaypoint && !hooks.canSetWaypoint()) return
       gameState.player.waypointBodyId = id
       gameState.player.waypointPosition = null

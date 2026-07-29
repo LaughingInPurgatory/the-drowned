@@ -16,8 +16,7 @@ export const CONTROLS = [
   ['Tab', 'Acquire / cycle target under crosshair'],
   ['Shift+Tab', 'Clear target lock'],
   ['Backspace', 'Clear target lock'],
-  ['Ctrl+Tab', 'Set waypoint under the crosshair (any distance, if on screen)'],
-  ['C', 'Toggle autopilot (requires a waypoint)'],
+  ['C', 'Cruise Control — holds way; A/D steer; W/S/Q/E cancel'],
   ['S', 'Services (alongside only)'],
   ['M', 'Sea chart'],
   ['B', 'Region Sonar Scan (deploy drones, run down signals)'],
@@ -31,7 +30,7 @@ export const CONTROLS = [
   ['F1', 'Character sheet'],
   ['Esc', 'Pause (Resume to continue)'],
   ['F5', 'Hail locked target'],
-  ['Free mouse', 'Click Overview / contacts to set waypoints; scroll Overview with the wheel']
+  ['Free mouse', 'Click Overview / sea chart / Region Sonar to set waypoints; scroll Overview with the wheel']
 ]
 
 /** CSS for a scrollable key/action list (scope under parent id). */

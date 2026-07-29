@@ -51,6 +51,30 @@ test('heading survives a save so a loaded boat still points where it was left', 
   assert.equal(restored.player.ship.heading, 2.35)
 })
 
+test('missing heading is recovered from the saved quaternion on load', () => {
+  // Older free-flight saves only stored the quaternion; wake/helm need heading.
+  const gameState = createGameState({
+    characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
+    galaxyOpts: TEST_WORLD_OPTS
+  })
+  const yaw = 1.1
+  // Quaternion for pure yaw about Y, local +Z forward.
+  gameState.player.ship.quaternion = [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)]
+  delete gameState.player.ship.heading
+  const json = JSON.parse(JSON.stringify(serializeGameState(gameState)))
+  delete json.player.ship.heading
+  const restored = deserializeGameState(json)
+  assert.ok(Number.isFinite(restored.player.ship.heading), 'heading must be a number')
+  const err = Math.abs(
+    Math.atan2(
+      Math.sin(restored.player.ship.heading - yaw),
+      Math.cos(restored.player.ship.heading - yaw)
+    )
+  )
+  assert.ok(err < 0.05, `heading ${restored.player.ship.heading} should match yaw ${yaw}`)
+  assert.equal(restored.player.ship.velocity[1], 0)
+})
+
 test('docked pose fields round-trip through save', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,

@@ -5,23 +5,16 @@ import { snapToSea } from '../world/sea.js'
 import { islandShorelineToward } from '../render/islandMesh.js'
 
 /**
- * Autopilot. Hands the helm over: it comes round onto the waypoint, holds a
- * steady course, steers clear of anything solid in the way, and eases off as it
- * closes. Not a fast-travel mode — it runs a little above a hand-steered
- * passage because it never wanders, and because nobody wants to hold W for the
- * length of an ocean.
- *
- * The old space build teleported through obstacles at 38× speed. At this
- * multiplier that would just look like sailing through an island, so the
- * avoidance below is real: the autopilot goes around.
+ * Cruise Control. Holds the current heading at normal top speed until the
+ * player turns it off. Not waypoint navigation and not a speed boost — same
+ * pace as holding W. A/D still helm; no automatic obstacle avoidance.
  */
-export const AUTOPILOT_SPEED_MULTIPLIER = 1.5
-/** Seconds to work up to full autopilot speed after engaging. */
-export const AUTOPILOT_RAMP_UP_S = 2
-/** Default for tests / callers that don't pass a body-sized standoff. */
+/** @deprecated name kept for call sites / tests; cruise has no speed boost. */
+export const AUTOPILOT_SPEED_MULTIPLIER = 1
+/** Seconds to work up to full cruise speed after engaging. */
+export const AUTOPILOT_RAMP_UP_S = 1.2
+/** Default clearance used by obstacle aiming when no arrival ring applies. */
 export const DEFAULT_ARRIVAL_RANGE = 60
-/** The autopilot puts the wheel over harder than a helmsman bothers to. */
-const STEER_RATE_MULTIPLIER = 1.5
 
 /** How far ahead along the track to look for something solid. */
 const LOOK_AHEAD = 3000
@@ -31,7 +24,7 @@ const AVOID_MARGIN = 90
 const AVOID_LEAD = 0.75
 /** Floor on approach speed, so it always creeps the last few metres in. */
 const APPROACH_MIN = 0.08
-/** How long the boat spends shedding way before arrival. */
+/** How long the boat spends shedding way before arrival (legacy waypoint path). */
 const DECEL_TRAVEL_S = 2.5
 /** Bounds on that, so a very slow or very fast hull still eases in sensibly. */
 const DECEL_MIN = 120
@@ -66,15 +59,8 @@ export function autopilotRampUpFactor(elapsedS) {
 
 /**
  * How much of full speed to use, given how far there is still to run.
- *
- * The ramp is sized by how long the boat needs to shed way — nothing else.
- * It deliberately does **not** scale with `arrivalRange`: that value says where
- * to stop, not how long stopping takes, and a big island has an arrival ring
- * kilometres across. Tying the two together made the autopilot crawl from 6 km
- * out and read as slower than steering by hand.
- *
- * `remaining` already subtracts the ring, so a large one just means the boat
- * comes to rest further off — at full speed right up until it needs not to be.
+ * Kept for tests / any residual waypoint callers — cruise control does not
+ * decelerate for a destination.
  */
 export function autopilotApproachFactor(dist, arrivalRange, topSpeed) {
   const decelDistance = Math.max(DECEL_MIN, Math.min(DECEL_MAX, topSpeed * DECEL_TRAVEL_S))
@@ -123,9 +109,9 @@ export function aimAroundObstacles(
   _pathDir.divideScalar(distToTarget)
 
   // Close in, commit to the approach — except for islands/land: those still
-  // steer around the shoreline so autopilot never runs you aground.
+  // steer around the shoreline so cruise never runs you aground.
   const finalApproach = Math.max(FINAL_APPROACH_MIN, arrivalRange * FINAL_APPROACH_MUL)
-  const commitApproach = distToTarget <= finalApproach
+  const commitApproach = destPos != null && distToTarget <= finalApproach
 
   const scan = Math.min(distToTarget, LOOK_AHEAD)
   let worst = null
@@ -185,52 +171,48 @@ export function aimAroundObstacles(
 }
 
 /**
- * One frame of autopilot. Returns true on arrival, at which point the caller
- * disengages.
+ * One frame of Cruise Control. Holds speed on the current course; never
+ * “arrives”. Returns false always (caller disengages on toggle, combat, or
+ * thrust/strafe input — W/S/Q/E).
  *
- * @param {object|null} skillOpts player-only: { speedMult, cruiseMult, turnMult }
+ * A/D still work: helm to port/starboard while under way. Pass the live key
+ * set as `keys` so the player can steer without cancelling cruise.
+ * No automatic land avoidance — course is straight ahead until you turn or cancel.
+ *
+ * @param {object|null} skillOpts player-only: { speedMult, turnMult }
+ * @param {Set<string>|null} keys keyboard codes; only KeyA / KeyD are read
+ * @param {number} [simTime]
+ * @param {unknown} [_bodies] unused (kept so call sites stay stable)
+ * @param {unknown} [_shipRadius] unused
  */
-export function updateAutopilot(
+export function updateCruiseControl(
   shipState,
   shipClass,
-  targetPosition,
   dt,
-  arrivalRange = DEFAULT_ARRIVAL_RANGE,
-  bodies = null,
-  shipRadius = 0,
-  destinationBodyId = null,
+  _bodies = null,
+  _shipRadius = 0,
   skillOpts = null,
-  simTime = 0
+  simTime = 0,
+  keys = null
 ) {
   const shipPos = new THREE.Vector3().fromArray(shipState.position)
-  const targetPos = new THREE.Vector3(...targetPosition)
-  const dist = Math.hypot(targetPos.x - shipPos.x, targetPos.z - shipPos.z)
-  if (dist < arrivalRange) return true
-
-  const aimPos = aimAroundObstacles(
-    shipPos,
-    targetPos,
-    bodies,
-    shipRadius,
-    destinationBodyId,
-    targetPosition,
-    arrivalRange
-  )
-
+  let heading = headingOf(shipState)
   const turnMult = skillOpts?.turnMult ?? 1
   const speedMult = skillOpts?.speedMult ?? 1
-  const cruiseMult = skillOpts?.cruiseMult ?? 1
+  const turnRate = shipClass.stats.turnRate * turnMult
 
-  // Steer by heading, exactly as the helm does — the autopilot has no more
-  // ability to point the bow at the sky than the player does.
-  let heading = headingOf(shipState)
-  const dx = aimPos.x - shipPos.x
-  const dz = aimPos.z - shipPos.z
-  if (dx * dx + dz * dz > 1e-8) {
-    const target = Math.atan2(dx, dz)
-    const delta = Math.atan2(Math.sin(target - heading), Math.cos(target - heading))
-    const maxTurn = shipClass.stats.turnRate * turnMult * STEER_RATE_MULTIPLIER * dt
-    heading += Math.max(-maxTurn, Math.min(maxTurn, delta))
+  // A/D helm only — no AI steering. Same rudder model as flight.js.
+  let helm = 0
+  if (keys?.has?.('KeyA')) helm += 1
+  if (keys?.has?.('KeyD')) helm -= 1
+  if (helm !== 0) {
+    const velocityNow = new THREE.Vector3().fromArray(shipState.velocity)
+    velocityNow.y = 0
+    const topForAuth = Math.max(1e-3, shipClass.stats.speed * speedMult)
+    const way = Math.min(1, velocityNow.length() / (topForAuth * 0.25))
+    const authority = 0.55 + 0.45 * way
+    // Match flight.js RUDDER_RATE * 60 * dt scaling.
+    heading += helm * 0.028 * turnRate * authority * dt * 60
     shipState.heading = heading
   }
 
@@ -241,11 +223,11 @@ export function updateAutopilot(
   shipState.supercruiseElapsed = (shipState.supercruiseElapsed ?? 0) + dt
   const rampUp = autopilotRampUpFactor(shipState.supercruiseElapsed)
 
-  const topSpeed = shipClass.stats.speed * speedMult * AUTOPILOT_SPEED_MULTIPLIER * cruiseMult
-  const approach = autopilotApproachFactor(dist, arrivalRange, topSpeed)
-  const maxSpeed = topSpeed * rampUp * approach
+  // No speed boost — same top end as holding W (plus skill speedMult only).
+  const topSpeed = shipClass.stats.speed * speedMult
+  const maxSpeed = topSpeed * rampUp
 
-  const accel = shipClass.stats.accel * AUTOPILOT_SPEED_MULTIPLIER * 2.5 * Math.max(0.15, rampUp)
+  const accel = shipClass.stats.accel * 2.5 * Math.max(0.15, rampUp)
   velocity.addScaledVector(forward, accel * dt)
   const dragK = accel / Math.max(1e-3, topSpeed)
   velocity.multiplyScalar(1 / (1 + dragK * dt))
@@ -255,7 +237,35 @@ export function updateAutopilot(
 
   shipState.position = position.toArray()
   shipState.velocity = velocity.toArray()
+  // Throttle readout matches “full ahead under cruise”.
+  shipState.throttle = rampUp
   snapToSea(shipState, simTime)
   applySeaAttitude(shipState, heading, simTime)
   return false
+}
+
+/** Keys that cancel Cruise Control (thrust / thrusters — not helm A/D). */
+export function cruiseCancelKeysHeld(keys) {
+  if (!keys?.has) return false
+  return keys.has('KeyW') || keys.has('KeyS') || keys.has('KeyQ') || keys.has('KeyE')
+}
+
+/**
+ * Legacy name — Cruise Control no longer steers to a waypoint. If a target
+ * position is supplied, it is ignored; course is held instead.
+ * Prefer `updateCruiseControl`.
+ */
+export function updateAutopilot(
+  shipState,
+  shipClass,
+  _targetPosition,
+  dt,
+  _arrivalRange = DEFAULT_ARRIVAL_RANGE,
+  bodies = null,
+  shipRadius = 0,
+  _destinationBodyId = null,
+  skillOpts = null,
+  simTime = 0
+) {
+  return updateCruiseControl(shipState, shipClass, dt, bodies, shipRadius, skillOpts, simTime)
 }

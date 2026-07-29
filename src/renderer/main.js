@@ -35,6 +35,7 @@ import {
   setChaseIdleOrbit
 } from './render/sceneSync.js'
 import { createWake, WAKE_FULL_SPEED } from './render/wake.js'
+import { setTextureReadyHook } from './render/textures.js'
 import { createDamageEffects } from './render/damageEffects.js'
 import { createOreScoopEffects } from './render/oreScoopParticles.js'
 import {
@@ -59,7 +60,7 @@ import {
 } from './game/flight.js'
 import { waveHeight, snapToSea, SEA_MAX_AMPLITUDE } from './world/sea.js'
 import { effectiveMaxSpeed, effectiveMaxArmor } from './data/accessories.js'
-import { updateAutopilot, ignoreBodyAsCruiseObstacle } from './game/autopilot.js'
+import { updateCruiseControl, cruiseCancelKeysHeld } from './game/autopilot.js'
 import {
   spawnEncounterNear,
   spawnPoliceResponse,
@@ -212,18 +213,18 @@ applyLocalSoundCache()
 applyLocalUiThemeCache()
 
 // How close you must come alongside before a harbour will take a line (metres).
-const DOCK_RANGE = 900
+const DOCK_RANGE = 500
 const DOCK_RANGE_COLLISION_MARGIN = 12
-// How far offshore a sonar drone can still work an island from.
-const PROBE_ORBIT_MARGIN = 1200
+// How far offshore a sounding still works an island / shows the survey panel.
+const PROBE_ORBIT_MARGIN = 500
 // Harbour meshes are built at roughly 34–52 local units across (see
 // render/harbourMesh.js); this brings them into world scale beside a ~20-unit
 // boat, so a quay is something you come alongside rather than a landmass.
 const STATION_SCALE = 1.7
 // Outposts are a jetty and a shed — far smaller than a working harbour.
 const SETTLEMENT_SCALE = 1.5
-// Standoff for sounding a wreck field or running past a coast.
-const PROBE_RANGE = 900
+// Surface standoff for sounding (P) and for the left-side survey readout.
+const PROBE_RANGE = 500
 const MINING_TOAST_DURATION_S = 1.6
 const FACTION_TOAST_DURATION_S = 4
 // Floating HUD text: a clean fade in and out.
@@ -345,9 +346,8 @@ function getFloatHudBandTopPx() {
 }
 const IMPACT_FLASH_TTL = 0.25
 // Warp-gate jump: fly into origin aperture → spool/tunnel → emerge from dest aperture.
+/** Fixed chase FOV — same under helm and Cruise Control (no speed/mode zoom). */
 const BASE_FOV = 60
-/** Extra FOV at full speed — enough to feel the boat come up on the plane. */
-const SPEED_FOV_MAX = 5
 
 const CROSSHAIR_DISTANCE = 80
 
@@ -574,7 +574,8 @@ let flightModeWanted = false
 let laserFireHeld = false
 let missileFireHeld = false
 
-/** True when the player may shoot (flight-mode lock, free-flying, no menus). */
+/** True when the player may shoot (flight-mode lock, free-flying, no menus).
+ *  Cruise Control keeps the helm automated but guns stay free. */
 function canPlayerFire() {
   return !!(
     gameState &&
@@ -582,12 +583,11 @@ function canPlayerFire() {
     flightMode &&
     !docked &&
     !dockEffect &&
-    !cruising &&
     !paused &&
     !chartOpen &&
     !inventoryOpen &&
     !missionsOpen &&
-    !characterOpen 
+    !characterOpen
   )
 }
 
@@ -970,9 +970,14 @@ function resumeFlightAfterPause() {
 
 /** Shut every gameplay overlay so pause is the only UI on top. */
 function dismissOpenPanelsForPause() {
-  // Galaxy map
+  // Galaxy map — silent so onClose does not reenter flight under the pause menu.
   if (chartOpen) {
     chartOpen = false
+    try {
+      seaChart?.hide?.({ silent: true })
+    } catch {
+      /* */
+    }
   }
   // Inventory
   if (inventoryOpen) {
@@ -1456,23 +1461,87 @@ function clearNpcMeshes() {
  * @param {{ noStrafe?: boolean }} [opts] noStrafe: suppress pure lateral way (player thrusters)
  * @returns {{ travelHeading: number, fraction: number }}
  */
-function wakeDrive(entity, opts = {}) {
-  const vx = entity.velocity?.[0] ?? 0
-  const vz = entity.velocity?.[2] ?? 0
-  const speed = Math.hypot(vx, vz)
-  const hullH = headingOf(entity)
-  if (speed < 0.15) return { travelHeading: hullH, fraction: 0 }
+// Per-entity motion for wake (never share one prev-pos across player + NPCs).
+const _wakeMotion = new WeakMap()
+// Dedicated player tracker — survives any ship-object identity quirks after load.
+let _playerWakeMotion = null
 
-  if (opts.noStrafe) {
+function wakeDrive(entity, opts = {}) {
+  const hullH = headingOf(entity)
+  let vx = Number(entity.velocity?.[0])
+  let vz = Number(entity.velocity?.[2])
+  if (!Number.isFinite(vx)) vx = 0
+  if (!Number.isFinite(vz)) vz = 0
+  let speed = Math.hypot(vx, vz)
+
+  // After Continue / undock, velocity can lag while position advances.
+  // Prefer this entity's own displacement; player uses a dedicated tracker.
+  const pos = entity.position
+  const now = performance.now()
+  const isPlayer = !!(gameState && entity === gameState.player?.ship)
+  let motion = isPlayer ? _playerWakeMotion : _wakeMotion.get(entity)
+  if (pos && motion && now > motion.t) {
+    const dtM = Math.min(0.12, Math.max(1e-3, (now - motion.t) / 1000))
+    const dx = (Number(pos[0]) || 0) - motion.x
+    const dz = (Number(pos[2]) || 0) - motion.z
+    const dispSpeed = Math.hypot(dx, dz) / dtM
+    if (Number.isFinite(dispSpeed) && dispSpeed > speed + 0.25) {
+      speed = dispSpeed
+      vx = dx / dtM
+      vz = dz / dtM
+    }
+  }
+  if (pos) {
+    const sample = {
+      x: Number(pos[0]) || 0,
+      z: Number(pos[2]) || 0,
+      t: now
+    }
+    if (isPlayer) _playerWakeMotion = sample
+    else _wakeMotion.set(entity, sample)
+  }
+
+  // Throttle as a floor so foam appears as soon as you are under way.
+  const thr = Math.abs(Number(entity.throttle) || 0)
+  if (thr > 0.08) {
+    const thrSpeed = thr * WAKE_FULL_SPEED * 0.65
+    if (thrSpeed > speed) {
+      speed = thrSpeed
+      if (Math.abs(vx) + Math.abs(vz) < 1e-3) {
+        vx = Math.sin(hullH) * speed
+        vz = Math.cos(hullH) * speed
+      }
+    }
+  }
+
+  // Cruise Control always throws a proper wake once engaged (even mid-ramp).
+  if (opts.cruising) {
+    const cruiseFloor = WAKE_FULL_SPEED * Math.max(0.35, thr > 0 ? thr : 0.55)
+    if (cruiseFloor > speed) {
+      speed = cruiseFloor
+      vx = Math.sin(hullH) * speed
+      vz = Math.cos(hullH) * speed
+    }
+  }
+
+  if (!Number.isFinite(speed) || speed < 0.08) {
+    return { travelHeading: hullH, fraction: 0 }
+  }
+
+  if (opts.noStrafe && !opts.cruising) {
     const fx = Math.sin(hullH)
     const fz = Math.cos(hullH)
     const along = vx * fx + vz * fz
     // Mostly crabbing — no wake (player Q/E). Fore/aft or reverse still counts.
-    if (Math.abs(along) < speed * 0.35) return { travelHeading: hullH, fraction: 0 }
+    if (Math.abs(along) < speed * 0.28 && thr < 0.35) {
+      return { travelHeading: hullH, fraction: 0 }
+    }
   }
 
+  const travelHeading =
+    Math.abs(vx) + Math.abs(vz) > 1e-4 ? Math.atan2(vx, vz) : hullH
   return {
-    travelHeading: Math.atan2(vx, vz),
+    travelHeading: Number.isFinite(travelHeading) ? travelHeading : hullH,
     fraction: Math.min(1, speed / WAKE_FULL_SPEED)
   }
 }
@@ -1532,47 +1601,181 @@ function floatOnWaterline(mesh) {
 }
 
 /**
- * Build the whole world's meshes once. One sea, so this runs on New Game and on
- * load and never again — there is no region to swap. Everything past the fog
- * wall is hidden per-frame by updateBodyVisibility rather than unloaded.
+ * Streaming body meshes: only keep islands/harbours near the boat in memory.
+ * Building all 333 bodies OOM'd the renderer (~3.5GB) and left a black screen
+ * after Continue. Far geometry is disposed; fog already hides the horizon.
  */
-function loadBodiesForCurrentSystem() {
-  for (const mesh of bodyMeshes.values()) scene.remove(mesh)
-  bodyMeshes.clear()
-  surfaceSettlements.clear()
-  currentTarget = null
+const BODY_CULL_DISTANCE = 16000
+/** Unload hysteresis so sailing the edge doesn't thrash builds. */
+const BODY_UNLOAD_DISTANCE = BODY_CULL_DISTANCE + 4000
+const _cullPos = new THREE.Vector3()
+let _bodyStreamAcc = 0
+let _bodyStreamBusy = false
 
-  const currentSystem = getWorld(gameState.galaxy)
-  for (const body of currentSystem.bodies) {
-    const mesh = buildBodyMesh(body)
-    // buildBodyMesh already set Y for structures that float; only place in XZ.
-    mesh.position.set(body.position[0], mesh.position.y, body.position[2])
-    bodyMeshes.set(body.id, mesh)
-    scene.add(mesh)
-
-    // A coastal harbour keeps a fixed offset from its island and faces seaward.
-    // Nothing in the world moves, so this is set once here rather than
-    // re-derived every frame.
-    if (body.parentId && body.surfaceOffset) {
-      surfaceSettlements.set(body.id, {
-        body,
-        parentId: body.parentId,
-        surfaceOffset: body.surfaceOffset
-      })
-      orientSettlementOnSurface(mesh, body.surfaceOffset)
+function disposeObject3D(root) {
+  if (!root) return
+  root.traverse((obj) => {
+    if (obj.geometry) {
+      try {
+        obj.geometry.dispose()
+      } catch {
+        /* */
+      }
     }
+    const mats = obj.material
+      ? Array.isArray(obj.material)
+        ? obj.material
+        : [obj.material]
+      : []
+    for (const m of mats) {
+      // Shared textures live in the global cache — only free the material.
+      try {
+        m.dispose?.()
+      } catch {
+        /* */
+      }
+    }
+  })
+}
+
+function removeBodyMesh(id) {
+  const mesh = bodyMeshes.get(id)
+  if (!mesh) return
+  try {
+    scene.remove(mesh)
+  } catch {
+    /* */
   }
-  refreshStationPolicePatrols()
+  disposeObject3D(mesh)
+  bodyMeshes.delete(id)
+  surfaceSettlements.delete(id)
+}
+
+function placeBodyMesh(body, mesh) {
+  // buildBodyMesh already set Y for structures that float; only place in XZ.
+  mesh.position.set(body.position[0], mesh.position.y, body.position[2])
+  bodyMeshes.set(body.id, mesh)
+  scene.add(mesh)
+  // A coastal harbour keeps a fixed offset from its island and faces seaward.
+  if (body.parentId && body.surfaceOffset) {
+    surfaceSettlements.set(body.id, {
+      body,
+      parentId: body.parentId,
+      surfaceOffset: body.surfaceOffset
+    })
+    orientSettlementOnSurface(mesh, body.surfaceOffset)
+  }
+}
+
+function bodyFocusXZ() {
+  const dockExt = gameState?.player?.dockedExteriorPosition
+  if (Array.isArray(dockExt) && dockExt.length >= 3) {
+    return [Number(dockExt[0]) || 0, Number(dockExt[2]) || 0]
+  }
+  const shipPos = gameState?.player?.ship?.position
+  return [Number(shipPos?.[0]) || 0, Number(shipPos?.[2]) || 0]
+}
+
+function bodyPriorityIds() {
+  const ids = new Set()
+  const dockedBody = gameState?.player?.dockedBodyId
+    ? findBody(gameState.galaxy, gameState.player.dockedBodyId)
+    : null
+  if (dockedBody?.id) ids.add(dockedBody.id)
+  if (dockedBody?.parentId) ids.add(dockedBody.parentId)
+  if (gameState?.player?.homePortId) ids.add(gameState.player.homePortId)
+  return ids
 }
 
 /**
- * Everything is in one coordinate space, so the whole world is in the scene at
- * once. Hiding what the fog has already swallowed keeps the draw-call count to
- * the handful of places actually in sight.
+ * Sync loaded body meshes to the boat's neighbourhood. `immediate` builds the
+ * full near set on the main thread (session start); otherwise one missing mesh
+ * per call so sailing never hitches hard.
  */
-const BODY_CULL_DISTANCE = 16000
-const _cullPos = new THREE.Vector3()
+function syncNearbyBodyMeshes({ immediate = false } = {}) {
+  if (!gameState || _bodyStreamBusy) return
+  const currentSystem = getWorld(gameState.galaxy)
+  if (!currentSystem?.bodies?.length) return
+
+  _bodyStreamBusy = true
+  try {
+    const [focusX, focusZ] = bodyFocusXZ()
+    const loadR2 = BODY_CULL_DISTANCE * BODY_CULL_DISTANCE
+    const unloadR2 = BODY_UNLOAD_DISTANCE * BODY_UNLOAD_DISTANCE
+    const priority = bodyPriorityIds()
+    const want = new Set(priority)
+
+    for (const body of currentSystem.bodies) {
+      const dx = (body.position?.[0] ?? 0) - focusX
+      const dz = (body.position?.[2] ?? 0) - focusZ
+      if (dx * dx + dz * dz <= loadR2) want.add(body.id)
+    }
+
+    // Drop meshes that sailed out of the unload ring (keep priority berthed).
+    for (const id of [...bodyMeshes.keys()]) {
+      if (want.has(id) || priority.has(id)) continue
+      const body = findBody(gameState.galaxy, id)
+      if (!body) {
+        removeBodyMesh(id)
+        continue
+      }
+      const dx = (body.position?.[0] ?? 0) - focusX
+      const dz = (body.position?.[2] ?? 0) - focusZ
+      if (dx * dx + dz * dz > unloadR2) removeBodyMesh(id)
+    }
+
+    // Build missing near bodies (all at once on session start, else drip-feed).
+    const missing = []
+    for (const body of currentSystem.bodies) {
+      if (!want.has(body.id) || bodyMeshes.has(body.id)) continue
+      const dx = (body.position?.[0] ?? 0) - focusX
+      const dz = (body.position?.[2] ?? 0) - focusZ
+      missing.push({ body, d2: dx * dx + dz * dz })
+    }
+    missing.sort((a, b) => a.d2 - b.d2)
+    // Never index past the end — empty missing + budget 1 threw every ~15 frames
+    // and aborted animate() before chase cam + render (cruise jitter + missing wake).
+    const budget = Math.min(missing.length, immediate ? missing.length : 1)
+    for (let i = 0; i < budget; i++) {
+      const entry = missing[i]
+      if (!entry?.body) continue
+      const body = entry.body
+      try {
+        placeBodyMesh(body, buildBodyMesh(body))
+      } catch (err) {
+        console.warn('[bodies] mesh failed', body?.id, err)
+      }
+    }
+  } finally {
+    _bodyStreamBusy = false
+  }
+}
+
+/**
+ * Initial load: only the local neighbourhood (not the whole 300+ body map).
+ * Streaming continues via updateBodyVisibility while playing.
+ */
+function loadBodiesForCurrentSystem() {
+  currentTarget = null
+  for (const id of [...bodyMeshes.keys()]) removeBodyMesh(id)
+  surfaceSettlements.clear()
+  syncNearbyBodyMeshes({ immediate: true })
+  refreshStationPolicePatrols()
+}
+
 function updateBodyVisibility() {
+  // Stream meshes in/out of the fog wall as the boat moves.
+  // Must never throw — this sits on the critical path before chase cam + render.
+  try {
+    _bodyStreamAcc += 1
+    if (_bodyStreamAcc >= 15) {
+      _bodyStreamAcc = 0
+      syncNearbyBodyMeshes({ immediate: false })
+    }
+  } catch (err) {
+    console.warn('[bodies] stream failed', err)
+    _bodyStreamBusy = false
+  }
   for (const [id, mesh] of bodyMeshes) {
     const body = findBody(gameState.galaxy, id)
     if (!body) continue
@@ -1583,12 +1786,17 @@ function updateBodyVisibility() {
   }
 }
 
-/** Spawn / top-up police patrols (stations Sec 3–6, warp gates Sec 4–6). */
+/** Spawn / top-up police patrols near the player (harbour Sec 3–6 only). */
 function refreshStationPolicePatrols() {
   if (!gameState) return
   const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   if (!system) return
-  ensureStationPolicePatrols(Math.random, gameState, system, getSystemSecurity(system))
+  const nearPos =
+    gameState.player?.dockedExteriorPosition ?? gameState.player?.ship?.position ?? null
+  ensureStationPolicePatrols(Math.random, gameState, system, getSystemSecurity(system), {
+    nearPos,
+    maxDist: 12000
+  })
 }
 
 // Harbours are built upright and stay upright — the sea is flat, so the only
@@ -2481,22 +2689,49 @@ const menu = createMenu(appEl, {
     startSession(gameState, { enterFlightMode: !homePort })
   },
   onLoadGame: async () => {
-    const loaded = await persistLoadGame()
-    if (loaded) startSession(loaded)
-    else menu.show(await hasSave())
+    try {
+      const loaded = await persistLoadGame()
+      if (!loaded) {
+        menu.show(await hasSave())
+        flashToast?.('No save found')
+        return
+      }
+      startSession(loaded)
+    } catch (err) {
+      console.error('[load] failed', err)
+      try {
+        clearSession()
+        gameState = null
+        startMenuBackground()
+      } catch {
+        /* */
+      }
+      try {
+        menu.show(await hasSave())
+      } catch {
+        /* */
+      }
+      try {
+        flashToast(`Load failed: ${err?.message || err}`)
+      } catch {
+        /* */
+      }
+    }
   }
 })
 
 function clearSession() {
+  try {
+    setTextureReadyHook(null)
+  } catch {
+    /* */
+  }
+  _bodyStreamAcc = 0
   if (playerMesh) scene.remove(playerMesh)
   clearDroneMeshes()
   probeScanCache = null
   probeScanActiveBodyId = null
-  if (playerWake) {
-    scene.remove(playerWake.group)
-    playerWake.dispose()
-  }
-  playerWake = null
+  destroyPlayerWake()
   if (damageEffects) scene.remove(damageEffects.group)
   damageEffects = null
   if (oreScoopEffects) scene.remove(oreScoopEffects.group)
@@ -2658,7 +2893,7 @@ function syncDroneMeshes() {
 }
 
 function updatePlayerDrones(dt) {
-  if (!gameState || docked || cruising) {
+  if (!gameState || docked) {
     // Bay / SC: no airborne escorts, kill the prop bed.
     try {
       audio.setDroneBuzz(0)
@@ -2775,6 +3010,71 @@ function updatePlayerDrones(dt) {
   }
 }
 
+/** Tear down player wake completely (session clear / force recreate on Continue). */
+function destroyPlayerWake() {
+  if (!playerWake) return
+  try {
+    scene.remove(playerWake.group)
+  } catch {
+    /* */
+  }
+  try {
+    playerWake.dispose()
+  } catch {
+    /* */
+  }
+  playerWake = null
+  _playerWakeMotion = null
+}
+
+/** Ensure the player wake exists and is parented to the live scene (save/load safe). */
+function ensurePlayerWake() {
+  if (!gameState) return null
+  if (!playerWake) {
+    playerWake = createWake()
+    scene.add(playerWake.group)
+  } else if (!playerWake.group.parent) {
+    scene.add(playerWake.group)
+  }
+  // Keep wake at scene root (never parented under a disposed mesh / body stream).
+  playerWake.group.visible = true
+  playerWake.group.renderOrder = 50
+  playerWake.group.frustumCulled = false
+  playerWake.group.position.set(0, 0, 0)
+  playerWake.group.rotation.set(0, 0, 0)
+  playerWake.group.scale.set(1, 1, 1)
+  return playerWake
+}
+
+/** Push one frame of foam for the player hull (load / undock / every free-flight tick). */
+function updatePlayerWake(dt) {
+  if (docked || dockEffect || !gameState?.player?.ship) return
+  const wake = ensurePlayerWake()
+  if (!wake || !playerShipClass) return
+  const ship = gameState.player.ship
+  // Force the group on every frame — docked branch only hides it; never leave
+  // a sticky invisible flag after Undock from a Continue.
+  wake.group.visible = true
+  if (!wake.group.parent) scene.add(wake.group)
+  const { travelHeading, fraction } = wakeDrive(ship, {
+    noStrafe: true,
+    cruising
+  })
+  // Soft floor so Continue/undock still gets foam under way.
+  let frac = fraction
+  const spd = Math.hypot(Number(ship.velocity?.[0]) || 0, Number(ship.velocity?.[2]) || 0)
+  const thr = Math.abs(Number(ship.throttle) || 0)
+  if (cruising) frac = Math.max(frac, 0.5)
+  else if (spd > 0.4 || thr > 0.12) {
+    frac = Math.max(frac, Math.min(1, Math.max(spd / WAKE_FULL_SPEED, thr * 0.5)))
+  }
+  if (!Number.isFinite(frac) || frac < 0) frac = 0
+  const hullLen = Math.max(6, Number(playerShipClass.hull?.length) || 16)
+  const t = gameState.simTime ?? 0
+  const heading = Number.isFinite(travelHeading) ? travelHeading : headingOf(ship)
+  wake.update(ship.position, heading, frac, hullLen, t, Math.max(1e-3, dt || 1 / 60))
+}
+
 /** Swap the visible player hull when classId changes (shipyard Activate). */
 function rebuildPlayerShipMesh() {
   if (!gameState) return
@@ -2788,14 +3088,17 @@ function rebuildPlayerShipMesh() {
   scene.add(playerMesh)
   syncMeshToEntity(playerMesh, gameState.player.ship)
   // A different hull leaves a different wake — drop the old trail rather than
-  // dragging it across from the boat that was just sold.
-  playerWake?.reset()
+  // dragging it across from the boat that was just sold. Always re-ensure the
+  // wake object so Continue / shipyard swaps never leave you without one.
+  destroyPlayerWake()
+  ensurePlayerWake()?.reset()
+  _playerWakeMotion = null
 }
 
 /** Open/toggle Region Sonar Scan (HUD button + B). */
 function openSystemScanPanel() {
   if (!gameState || !systemScanMap) return
-  if (docked || dockEffect || cruising) {
+  if (docked || dockEffect) {
     flashToast('Region Sonar Scan unavailable right now')
     return
   }
@@ -2820,6 +3123,36 @@ function openSystemScanPanel() {
 }
 
 function startSession(newGameState, { enterFlightMode = false } = {}) {
+  // Never leave the player on a black canvas if setup throws mid-way.
+  try {
+    startSessionInner(newGameState, { enterFlightMode })
+  } catch (err) {
+    console.error('[startSession] failed', err)
+    try {
+      clearSession()
+    } catch {
+      /* */
+    }
+    gameState = null
+    try {
+      startMenuBackground()
+    } catch {
+      /* */
+    }
+    try {
+      hasSave().then((exists) => menu.show(exists))
+    } catch {
+      /* */
+    }
+    try {
+      flashToast(`Load failed: ${err?.message || err}`)
+    } catch {
+      /* */
+    }
+  }
+}
+
+function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   clearSession()
   stopMenuBackground()
   gameState = newGameState
@@ -2829,11 +3162,19 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   delete gameState._craftingJustCompleted
   const anomaliesRefreshedOffline = !!gameState._anomaliesRefreshedOffline
   delete gameState._anomaliesRefreshedOffline
+  // Textures stay in the global cache across sessions. Do not force-reupload
+  // every map here — that spammed empty needsUpdate and did not fix Continue.
+  try {
+    setTextureReadyHook(null)
+  } catch {
+    /* non-fatal */
+  }
+  // Always brand-new wake on session start (Continue must not inherit a dead group).
+  destroyPlayerWake()
   rebuildPlayerShipMesh()
   ensureDrones(gameState.player.ship)
   clearDroneMeshes()
-  playerWake = createWake()
-  scene.add(playerWake.group)
+  ensurePlayerWake()?.reset()
   damageEffects = createDamageEffects()
   scene.add(damageEffects.group)
   oreScoopEffects = createOreScoopEffects()
@@ -2841,34 +3182,33 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   missileTrail = createMissileTrailSystem()
   scene.add(missileTrail.group)
 
-  // Warm projectile + hit FX so first combat shot/hit is not a hitch.
-  // Full catalog so NPC return fire doesn't compile templates mid-fight.
+  // Warm only equipped weapons here — full catalog compile on Continue was a
+  // multi-second hitch after building the local map. Rest load lazily on fire.
   try {
     const equipped = Object.values(gameState.player.ship.equippedWeapons ?? {})
-    const allIds = [...new Set([...equipped, ...WEAPONS.map((w) => w.id)])]
-    preloadProjectileMeshes(allIds)
+    if (equipped.length) preloadProjectileMeshes([...new Set(equipped)])
   } catch {
-    preloadProjectileMeshes()
+    /* non-fatal */
   }
   try {
     preloadHitImpactFx(renderer, scene, camera)
   } catch {
     /* non-fatal */
   }
-  // Warm impact flash material templates (shader compile) without playing SFX.
+  // Cheap impact flash templates only — do NOT renderer.compile the whole
+  // world (that blocked Load for seconds with 300+ bodies in the scene).
   try {
     const w1 = buildImpactFlash(0xffcc66)
     const w2 = buildImpactFlash(0xff8a3d)
-    const w3 = buildImpactFlash(0xc2a35c)
-    scene.add(w1, w2, w3)
-    renderer.compile?.(scene, camera)
-    scene.remove(w1, w2, w3)
+    scene.add(w1, w2)
+    scene.remove(w1, w2)
   } catch {
     /* non-fatal */
   }
   for (const npc of gameState.npcs) {
     addNpcMesh(npc)
   }
+  // Near bodies first; far map streams in. Seats camera before distant islands.
   loadBodiesForCurrentSystem()
 
   hud = createHud(appEl)
@@ -2902,13 +3242,6 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
     onQuit: () => window.electronAPI.quitApp()
   })
   seaChart = createSeaChart(appEl, gameState, {
-    canSetWaypoint: () => {
-      if (cruising) {
-        flashToast('Unable to set a waypoint with the autopilot engaged.')
-        return false
-      }
-      return true
-    },
     onWaypointChange: ({ name, set }) => {
       if (set) {
         audio.playWaypointSet()
@@ -2918,8 +3251,14 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
       }
     },
     onClose: () => {
+      // Close button / programmatic hide — restore helm without auto-pause.
       chartOpen = false
-      if (!docked) reenterFlightMode()
+      if (docked || paused || deathOrbit) return
+      suppressPointerUnlockPause = true
+      reenterFlightMode()
+      setTimeout(() => {
+        suppressPointerUnlockPause = false
+      }, 450)
     }
   })
   systemScanMap = createSystemScanMap(appEl, gameState, {
@@ -2932,6 +3271,15 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
         /* */
       }
     },
+    onWaypointChange: ({ name, set }) => {
+      if (set) {
+        audio.playWaypointSet()
+        flashToast(`Waypoint set: ${name ?? 'signal'}`)
+      } else {
+        audio.playWaypointClear()
+        flashToast(name ? `Waypoint cleared: ${name}` : 'Waypoint cleared')
+      }
+    },
     onClose: () => {
       chartOpen = false
       if (!docked) reenterFlightMode()
@@ -2939,13 +3287,6 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   })
   datacoreMinigame = createDatacoreMinigame(appEl)
   systemOverview = createSystemOverview(appEl, gameState, {
-    canSetWaypoint: () => {
-      if (cruising) {
-        flashToast('Unable to set a waypoint with the autopilot engaged.')
-        return false
-      }
-      return true
-    },
     onWaypointChange: ({ name, set }) => {
       if (set) {
         audio.playWaypointSet()
@@ -2962,15 +3303,7 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   inventoryUI = createInventoryUI(appEl, gameState, {
     onStorageChanged: () => dockingUI?.refreshStorage?.()
   })
-  missionsUI = createMissionsUI(appEl, gameState, {
-    canSetWaypoint: () => {
-      if (cruising) {
-        flashToast('Unable to set a waypoint with the autopilot engaged.')
-        return false
-      }
-      return true
-    }
-  })
+  missionsUI = createMissionsUI(appEl, gameState, {})
   characterUI = createCharacterUI(appEl, gameState)
   ensureLawStanding(gameState)
   const startSys = getSystem(gameState.galaxy, gameState.player.currentSystemId)
@@ -3189,14 +3522,14 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
     `${belowStatusCss}max-width:min(640px,92vw);white-space:normal;`
   appEl.appendChild(factionToastEl)
 
-  // Reticles keep coloured geometry; labels match probe-info floating text.
+  // Waypoint direction cue — bright yellow arrow around the ship.
   // Direction arrows + target box share .hud-dir-shadow for a hard black drop shadow.
   waypointEl = document.createElement('div')
   waypointEl.id = 'waypoint-indicator'
-  waypointEl.style.cssText = 'position:fixed;pointer-events:none;display:none;'
+  waypointEl.style.cssText =
+    'position:fixed;pointer-events:none;display:none;transform:translate(-50%,-50%);z-index:6;'
   waypointEl.innerHTML = `
-    <div class="wp-arrow hud-dir-shadow" style="width:0;height:0;border-left:8px solid transparent;border-right:8px solid transparent;border-bottom:16px solid #7fe0a0;margin:0 auto;"></div>
-    <div class="wp-label float-info-text" style="margin-top:4px;white-space:nowrap;text-align:center;"></div>
+    <div class="wp-arrow hud-dir-shadow" style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #ffe14a;"></div>
   `
   appEl.appendChild(waypointEl)
 
@@ -3231,13 +3564,12 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   `
   appEl.appendChild(targetDirEl)
 
-  // Autopilot status — under the boat status panel.
-  // Fade in and out.
+  // Cruise Control status — under the boat status panel.
   cruiseIndicatorEl = document.createElement('div')
   cruiseIndicatorEl.id = 'cruise-indicator'
   cruiseIndicatorEl.className = 'float-info-text'
   cruiseIndicatorEl.style.cssText = belowStatusCss
-  setHudToastText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
+  setHudToastText(cruiseIndicatorEl, 'CRUISE CONTROL ENGAGED')
   appEl.appendChild(cruiseIndicatorEl)
 
   // Reused for both the hyperspace punch and the dock/undock transition —
@@ -3255,6 +3587,21 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
 
   // Restore free-flight pose or re-dock at the station saved in the file.
   restoreSessionLocation()
+
+  // Paint one frame immediately so Load never leaves a black canvas while the
+  // first animate() waits a tick (menu was already hidden).
+  try {
+    const t = gameState.simTime ?? 0
+    refreshEnvironment(t)
+    if (docked) applyDockOrbitCamera()
+    else if (gameState.player?.ship) {
+      resetChaseCameraState()
+      snapChaseCamera(camera, gameState.player.ship, { cruising: false, resetState: true })
+    }
+    render()
+  } catch (err) {
+    console.warn('[startSession] first paint failed', err)
+  }
 
   // Brand-new games enter flight mode; loads keep docked/space state from save
   // and do not force pointer lock.
@@ -3390,13 +3737,12 @@ function findNearbyDockableBody() {
   return nearest
 }
 
-// Surface-distance window for the top-center "Nearest Body" HUD line.
-// Wide enough to catch approach before dock/probe range; uses shell radius so
-// huge planets don't stay "far" until you're already on the crust.
-const NEAREST_BODY_HUD_RANGE = 3500
-const HUD_NEAREST_KINDS = new Set(['island', 'port', 'outpost'])
+// Surface-distance window for the top-left place name. Beyond this is Open Water.
+// Uses shell radius so large islands don't stay "far" until you're on the beach.
+const NEAREST_BODY_HUD_RANGE = 1000
+const HUD_NEAREST_KINDS = new Set(['island', 'port', 'outpost', 'wreckField'])
 
-/** Closest planet / moon / station / settlement / star within surface range. */
+/** Closest island / harbour / outpost / wreck field within surface range. */
 function findNearestHudBody() {
   if (!gameState) return null
   const playerPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
@@ -4134,9 +4480,9 @@ function dock(body) {
     gameState.player.dockedExteriorPosition = dockedApproach.exteriorPoint.toArray()
     gameState.player.dockedApproachDir = dockedApproach.approachDir.toArray()
   }
-  dockPromptEl.style.display = 'none'
+  if (dockPromptEl) dockPromptEl.style.display = 'none'
   applyDockedHud(body)
-  dockingUI.show(body, () => beginUndocking())
+  dockingUI?.show(body, () => beginUndocking())
 }
 
 /** Flight HUD off; top-left system + bay name while parked. */
@@ -4231,8 +4577,38 @@ function restoreSessionLocation() {
 
   docked = false
   dockedApproach = null
-  // Space: ship.position / quaternion / velocity already restored from save.
+  // Free flight: re-hydrate heading (older saves only stored quaternion),
+  // clamp to the sea, force a fresh wake, and seat the camera on the ship.
+  // Without the camera snap, Continue left the view at the title-orbit pose
+  // while the boat could be kilometres away — a pure black sea.
+  const ship = gameState.player.ship
+  if (!Array.isArray(ship.position) || ship.position.length !== 3) {
+    ship.position = [0, 0, 0]
+  }
+  ship.position[0] = Number(ship.position[0]) || 0
+  ship.position[1] = 0
+  ship.position[2] = Number(ship.position[2]) || 0
+  headingOf(ship)
+  if (Array.isArray(ship.velocity) && ship.velocity.length === 3) {
+    ship.velocity[0] = Number(ship.velocity[0]) || 0
+    ship.velocity[1] = 0
+    ship.velocity[2] = Number(ship.velocity[2]) || 0
+  } else {
+    ship.velocity = [0, 0, 0]
+  }
+  ship.throttle = Number(ship.throttle) || 0
+  snapToSea(ship, gameState.simTime ?? 0)
+  applySeaAttitude(ship, headingOf(ship), gameState.simTime ?? 0)
+  destroyPlayerWake()
+  ensurePlayerWake()?.reset()
+  _playerWakeMotion = null
   if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
+  try {
+    resetChaseCameraState()
+    snapChaseCamera(camera, ship, { cruising: false, resetState: true })
+  } catch {
+    /* non-fatal */
+  }
 }
 
 // Smoothstep-ish ease so docking approaches decelerate into the hang point
@@ -4330,7 +4706,7 @@ function beginDocking(body) {
   if (cruising || wasCruising) {
     cruising = false
     wasCruising = false
-    setHudToastText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
+    setHudToastText(cruiseIndicatorEl, 'CRUISE CONTROL DISENGAGED')
     showHudToast(cruiseIndicatorEl)
     hideHudToast(cruiseIndicatorEl)
     gameState.player.ship.velocity = [0, 0, 0]
@@ -4454,9 +4830,16 @@ function updateDockEffect(dt) {
       dockedApproach = null
       clearDockedSaveFields()
       applyDockedHud()
+      // Fresh trail once clear of the quay (Continue-from-docked path).
+      destroyPlayerWake()
+      ensurePlayerWake()?.reset()
+      _playerWakeMotion = null
       systemOverview?.show()
       resetChaseCameraState()
       snapChaseCamera(camera, gameState.player.ship)
+      // FOV back to helm default after berth camera.
+      camera.fov = BASE_FOV
+      camera.updateProjectionMatrix()
       markBodyVisited(gameState, body.id)
     }
   }
@@ -4543,7 +4926,7 @@ function hideCombatHudForDeath() {
 
 window.addEventListener('keydown', (e) => {
   if (!gameState || deathOrbit) return
-  if (e.code === 'KeyF' && !docked && !dockEffect && !cruising && !paused) {
+  if (e.code === 'KeyF' && !docked && !dockEffect && !paused) {
     // Every F action now requires the object to be Tab-locked first — being
     // merely in range no longer triggers dock / gate / salvage / hack, so the
     // prompt and the keypress always agree on what F is about to do.
@@ -4564,7 +4947,7 @@ window.addEventListener('keydown', (e) => {
       const body = findNearbyDockableBody()
       if (body && currentTarget?.kind === 'body' && currentTarget.id === body.id) beginDocking(body)
     }
-  } else if (e.code === 'KeyP' && !docked && !dockEffect && !cruising && !probeEffect && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !systemScanMap?.isOpen?.() && !datacoreMinigame?.isOpen?.()) {
+  } else if (e.code === 'KeyP' && !docked && !dockEffect && !probeEffect && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !systemScanMap?.isOpen?.() && !datacoreMinigame?.isOpen?.()) {
     // Planetary/body probing only — datacore nodules hack via F (Tab-targeted).
     const launch = getProbeLaunchTarget()
     if (launch) probeBody(launch.body)
@@ -4572,7 +4955,6 @@ window.addEventListener('keydown', (e) => {
     e.code === 'KeyB' &&
     !docked &&
     !dockEffect &&
-    !cruising &&
     !probeEffect &&
     !chartOpen &&
     !paused &&
@@ -4625,27 +5007,35 @@ window.addEventListener('keydown', (e) => {
   } else if (e.code === 'KeyM' && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !dockEffect) {
     // The sea chart — under way or alongside. One sea, so this is the only map
     // there is; it sets a waypoint rather than plotting a route between regions.
-    chartOpen = !chartOpen
+    e.preventDefault()
     audio.setThrustState(null)
-    if (chartOpen) {
+    if (!chartOpen) {
+      chartOpen = true
+      // Unlock pointer *after* chartOpen is true so pointerlockchange does not
+      // treat the unlock as Esc and open the pause menu.
       exitFlightMode()
       seaChart?.show()
     } else {
+      // Closing: suppress unlock→pause, then hide (onClose reenters helm once).
+      suppressPointerUnlockPause = true
+      chartOpen = false
       seaChart?.hide()
-      if (!docked) reenterFlightMode()
+      // hide() already reenters via onClose; keep suppress until lock settles.
+      setTimeout(() => {
+        suppressPointerUnlockPause = false
+      }, 450)
     }
   } else if (e.code === 'KeyC' && !docked && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
+    // Cruise Control: hold current heading at normal speed until toggled off.
+    // No waypoint required — maps still set waypoints as a separate nav cue.
     if (cruising) {
       cruising = false
-    } else if (!getActiveWaypoint()) {
-      flashToast('Set a waypoint first (Navigation, Ctrl+Tab on a body, or J for missions)')
     } else if (gameState.inCombat) {
-      flashToast('Cannot hand over the helm while under fire')
+      flashToast('Cannot engage cruise control while under fire')
     } else {
-      // Drones ride the hyperplane home before SC engages.
       teleportDronesToBay(gameState.player.ship)
       clearDroneMeshes()
-      clearTargetLock() // keep waypoint; drop combat/tab lock for cruise
+      clearTargetLock()
       cruising = true
       gameState.player.ship.supercruiseElapsed = 0
     }
@@ -4657,8 +5047,7 @@ window.addEventListener('keydown', (e) => {
     !paused &&
     !inventoryOpen &&
     !missionsOpen &&
-    !characterOpen &&
-    !cruising
+    !characterOpen
   ) {
     if (!hasDroneBays(gameState.player.ship)) {
       flashToast('No drone bays on this hull')
@@ -4679,11 +5068,8 @@ window.addEventListener('keydown', (e) => {
     toggleHelmMode()
   } else if (e.code === 'Tab' && !docked && !chartOpen && !paused && !inventoryOpen && !missionsOpen && !characterOpen) {
     e.preventDefault()
-    if (e.ctrlKey || e.metaKey) {
-      // Ctrl/Cmd+Tab: set waypoint on body under the crosshair.
-      setWaypointFromCrosshair()
-    } else if (e.shiftKey) {
-      // Shift+Tab: clear lock (plain Tab still cycles).
+    if (e.shiftKey || e.ctrlKey || e.metaKey) {
+      // Shift/Ctrl+Tab: clear lock (waypoints are map/overview only).
       clearTargetLock()
     } else {
       cycleTarget()
@@ -4824,7 +5210,7 @@ function closeCharacterScreen() {
   characterUI?.hide({ silent: true })
   // Overview remains shown (undocked); animate loop restores interactivity.
 
-  if (!docked && !cruising && !paused && !chartOpen && !inventoryOpen && !missionsOpen) {
+  if (!docked && !paused && !chartOpen && !inventoryOpen && !missionsOpen) {
     const token = ++characterFlightRestoreToken
     // Next frame: portrait WebGL is fully torn down before we re-lock.
     requestAnimationFrame(() => {
@@ -5037,125 +5423,6 @@ function aimScore(entity, shipPos, forward) {
   return score
 }
 
-/** Aim shell used for Ctrl+Tab waypoint pick (not collision / grounding). */
-function waypointAimRadius(body) {
-  if (body.kind === 'island') {
-    // Full generation disc — maxShore is only for grounding and is far too
-    // tight to aim at a headland or distant mass under the reticle.
-    const shore = collisionRadiusFor(body) ?? 0
-    return Math.max(body.radius ?? 0, shore, 60)
-  }
-  if (body.kind === 'wreckField') return body.radius ?? 80
-  return collisionRadiusFor(body) ?? exteriorRadiusFor(body) ?? 40
-}
-
-// Bodies that can be locked as a navigation waypoint via Ctrl+Tab (fields as
-// a whole, not individual rocks — rocks are combat/mining targets only).
-const WAYPOINTABLE_BODY_KINDS = new Set([
-  'island',
-  'port',
-  'outpost',
-  'wreckField',
-  'warpGate'
-])
-
-// Scratch for unlimited-range screen pick (Ctrl+Tab).
-const _wpPickWorld = new THREE.Vector3()
-const _wpPickNdc = new THREE.Vector3()
-const _wpPickCam = new THREE.Vector3()
-/** NDC distance from reticle — ~0.35 covers a generous “under the cursor” patch. */
-const WAYPOINT_PICK_NDC = 0.38
-
-/**
- * Ctrl+Tab: set (or clear) a waypoint on whatever is under the reticle.
- *
- * **No range limit.** If the body projects onto the screen near the reticle,
- * it is fair game — horizon islands included. Combat Tab still uses TARGET_RANGE.
- */
-function setWaypointFromCrosshair() {
-  if (!gameState) return
-  const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-  if (!currentSystem) return
-
-  camera.updateMatrixWorld(true)
-  camera.getWorldPosition(_wpPickCam)
-
-  // Reticle NDC: project the turret aim point so waypoint pick matches the
-  // guns, not bare screen centre.
-  const aimDir = crosshairAimDirection()
-  _wpPickWorld.copy(_wpPickCam).addScaledVector(aimDir, 800)
-  _wpPickNdc.copy(_wpPickWorld).project(camera)
-  const retX = _wpPickNdc.x
-  const retY = _wpPickNdc.y
-
-  let best = null
-  let bestDist = Infinity
-
-  for (const body of currentSystem.bodies) {
-    if (!WAYPOINTABLE_BODY_KINDS.has(body.kind)) continue
-    const radius = waypointAimRadius(body)
-    _wpPickWorld.fromArray(body.position)
-    // Behind the camera → not on screen.
-    _wpPickNdc.subVectors(_wpPickWorld, _wpPickCam)
-    if (_wpPickNdc.dot(aimDir) <= 0) continue
-
-    const distWorld = _wpPickCam.distanceTo(_wpPickWorld)
-    _wpPickNdc.copy(_wpPickWorld).project(camera)
-    // Outside clip (behind or far plane glitch).
-    if (!Number.isFinite(_wpPickNdc.x) || !Number.isFinite(_wpPickNdc.y)) continue
-    if (_wpPickNdc.z < -1.05 || _wpPickNdc.z > 1.05) continue
-
-    // Angular size in NDC so aiming at any part of a large island counts,
-    // and a distant speck still has a small but usable pick radius.
-    const halfFovY = ((camera.fov ?? 55) * Math.PI) / 360
-    const ang = distWorld > 1e-3 ? Math.atan2(radius, distWorld) : Math.PI / 2
-    const ndcRadius = Math.max(0.012, Math.min(0.9, ang / halfFovY))
-
-    let dx = _wpPickNdc.x - retX
-    let dy = _wpPickNdc.y - retY
-    let d = Math.hypot(dx, dy) - ndcRadius
-    if (d < 0) d = 0
-
-    // Must be somewhere on / near the visible frame (reticle-relative).
-    if (d > WAYPOINT_PICK_NDC) continue
-
-    // Prefer tighter reticle hit; near-tie prefers larger mass (island > quay).
-    if (
-      d < bestDist - 1e-4 ||
-      (Math.abs(d - bestDist) <= 1e-4 && best && radius > (best.radius ?? 0) * 1.15)
-    ) {
-      bestDist = d
-      best = { id: body.id, name: body.name, radius, kind: body.kind }
-    }
-  }
-
-  if (!best) {
-    flashToast('No place under crosshair — aim at an island, harbour, outpost, or wreck field')
-    return
-  }
-
-  // Clearing the current waypoint is always allowed; setting a new one is not
-  // with the autopilot engaged (it would redirect mid-passage).
-  if (gameState.player.waypointBodyId === best.id) {
-    gameState.player.waypointBodyId = null
-    gameState.player.waypointPosition = null
-    audio.playWaypointClear()
-    flashToast(`Waypoint cleared: ${best.name}`)
-    return
-  }
-
-  if (cruising) {
-    flashToast('Unable to set a waypoint with the autopilot engaged.')
-    return
-  }
-
-  gameState.player.waypointBodyId = best.id
-  gameState.player.waypointPosition = null
-  audio.playWaypointSet()
-  flashToast(`Waypoint set: ${best.name}`)
-}
-
-
 /** Clear Tab-lock target only — does not touch waypoints / plotted routes. */
 function clearTargetLock() {
   currentTarget = null
@@ -5345,7 +5612,8 @@ function resolveTarget() {
     hullPct: null,
     isAsteroid: false,
     reticle: body.kind === 'port' || body.kind === 'outpost' ? 'facility' : 'world',
-    kindLabel: bodyKindLabel(body.kind)
+    kindLabel: bodyKindLabel(body.kind),
+    radius: body.radius ?? collisionRadiusFor(body) ?? 0
   }
 }
 
@@ -5363,6 +5631,31 @@ function targetReticleColor(target) {
   return 'var(--ui-text)'
 }
 
+/**
+ * World point for the on-target reticle box — always above the waterline so the
+ * box sits on the visual mass (deck / quay / superstructure), not under it.
+ */
+const _reticleMark = new THREE.Vector3()
+function targetReticleWorldPos(target, out = _reticleMark) {
+  const x = target.position[0]
+  const z = target.position[2]
+  const seaY = waveHeight(x, z, gameState?.simTime ?? 0)
+  let lift = 10
+  if (target.reticle === 'facility') lift = 20
+  else if (target.reticle === 'world') lift = Math.min(70, 18 + (target.radius ?? 0) * 0.04)
+  else if (target.reticle === 'wreck') lift = 7
+  else if (target.reticle === 'asteroid') lift = 10
+  else if (target.reticle === 'anomaly' || target.reticle === 'nodule') lift = 14
+  else if (target.reticle === 'alien_base') lift = 18
+  else if (target.reticle === 'hostile' || target.hostile) lift = 12
+  else if (target.reticle === 'nav') lift = 8
+  // Prefer the entity’s own Y when it is already above the sea (e.g. a rock
+  // proud of the surface), then add a small freeboard so the box is not wet.
+  const baseY = Math.max(target.position[1] ?? seaY, seaY)
+  out.set(x, baseY + lift, z)
+  return out
+}
+
 function updateTargetIndicator() {
   const target = resolveTarget()
   if (!target) {
@@ -5371,7 +5664,8 @@ function updateTargetIndicator() {
     return
   }
 
-  const projected = new THREE.Vector3(...target.position).project(camera)
+  const mark = targetReticleWorldPos(target)
+  const projected = mark.clone().project(camera)
   if (projected.z > 1) {
     targetIndicatorEl.style.display = 'none'
     return
@@ -5383,13 +5677,13 @@ function updateTargetIndicator() {
   const color = targetReticleColor(target)
   targetIndicatorEl.querySelector('.target-box').style.borderColor = color
   const label = targetIndicatorEl.querySelector('.target-label')
-  // Reticle keeps faction/type colour; label uses probe-info look via class.
-  const dist = new THREE.Vector3().fromArray(gameState.player.ship.position).distanceTo(new THREE.Vector3(...target.position))
+  // Horizontal range only — depth is not meaningful on the sea.
+  const ship = gameState.player.ship.position
+  const dist = Math.hypot(ship[0] - target.position[0], ship[2] - target.position[2])
   const kindBit = target.kindLabel ? ` · ${target.kindLabel}` : ''
   if (target.hullPct !== null) {
     label.textContent = `${target.name} · ${Math.round(dist)}m · ${Math.round(target.hullPct * 100)}%`
   } else if (target.isAsteroid && target.oreLeft != null) {
-    // Remaining salvage on the hulk — when it hits zero the wreck breaks up.
     const maxBit = target.oreMax != null ? `/${target.oreMax}` : ''
     label.textContent = `${target.name} · ${Math.round(dist)}m · ${target.oreLeft}${maxBit} salvage`
   } else {
@@ -5397,70 +5691,56 @@ function updateTargetIndicator() {
   }
 }
 
-// Arrow sitting next to the ship's screen position, aimed at the current
-// Tab target. Off when nothing is locked — complement to the on-target reticle.
-// Distance from the projected ship to the direction chevron (px).
-// Higher = further from dead-center / the hull silhouette.
+// Arrow next to the ship’s screen position, aimed at the current Tab target.
+// Pure 2D bearing (front / sides / behind) — no elevation component.
 const TARGET_DIR_OFFSET_PX = 96
+const WAYPOINT_DIR_OFFSET_PX = 112
+const WAYPOINT_DIR_COLOR = '#ffe14a'
 const _tdirShip = new THREE.Vector3()
 const _tdirTarget = new THREE.Vector3()
-const _tdirTo = new THREE.Vector3()
-const _tdirRight = new THREE.Vector3()
-const _tdirUp = new THREE.Vector3()
+const _tdirAhead = new THREE.Vector3()
 const _tdirShipProj = new THREE.Vector3()
+const _tdirAimProj = new THREE.Vector3()
 
-function updateTargetDirectionIndicator() {
-  if (!targetDirEl) return
-  const target = resolveTarget()
-  if (!target || !gameState || docked) {
-    targetDirEl.style.display = 'none'
+/**
+ * Place a ship-relative direction chevron.
+ * Horizontal bearing only (front / abeam / behind the bow) — no elevation.
+ * Screen axes come from the projected hull so free-look does not invent depth.
+ */
+function placeShipRelativeDirArrow(el, arrowSel, targetX, targetZ, color, offsetPx) {
+  if (!el || !gameState) {
+    if (el) el.style.display = 'none'
     return
   }
-
-  // Must match the camera used for project() this frame (chase seat already synced).
   camera.updateMatrixWorld(true)
   _tdirShip.fromArray(gameState.player.ship.position)
-  _tdirTarget.fromArray(target.position)
-
-  // World direction ship → target (not camera → target: chase offset made the
-  // old camLocal-position approach point the wrong way, especially off-boresight
-  // and in free-look).
-  _tdirTo.subVectors(_tdirTarget, _tdirShip)
-  if (_tdirTo.lengthSq() < 1e-10) {
-    targetDirEl.style.display = 'none'
+  const dx = targetX - _tdirShip.x
+  const dz = targetZ - _tdirShip.z
+  if (dx * dx + dz * dz < 1e-6) {
+    el.style.display = 'none'
     return
   }
-  _tdirTo.normalize()
 
-  // Camera world axes (column-major matrixWorld).
-  const me = camera.matrixWorld.elements
-  _tdirRight.set(me[0], me[1], me[2])
-  _tdirUp.set(me[4], me[5], me[6])
-  if (_tdirRight.lengthSq() < 1e-10 || _tdirUp.lengthSq() < 1e-10) {
-    targetDirEl.style.display = 'none'
-    return
-  }
-  _tdirRight.normalize()
-  _tdirUp.normalize()
+  // Ship-local horizontal: +localZ ahead (bow), +localX starboard.
+  const heading = gameState.player.ship.heading ?? 0
+  const fX = Math.sin(heading)
+  const fZ = Math.cos(heading)
+  const rX = Math.cos(heading)
+  const rZ = -Math.sin(heading)
+  const localX = dx * rX + dz * rZ
+  const localZ = dx * fX + dz * fZ
+  const locLen = Math.hypot(localX, localZ) || 1
+  const nX = localX / locLen
+  const nZ = localZ / locLen
 
-  // Screen: +X right, +Y down (CSS). Camera +Y is up → flip.
-  let dirX = _tdirTo.dot(_tdirRight)
-  let dirY = -_tdirTo.dot(_tdirUp)
-  // Nearly along the view axis — (x,y) vanishes; keep a stable “ahead” cue.
-  if (Math.abs(dirX) < 1e-5 && Math.abs(dirY) < 1e-5) {
-    dirX = 0
-    dirY = -1
-  }
-  const len = Math.hypot(dirX, dirY) || 1
-  dirX /= len
-  dirY /= len
-
-  // Anchor on the ship's projected screen position (chase cam: lower-center).
+  // Project hull and short points along bow / beam for a screen basis.
+  const probe = 36
   _tdirShipProj.copy(_tdirShip).project(camera)
+  _tdirAhead.set(_tdirShip.x + fX * probe, _tdirShip.y, _tdirShip.z + fZ * probe).project(camera)
+  _tdirTarget.set(_tdirShip.x + rX * probe, _tdirShip.y, _tdirShip.z + rZ * probe).project(camera)
+
   const w = window.innerWidth
   const h = window.innerHeight
-  // NDC z outside ~[-1,1] can mean behind / clipped — still place using center
-  // fallback so the chevron remains usable during extreme free-look.
   let sx
   let sy
   if (!Number.isFinite(_tdirShipProj.x) || !Number.isFinite(_tdirShipProj.y)) {
@@ -5469,19 +5749,64 @@ function updateTargetDirectionIndicator() {
   } else {
     sx = (_tdirShipProj.x * 0.5 + 0.5) * w
     sy = (-_tdirShipProj.y * 0.5 + 0.5) * h
-    // Clamp so the cue stays on-screen if projection goes wild.
     sx = Math.max(24, Math.min(w - 24, sx))
     sy = Math.max(24, Math.min(h - 24, sy))
   }
 
-  targetDirEl.style.left = `${Math.round(sx + dirX * TARGET_DIR_OFFSET_PX)}px`
-  targetDirEl.style.top = `${Math.round(sy + dirY * TARGET_DIR_OFFSET_PX)}px`
-  targetDirEl.style.display = 'block'
-  const color = targetReticleColor(target)
-  const arrow = targetDirEl.querySelector('.tdir-arrow')
-  // Triangle points "up" (border-bottom); +π/2 maps atan2(screenY_down, screenX) to it.
-  arrow.style.transform = `rotate(${Math.atan2(dirY, dirX) + Math.PI / 2}rad)`
-  arrow.style.borderBottomColor = color
+  // Screen vectors for ship forward and starboard (CSS: +Y down).
+  let fwdX = (_tdirAhead.x - _tdirShipProj.x) * w
+  let fwdY = -(_tdirAhead.y - _tdirShipProj.y) * h
+  let stbdX = (_tdirTarget.x - _tdirShipProj.x) * w
+  let stbdY = -(_tdirTarget.y - _tdirShipProj.y) * h
+  // Degenerate projection (looking straight down the hull axis): use NDC defaults.
+  if (fwdX * fwdX + fwdY * fwdY < 1e-6) {
+    fwdX = 0
+    fwdY = -1
+  }
+  if (stbdX * stbdX + stbdY * stbdY < 1e-6) {
+    stbdX = 1
+    stbdY = 0
+  }
+  const fLen = Math.hypot(fwdX, fwdY) || 1
+  fwdX /= fLen
+  fwdY /= fLen
+  const sLen = Math.hypot(stbdX, stbdY) || 1
+  stbdX /= sLen
+  stbdY /= sLen
+
+  // Ahead = +nZ along bow, starboard = +nX along beam.
+  let dirX = stbdX * nX + fwdX * nZ
+  let dirY = stbdY * nX + fwdY * nZ
+  const dlen = Math.hypot(dirX, dirY) || 1
+  dirX /= dlen
+  dirY /= dlen
+
+  el.style.left = `${Math.round(sx + dirX * offsetPx)}px`
+  el.style.top = `${Math.round(sy + dirY * offsetPx)}px`
+  el.style.display = 'block'
+  const arrow = el.querySelector(arrowSel)
+  if (arrow) {
+    // Triangle points "up" (border-bottom); +π/2 maps atan2(screenY_down, screenX).
+    arrow.style.transform = `rotate(${Math.atan2(dirY, dirX) + Math.PI / 2}rad)`
+    arrow.style.borderBottomColor = color
+  }
+}
+
+function updateTargetDirectionIndicator() {
+  if (!targetDirEl) return
+  const target = resolveTarget()
+  if (!target || !gameState || docked) {
+    targetDirEl.style.display = 'none'
+    return
+  }
+  placeShipRelativeDirArrow(
+    targetDirEl,
+    '.tdir-arrow',
+    target.position[0],
+    target.position[2],
+    targetReticleColor(target),
+    TARGET_DIR_OFFSET_PX
+  )
 }
 
 // Where the guns are laid — the crosshair is this point projected (see game/turret.js).
@@ -5540,32 +5865,6 @@ function updateCrosshair() {
   }
 }
 
-/** After SC drops the waypoint, lock Tab-target on the destination for a reticle. */
-function setTargetFromAutopilotArrival(wp) {
-  if (!wp) return
-  if (wp.bodyId) {
-    const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-    const body = system?.bodies?.find((b) => b.id === wp.bodyId)
-    // Wreck fields stay waypointable for cruise, but the field as a whole is
-    // not a Tab-lock target — the individual hulks are.
-    if (body?.kind === 'wreckField') {
-      currentTarget = null
-      return
-    }
-    currentTarget = { kind: 'body', id: wp.bodyId }
-    return
-  }
-  // Free-space marker (e.g. bounty hunt) — fixed point, not a body.
-  if (wp.position) {
-    currentTarget = {
-      kind: 'navpoint',
-      id: 'sc-arrival',
-      position: [...wp.position],
-      name: wp.name || 'Destination'
-    }
-  }
-}
-
 // A place on the chart, or an open-water mark (a bounty's last known position).
 function getActiveWaypoint() {
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
@@ -5605,10 +5904,6 @@ function getActiveWaypoint() {
   return null
 }
 
-const _wpTarget = new THREE.Vector3()
-const _wpShip = new THREE.Vector3()
-const _wpCamLocal = new THREE.Vector3()
-const _wpProj = new THREE.Vector3()
 /**
  * Stack floating messages just below the top-center ship status panel (white text).
  * Probe classification panel stays left-side — not included here.
@@ -5652,94 +5947,19 @@ function updateBelowRadarPrompts() {
 
 function updateWaypointIndicator() {
   const wp = getActiveWaypoint()
-  if (!wp || !waypointEl) {
+  if (!wp || !waypointEl || docked) {
     if (waypointEl) waypointEl.style.display = 'none'
     return
   }
-
-  const color = wp.isMission ? '#ff8a3d' : '#7fe0a0'
-  _wpTarget.fromArray(wp.position)
-  _wpShip.fromArray(gameState.player.ship.position)
-  const distance = _wpShip.distanceTo(_wpTarget)
-
-  // Behind test in camera space (Three: look = -Z). Don't use project().z —
-  // points past camera.far looked "behind" even when in front (hid far WPs).
-  camera.updateMatrixWorld(true)
-  _wpCamLocal.copy(_wpTarget).applyMatrix4(camera.matrixWorldInverse)
-  const behind = _wpCamLocal.z >= 0
-  _wpProj.copy(_wpTarget).project(camera)
-
-  const w = window.innerWidth
-  const h = window.innerHeight
-  const cx = w / 2
-  const cy = h / 2
-  const margin = 60
-
-  // Screen-pixel direction from view center toward waypoint.
-  // Scale NDC by (w,h) so diagonals are aspect-correct (raw NDC unit vectors
-  // treat the viewport as square and skew edge placement on widescreen).
-  // Behind: project() already flips via negative w; camLocal fallback flips
-  // explicitly and applies projection scale for the same aspect correction.
-  let dirX
-  let dirY
-  if (Number.isFinite(_wpProj.x) && Number.isFinite(_wpProj.y)) {
-    dirX = _wpProj.x * w
-    dirY = -_wpProj.y * h // NDC +Y up → screen Y down
-  } else {
-    // Rare non-finite project: camera-local lateral × projection scale.
-    const pe = camera.projectionMatrix.elements
-    dirX = _wpCamLocal.x * pe[0] * w
-    dirY = -_wpCamLocal.y * pe[5] * h
-    if (behind) {
-      dirX = -dirX
-      dirY = -dirY
-    }
-  }
-  if (Math.abs(dirX) < 1e-8 && Math.abs(dirY) < 1e-8) {
-    dirX = 0
-    dirY = behind ? 1 : -1
-  }
-
-  const onScreen =
-    !behind &&
-    Number.isFinite(_wpProj.x) &&
-    Number.isFinite(_wpProj.y) &&
-    _wpProj.x >= -1 &&
-    _wpProj.x <= 1 &&
-    _wpProj.y >= -1 &&
-    _wpProj.y <= 1
-
-  let dx
-  let dy
-  if (onScreen) {
-    // Sit on the projected waypoint (center of view → marker offset).
-    dx = (_wpProj.x * 0.5 + 0.5) * w - cx
-    dy = (-_wpProj.y * 0.5 + 0.5) * h - cy
-  } else {
-    // Clamp to screen edge along the aspect-correct screen direction.
-    const len = Math.hypot(dirX, dirY) || 1
-    dirX /= len
-    dirY /= len
-    const sx = (w / 2 - margin) / Math.max(1e-6, Math.abs(dirX))
-    const sy = (h / 2 - margin) / Math.max(1e-6, Math.abs(dirY))
-    const edge = Math.min(sx, sy)
-    dx = dirX * edge
-    dy = dirY * edge
-  }
-
-  // Triangle points up; +π/2 maps atan2(screenY_down, screenX) like target cue.
-  const angle = Math.atan2(dy, dx) + Math.PI / 2
-  waypointEl.style.left = `${cx + dx}px`
-  waypointEl.style.top = `${cy + dy}px`
-  waypointEl.style.transform = 'translate(-50%, -50%)'
-  waypointEl.style.display = 'block'
-  const arrow = waypointEl.querySelector('.wp-arrow')
-  arrow.style.transform = `rotate(${angle}rad)`
-  arrow.style.borderBottomColor = color
-  const label = waypointEl.querySelector('.wp-label')
-  // Arrow keeps mission/nav colour; name text uses probe-info look via class.
-  const distLabel = distance >= 10000 ? `${(distance / 1000).toFixed(1)}km` : `${Math.round(distance)}m`
-  label.textContent = `${wp.name} · ${distLabel}`
+  // Bright yellow ship-relative cue (maps / overview set the waypoint).
+  placeShipRelativeDirArrow(
+    waypointEl,
+    '.wp-arrow',
+    wp.position[0],
+    wp.position[2],
+    WAYPOINT_DIR_COLOR,
+    WAYPOINT_DIR_OFFSET_PX
+  )
 }
 
 let lastTime = performance.now()
@@ -5874,6 +6094,9 @@ function animate() {
     spray.clear()
     audio.setStrafeActive(false)
     if (targetDirEl) targetDirEl.style.display = 'none'
+    // Hide foam while moored — do not dispose/reset every frame (that left
+    // Continue-from-docked with a dead wake object after undock).
+    if (playerWake?.group) playerWake.group.visible = false
     applyDockedHud()
     // Moored, so the boat still rides the swell and the harbour still lives
     // around it — but nothing can touch you and there is no helm to hold.
@@ -5889,6 +6112,7 @@ function animate() {
       if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
       syncOceanSearchlight()
     }
+    if (chartOpen) seaChart?.refresh?.()
     render()
     return
   }
@@ -5901,54 +6125,40 @@ function animate() {
   updateProbeScanFloat()
   updatePlayerDrones(dt)
 
+  // Turret stays free under Cruise Control — only the helm is automated.
+  // Lay guns before hull motion so a click-to-fire matches this frame's reticle.
+  if (flightMode) updateTurretAim(gameState.player.ship, mouseAim)
+  else centreTurret(gameState.player.ship, dt)
+
+  // Cruise drops if combat starts, or if the player touches thrust / thrusters
+  // (W/S/Q/E). A/D are helm and stay available under cruise.
+  const liveKeys = flightMode ? keys : EMPTY_KEYS
+  if (cruising) {
+    if (gameState.inCombat || cruiseCancelKeysHeld(liveKeys)) {
+      cruising = false
+    }
+  }
+
   let thrustState = null
   if (cruising) {
-    const wp = getActiveWaypoint()
-    if (!wp || gameState.inCombat) {
-      cruising = false
-    } else {
-      const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
-      const shipRadius = getShipCollisionRadius(playerShipClass)
-      // Steer around other bodies on the way; destination body is not avoided
-      // so arrival still works (see autopilot.aimAroundObstacles).
-      const skillB = playerSkillBonuses(gameState)
-      if (updateAutopilot(
-        gameState.player.ship,
-        playerShipClass,
-        wp.position,
-        dt,
-        wp.arrivalRange,
-        currentSystem.bodies,
-        shipRadius,
-        wp.bodyId,
-        {
-          speedMult: skillB.speedMult,
-          cruiseMult: skillB.cruiseMult,
-          turnMult: skillB.turnMult
-        },
-        gameState.simTime
-      )) {
-        cruising = false
-        // Kill residual cruise speed immediately so we don't coast into the shell.
-        gameState.player.ship.velocity = [0, 0, 0]
-        gameState.player.ship.throttle = 0
-        // Snap facing onto the destination so you're lined up to dock/approach.
-        const shipPos = gameState.player.ship.position
-        const dx = wp.position[0] - shipPos[0]
-        const dz = wp.position[2] - shipPos[2]
-        if (dx * dx + dz * dz > 1e-4) {
-          gameState.player.ship.heading = Math.atan2(dx, dz)
-        }
-        // Keep a reticle on the destination after the waypoint is cleared.
-        setTargetFromAutopilotArrival(wp)
-        // Clear the nav lock on arrival — you are already there.
-        gameState.player.waypointBodyId = null
-        gameState.player.waypointPosition = null
-        // Arriving at a stripped wreck field — show the settle-again countdown.
-        toastIfDepletedField(wp.bodyId)
-      }
-    }
-    // Autopilot uses the same diesel as the helm — no separate cruise bed.
+    const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
+    const shipRadius = getShipCollisionRadius(playerShipClass)
+    const skillB = playerSkillBonuses(gameState)
+    // Hold speed; A/D helm only — no auto land avoidance.
+    updateCruiseControl(
+      gameState.player.ship,
+      playerShipClass,
+      dt,
+      null,
+      0,
+      {
+        speedMult: skillB.speedMult,
+        turnMult: skillB.turnMult
+      },
+      gameState.simTime,
+      liveKeys
+    )
+    // Cruise uses the same diesel as the helm — no separate bed / boost.
     audio.setThrustState('accel')
     const apSpeed = Math.hypot(
       gameState.player.ship.velocity[0] ?? 0,
@@ -5957,24 +6167,16 @@ function animate() {
     const skillAp = playerSkillBonuses(gameState)
     const apTop = Math.max(
       1e-3,
-      (playerShipClass.stats?.speed ?? 1) *
-        (skillAp.speedMult ?? 1) *
-        (skillAp.cruiseMult ?? 1)
+      (playerShipClass.stats?.speed ?? 1) * (skillAp.speedMult ?? 1)
     )
-    // Rev with actual speed (ramp-up / approach), never silent while under way.
     audio.setEngineRevs(Math.min(1, Math.max(0.2, apSpeed / apTop)))
   } else {
-    // Lay the turret first: it is the only consumer of the accumulated mouse
-    // delta, and doing it before the hull moves keeps a click-to-fire between
-    // frames matching the crosshair drawn this frame.
-    if (flightMode) updateTurretAim(gameState.player.ship, mouseAim)
-    else centreTurret(gameState.player.ship, dt)
     {
       const skillB = playerSkillBonuses(gameState)
       updateFlight(
         gameState.player.ship,
         playerShipClass,
-        flightMode ? keys : EMPTY_KEYS,
+        liveKeys,
         dt,
         {
           speedMult: skillB.speedMult,
@@ -5998,30 +6200,25 @@ function animate() {
   // downstream still asks the world object, and now gets a local answer.
   applyLocalSecurity(getWorld(gameState.galaxy), gameState.player.ship.position)
 
-  // Keep mesh + chase seat in sync with the post-handling pose *before* weapons
-  // and reticles so undock/load can't leave a one-frame cam/gun skew.
+  // Mesh only here — chase cam is seated once later (after idle-orbit flag).
+  // Calling syncChaseCamera twice per frame doubled heave/floor smoothing and
+  // made mouse-aim under cruise look jittery.
   if (playerMesh) syncMeshToEntity(playerMesh, gameState.player.ship)
-  syncChaseCamera(camera, gameState.player.ship, { cruising, dt })
 
-  // Edge-detect engage/disengage for HUD + residual speed cleanup.
+  // Edge-detect engage/disengage for HUD.
   if (cruising !== wasCruising) {
     if (cruising) {
       // Ramp starts at 0 every engage (see autopilot.AUTOPILOT_RAMP_UP_S).
       gameState.player.ship.supercruiseElapsed = 0
     } else {
-      // Drop all residual cruise speed so normal flight doesn't inherit a huge v.
-      gameState.player.ship.velocity = [0, 0, 0]
-      gameState.player.ship.throttle = 0
+      // No speed boost, so keep residual way — hand-off feels natural.
       gameState.player.ship.supercruiseElapsed = 0
-      // Kill the wake immediately rather than waiting a frame.
     }
-    // HUD toast only — no TTS callout for engage/disengage.
     if (cruising) {
-      setHudToastText(cruiseIndicatorEl, 'AUTOPILOT ENGAGED')
+      setHudToastText(cruiseIndicatorEl, 'CRUISE CONTROL ENGAGED')
       showHudToast(cruiseIndicatorEl)
     } else {
-      // Brief yellow callout (same style as engage), then fade out.
-      setHudToastText(cruiseIndicatorEl, 'AUTOPILOT DISENGAGED')
+      setHudToastText(cruiseIndicatorEl, 'CRUISE CONTROL DISENGAGED')
       showHudToast(cruiseIndicatorEl)
       hideHudToast(cruiseIndicatorEl)
     }
@@ -6030,17 +6227,14 @@ function animate() {
 
   const currentBodies = getSystem(gameState.galaxy, gameState.player.currentSystemId).bodies
   const shipRadius = getShipCollisionRadius(playerShipClass)
-  // The autopilot steers around land rather than through it (see
-  // game/autopilot.js aimAroundObstacles), so collision stays on under it —
-  // running aground on autopilot is a real outcome, not a teleport.
+  // Collision stays on under cruise — no auto avoid, so running aground is real.
   resolveBodyCollisions(gameState.player.ship, currentBodies, shipRadius, {
     isRockAlive: (fieldId, index) => isRockAlive(gameState, fieldId, index)
   })
 
   const shipSpeed = Math.hypot(...gameState.player.ship.velocity)
   // Water over the bow and speed streaks, scaled by how hard you are driving
-  // her. Autopilot boosts both: it runs above the hull's own top speed, so
-  // speedFraction alone would understate it. Stopped / docked / dead clear the glass.
+  // her. Cruise is normal top speed — no boost spray. Stopped / docked / dead clear the glass.
   //
   // The stem is projected to screen each frame so the spray radiates from where
   // it is actually being thrown up — off the bow, past the chase camera —
@@ -6062,40 +6256,17 @@ function animate() {
       renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
     )
   }
-  // Speed FOV: widens a little as the boat comes up onto the plane, fixed under
-  // cruise. Snap when close or nearly stopped so the settle can't smear aim.
-  const speedFovBoost =
-    SPEED_FOV_MAX * Math.min(1, shipSpeed / Math.max(1e-3, playerShipClass.stats.speed))
-  const targetFov = BASE_FOV + speedFovBoost
-  const fovErr = Math.abs(camera.fov - targetFov)
-  if (fovErr < 0.08 || (shipSpeed < 2 && speedFovBoost < 0.05)) {
-    if (camera.fov !== targetFov) {
-      camera.fov = targetFov
-      camera.updateProjectionMatrix()
-    }
-  } else {
-    camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 6)
+  // FOV is fixed (BASE_FOV) in both helm and Cruise Control — no speed zoom.
+  if (camera.fov !== BASE_FOV) {
+    camera.fov = BASE_FOV
     camera.updateProjectionMatrix()
   }
-  // AUTOPILOT ENGAGED: faded in and out on the wasCruising edge.
+  // CRUISE CONTROL ENGAGED: faded in and out on the wasCruising edge.
   // Player mesh + chase cam are re-synced after orbital carry (see below).
   syncMeshToEntity(playerMesh, gameState.player.ship)
-  const strafeX = cruising ? 0 : (gameState.player.ship.strafeX ?? 0)
-  const strafeY = cruising ? 0 : (gameState.player.ship.strafeY ?? 0)
-  audio.setStrafeActive(!cruising && flightMode && (strafeX !== 0 || strafeY !== 0))
-  // Water displaced by the hull, not exhaust. Travel-heading so reverse is
-  // correct; noStrafe so Q/E thrusters do not throw a wake.
-  {
-    const { travelHeading, fraction } = wakeDrive(gameState.player.ship, { noStrafe: true })
-    playerWake.update(
-      gameState.player.ship.position,
-      travelHeading,
-      fraction,
-      playerShipClass.hull.length,
-      gameState.simTime,
-      dt
-    )
-  }
+  const strafeX = gameState.player.ship.strafeX ?? 0
+  const strafeY = gameState.player.ship.strafeY ?? 0
+  audio.setStrafeActive(flightMode && !cruising && (strafeX !== 0 || strafeY !== 0))
   damageEffects.update(dt, {
     armorFraction: gameState.player.ship.armor / Math.max(1, effectiveMaxArmor(gameState.player.ship, playerShipClass)),
     hullFraction: gameState.player.ship.hull / playerShipClass.stats.hull,
@@ -6207,7 +6378,7 @@ function animate() {
       )
     )
     nextAmbientSpawnAt = gameState.simTime + AMBIENT_SPAWN_INTERVAL_S * (0.7 + core * 0.6)
-    // Occasionally replace killed station / warp-gate patrols.
+    // Occasionally replace killed harbour patrols.
     refreshStationPolicePatrols()
   }
 
@@ -6404,9 +6575,17 @@ function animate() {
   }
   syncMeshToEntity(playerMesh, gameState.player.ship)
   // 60s with no input: let the chase seat drift around the ship.
-  // Never on autopilot — idle drift fighting the passage camera looks broken.
+  // Never on cruise — idle drift fighting the passage camera looks broken.
   setChaseIdleOrbit(!cruising && performance.now() - lastInputAtMs > 60_000)
   syncChaseCamera(camera, gameState.player.ship, { cruising, dt })
+
+  // Wake after final ship pose + camera so foam matches what you see this frame.
+  // (Was earlier in the loop; a later throw used to skip render after updating it.)
+  try {
+    updatePlayerWake(dt)
+  } catch (err) {
+    console.warn('[wake] update failed', err)
+  }
 
   // Fire after final pose + camera; mesh-sync again so new bolts draw this frame.
   // Independent: hold LMB + RMB to fire lasers and missiles at the same time.
@@ -6443,6 +6622,8 @@ function animate() {
   } else {
     systemOverview?.hide()
   }
+  // Sea chart stays locked on the boat; redraw so it tracks as you move.
+  if (chartOpen) seaChart?.refresh?.()
   const shipVelocity = new THREE.Vector3().fromArray(gameState.player.ship.velocity)
   const shipForward = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion().fromArray(gameState.player.ship.quaternion))
   const speed = shipVelocity.length()
@@ -6455,14 +6636,16 @@ function animate() {
     const ps = gameState.player.ship
     ps.maxArmor = effectiveMaxArmor(ps, playerShipClass)
   }
+  const activeWp = !docked ? getActiveWaypoint() : null
   hud.update(
     gameState.player.ship,
     playerShipClass,
     speed,
     forwardSpeed,
-    nearestHudBody?.name ?? 'Open water',
+    nearestHudBody?.name ?? 'Open Water',
     null,
-    getSystemSecurity(hudSystem)
+    getSystemSecurity(hudSystem),
+    activeWp?.name ?? null
   )
   // Tab-target detail panel (top right, left of system overview).
   {
@@ -6493,23 +6676,22 @@ function animate() {
   }
   hud.updateRadar(computeRadarContacts(), RADAR_RANGE, gameState.simTime)
 
-  // Berth / sounding / salvage prompts are helm-only — on autopilot
-  // you skim past shells so constantly that those toasts just spam the HUD.
-  // F priority: wreck → warp gate (2 km) → nodule → dock. Each also requires
-  // the object to be Tab-locked — otherwise the prompt would promise an F
-  // action that the keydown handler (gated the same way) won't perform.
+  // F priority: wreck → nodule → dock. Each also requires the object to be
+  // Tab-locked — otherwise the prompt would promise an F action that the
+  // keydown handler (gated the same way) won't perform. Cruise does not block
+  // these — only the helm is automated.
   const isTargeted = (kind, id) => currentTarget?.kind === kind && currentTarget.id === id
-  const nearbyWreckRaw = !cruising ? findNearbyWreck() : null
+  const nearbyWreckRaw = findNearbyWreck()
   const nearbyWreck = nearbyWreckRaw && isTargeted('wreck', nearbyWreckRaw.id) ? nearbyWreckRaw : null
   const currentSysForPrompt = getSystem(gameState.galaxy, gameState.player.currentSystemId)
   const nearbyNoduleRaw =
-    !cruising && !nearbyWreck && !probeEffect && !datacoreMinigame?.isOpen?.()
+    !nearbyWreck && !probeEffect && !datacoreMinigame?.isOpen?.()
       ? findNearbyDatacoreNodule()
       : null
   const nearbyNodule =
     nearbyNoduleRaw && isTargeted('nodule', nearbyNoduleRaw.nodule.id) ? nearbyNoduleRaw : null
   const nearbyBodyRaw =
-    !cruising && !nearbyWreck && !nearbyNodule ? findNearbyDockableBody() : null
+    !nearbyWreck && !nearbyNodule ? findNearbyDockableBody() : null
   const nearbyBody = nearbyBodyRaw && isTargeted('body', nearbyBodyRaw.id) ? nearbyBodyRaw : null
   wreckPromptEl.style.display = nearbyWreck ? 'block' : 'none'
   if (nearbyWreck) {
@@ -6528,7 +6710,7 @@ function animate() {
     }
   }
 
-  const probeLaunch = !cruising && !probeEffect ? getProbeLaunchTarget() : null
+  const probeLaunch = !probeEffect ? getProbeLaunchTarget() : null
   probePromptEl.style.display = probeLaunch ? 'block' : 'none'
   if (probeLaunch) {
     const left = MAX_PROBE_ATTEMPTS - probeAttemptCount(gameState, probeLaunch.body.id)

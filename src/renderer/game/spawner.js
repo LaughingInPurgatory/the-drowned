@@ -234,76 +234,44 @@ export function spawnPolicePatrolNearStation(rng, station, allBodies = null) {
 }
 
 /**
- * Warp-gate patrol — loiters outside the portal (Sec 4–6 only).
- * Reuses station-patrol AI (patrolAnchor + radius ring).
- */
-export function spawnPolicePatrolNearWarpGate(rng, gate, allBodies = null) {
-  const shell = exteriorRadiusFor(gate) ?? npcExclusionRadiusFor(gate) ?? gate.radius ?? 140
-  // Hollow portals: sit well outside the 2 km activation bubble edge so they
-  // don't block F-jumps — patrol a ring ~2.2–2.8 km from the gate centre.
-  const minDist = Math.max(shell + NPC_SPAWN_SHIP_RADIUS + 200, 2200)
-  const maxDist = minDist + 600
-  let position = null
-  for (let i = 0; i < 48; i++) {
-    const dist = range(rng, minDist, maxDist)
-    const theta = rng() * Math.PI * 2
-    const phi = Math.acos(2 * rng() - 1)
-    const candidate = [
-      gate.position[0] + dist * Math.sin(phi) * Math.cos(theta),
-      gate.position[1] + dist * Math.cos(phi) * 0.35,
-      gate.position[2] + dist * Math.sin(phi) * Math.sin(theta)
-    ]
-    if (!positionOverlapsBodies(candidate, allBodies ?? [gate])) {
-      position = candidate
-      break
-    }
-  }
-  if (!position) {
-    position = clearPositionOfBodies(
-      [gate.position[0] + minDist + 100, gate.position[1], gate.position[2]],
-      allBodies ?? [gate]
-    )
-  } else {
-    position = clearPositionOfBodies(position, allBodies ?? [gate])
-  }
-
-  const npc = spawnNpcWithClass(rng, {
-    shipClassId: POLICE_SHIP_CLASS_ID,
-    position,
-    faction: 'police',
-    bodies: allBodies
-  })
-  npc.stationPatrol = true
-  npc.warpGatePatrol = true
-  npc.patrolStationId = gate.id
-  npc.patrolWarpGateId = gate.id
-  npc.patrolAnchor = [...gate.position]
-  npc.patrolMinRadius = minDist
-  npc.patrolMaxRadius = maxDist
-  npc.patrolRadius = maxDist
-  return npc
-}
-
-/**
- * Ensure higher-security systems have police on station duty (Sec 3–6) and at warp
- * gates (Sec 4–6). Higher security → more patrols per fixture (up to 2).
+ * Ensure higher-security harbours have police on duty (Sec 3–6).
+ * Uses each port's own securityRating (not a single system value applied to
+ * every bay — that used to spawn ~100 patrols on Continue and freeze the load).
+ * When nearPos is given, only top up stations within maxDist of the player.
  * @returns {object[]} newly spawned NPCs
  */
-export function ensureStationPolicePatrols(rng, gameState, system, securityRating) {
-  if (!gameState || !system || securityRating < 3) return []
+export function ensureStationPolicePatrols(
+  rng,
+  gameState,
+  system,
+  securityRating,
+  { nearPos = null, maxDist = 12000 } = {}
+) {
+  if (!gameState || !system) return []
   const bodies = system.bodies ?? []
   const spawned = []
+  const px = nearPos ? Number(nearPos[0]) || 0 : 0
+  const pz = nearPos ? Number(nearPos[2]) || 0 : 0
+  const maxD2 = maxDist * maxDist
 
-  // Stations: Sec 3–6
   const stations = bodies.filter((b) => b.kind === 'port')
-  const perStation = securityRating >= 5 ? 2 : 1
   for (const station of stations) {
+    // Harbour security first; system rating is only a fallback for old data.
+    const sec = Number.isFinite(station.securityRating)
+      ? Math.max(0, Math.min(6, Math.floor(station.securityRating)))
+      : securityRating
+    if (sec < 3) continue
+    if (nearPos) {
+      const dx = (station.position?.[0] ?? 0) - px
+      const dz = (station.position?.[2] ?? 0) - pz
+      if (dx * dx + dz * dz > maxD2) continue
+    }
+    const perStation = sec >= 5 ? 2 : 1
     const live = (gameState.npcs ?? []).filter(
       (n) =>
         !n.destroyed &&
         n.faction === 'police' &&
         n.stationPatrol &&
-        !n.warpGatePatrol &&
         n.patrolStationId === station.id
     ).length
     const need = Math.max(0, perStation - live)
@@ -311,27 +279,6 @@ export function ensureStationPolicePatrols(rng, gameState, system, securityRatin
       const npc = spawnPolicePatrolNearStation(rng, station, bodies)
       gameState.npcs.push(npc)
       spawned.push(npc)
-    }
-  }
-
-  // Warp gates: Sec 4–6 only
-  if (securityRating >= 4) {
-    const gates = bodies.filter((b) => b.kind === 'warpGate')
-    const perGate = securityRating >= 6 ? 2 : 1
-    for (const gate of gates) {
-      const live = (gameState.npcs ?? []).filter(
-        (n) =>
-          !n.destroyed &&
-          n.faction === 'police' &&
-          n.warpGatePatrol &&
-          n.patrolWarpGateId === gate.id
-      ).length
-      const need = Math.max(0, perGate - live)
-      for (let i = 0; i < need; i++) {
-        const npc = spawnPolicePatrolNearWarpGate(rng, gate, bodies)
-        gameState.npcs.push(npc)
-        spawned.push(npc)
-      }
     }
   }
 
