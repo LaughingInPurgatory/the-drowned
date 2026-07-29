@@ -37,9 +37,9 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **One seamless sea** — a fixed canonical seed builds the same **160 km** disk for every player (radius **80 km** from the centre, open water past the rim). Roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields** (~330 places in all). No regions, no jumps, no loading seam. Home is always **Haven Reach** at the middle; remoteness (and difficulty) climb toward the edge.
 - **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on steep crests; the sun lays a track across it. No painted foam collars on shores or quays — just open water and the wake.
 - **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them. Deck guns free-traverse a full 360°.
-- **Cruise Control (C)** — holds way at normal top speed. **A/D still helm** while under way; **W/S/Q/E cancel** cruise and hand the boat back. Guns, sonar, drones, and other keys stay free. **Steers around islands** when you are not helming. No speed boost and no waypoint required — waypoints are a separate orange cue from the **sea chart**, **Overview**, or **Region Sonar**.
-- **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars come out. Harbour lamps and mast lights carry the night.
-- **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does. Fair skies most of the time; **occasional thunderstorms** load the deck dark, sheet rain across the glass, flash lightning through the fog, and answer with deep thunder over the water.
+- **Cruise Control (C)** — holds course and way at normal top speed (no boost). **A/D still helm** while under way; **W/S/Q/E cancel** and hand the boat back. Guns, sonar, drones, and other keys stay free. No automatic land avoidance and no waypoint required — if you leave it pointed at a shore, you can run aground. Waypoints are a separate **yellow** cue from the **sea chart**, **Overview**, or **Region Sonar**.
+- **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars (and thin night colour in the upper sky) come out. Harbour lamps and mast lights carry the night.
+- **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does. Fair skies most of the time; **occasional thunderstorms** load the deck dark, put fine dense rain on the glass, flash lightning through the fog, and answer with deep thunder over the water.
 - **How far out you are is the difficulty curve** — Haven Reach is policed and picked over. The further you sail, the worse the law, the harder the raiders, and the better the salvage still lying on the bottom.
 - **Local security** — every harbour has its own rating **0–6** and patrols the water around it. Between them is open sea, which answers to nobody. **Law standing 0–10** (start 10): attacking honest traffic only costs you where someone is watching. Low standing draws patrols, refused docking, and eventually shoot-on-sight.
 - **100+ vessel classes** — boat-shaped hulls lofted from station lines (transom, **sheer** that lifts the stem and counter, freeboard, rocker, wider working decks), round bilge or hard chine, then fitted out: deck, wheelhouse, **glass bridge panes**, funnel, mast and rigging, railings, fenders, anchor and bollards. Hulls wear **photo PBR plate** (rust streaks, freckled steel, heavy corrosion) tinted by class colour. What sits on the deck is the trade — deck cargo and a crane on a freighter, a gun tub and ammo lockers on a gunboat, davits and a survey winch on an explorer, an A-frame and a dive platform on a salvage boat.
@@ -58,8 +58,9 @@ New Game starts you alongside at **Port Haven** on **Haven Reach** — the middl
 - **Workshop** — rare blueprints from wrecks and soundings (one-shot, not sellable); build boats, weapons and accessories from stored salvage. Jobs run on wall-clock time and keep working while you are away.
 - **Skills & skillbooks** — **0–20** per skill, loot-only books from wrecks.
 - **Wall-clock campaign time** — offline catch-up on load, so wreck fields settle and workshop jobs finish while the game is closed.
-- **Chase camera** — astern and low, riding a smoothed waterline so it does not bob with every crest, and level however hard the boat heels. The seat follows the independent turret so the reticle stays with the guns.
-- **HUD** — velocity and shield/armour/hull up top, heading-up radar below, contacts list to the right, **sea chart (M)** and **sounding (B)** as movable floating panels.
+- **Chase camera** — astern and low, riding a smoothed waterline so it does not bob with every crest, and level however hard the boat heels. The seat follows the independent turret so the reticle stays with the guns. Same FOV under helm and Cruise Control.
+- **HUD** — velocity and armour/hull up top; place name is the nearest island, harbour, outpost or wreck field within **1 km**, otherwise **Open Water**. Active waypoint shows as **Waypoint: name** under that box, with a yellow ship-relative direction arrow. Heading-up radar below; contacts / **Overview** to the right; **sea chart (M)** and **Region Sonar (B)** as movable floating panels.
+- **Sea chart (M)** — opens centred on your boat (bright yellow heading mark); drag to pan, scroll to zoom, click a mark for a waypoint. Closing with **M** returns to play without opening pause.
 - **Music & SFX** — title, ambient and death music; synthesised diesel, dock/mooring, rain, deep thunder and most guns; sampled thruster engage and heavy launchers. Separate **Sound Effects** and **Music** toggles in **Settings**.
 - **UI Colour** — retint accent and panel background in **Settings → UI Colour**; applies live and saves.
 - **Windowed app + fullscreen** — default windowed with OS frame (**1600×900**, size/position remembered). **Alt + Enter** toggles fullscreen.
@@ -123,9 +124,9 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **Tab** | Target under crosshair, or cycle nearby contacts |
 | **Shift+Tab** | Clear target lock |
 | **Backspace** | Clear target lock |
-| **C** | Cruise Control — holds way; A/D steer; W/S/Q/E cancel |
-| **M** | Sea chart (click a mark to set a waypoint) |
-| **B** | Region sonar scan — lock Anomalous Signals (or click the region chip) |
+| **C** | Cruise Control — holds course; A/D helm; W/S/Q/E cancel (no auto land dodge) |
+| **M** | Sea chart (opens on you; pan / zoom; click a mark for a waypoint) |
+| **B** | Region Sonar Scan — lock Anomalous Signals (or click the region chip) |
 | **F** | Use targeted contact: salvage wreck · come alongside · crack a datacore nodule |
 | **P** | Sonar pulse — sound the water around a nearby island or wreck field |
 | **G** | Launch combat drones (airborne escorts; requires drones in the bays) |
@@ -136,7 +137,7 @@ You take the helm with **Space**. While you have the helm the pointer is locked 
 | **F1** | Character sheet |
 | **Esc** | Pause (Resume to continue; dismisses open panels) |
 | **F5** | Hail locked target (flavour dialogue — corsairs, coast guard, The Drowned, …) |
-| **Free mouse** | Click **Overview** (right) or the contacts list to set waypoints; scroll Overview with the wheel |
+| **Free mouse** | Click **Overview** / sea chart / Region Sonar to set waypoints; scroll Overview with the wheel |
 
 There is no roll, no pitch and no vertical thrust — a boat has a rudder, a throttle, and thrusters to shove it sideways onto a berth.
 
