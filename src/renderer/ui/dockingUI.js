@@ -597,7 +597,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
 
   function updateHeaderCredits() {
     const n = Math.max(0, Math.floor(Number(gameState.player.credits) || 0))
-    headerCreditsEl.textContent = `${n.toLocaleString()} cr`
+    headerCreditsEl.textContent = `${n.toLocaleString()} BU`
   }
   const shipyardLeftCol = root.querySelector('.shipyard-left-column')
   const statsSideEl = root.querySelector('.stats-side')
@@ -763,7 +763,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       await showNotice(
         side === 'buy' ? 'Cannot buy' : 'Cannot sell',
         side === 'buy'
-          ? `Not enough credits for one ${label} (${unitPrice}cr each; you have ${credits}cr).`
+          ? `Not enough Barter Units for one ${label} (${unitPrice} BU each; you have ${credits} BU).`
           : `No ${label} in station storage to sell.`
       )
       return 0
@@ -775,8 +775,8 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       {
         body:
           side === 'buy'
-            ? `${unitPrice}cr each · max ${max} (credits & bay stock)\nGoes into station storage.`
-            : `${unitPrice}cr each · ${max} in your station storage\nSells into the bay (raises Available).`,
+            ? `${unitPrice} BU each · max ${max} (Barter Units & bay stock)\nGoes into station storage.`
+            : `${unitPrice} BU each · ${max} in your station storage\nSells into the bay (raises Available).`,
         okLabel: side === 'buy' ? 'Buy' : 'Sell',
         cancelLabel: 'Cancel',
         maxLength: 10
@@ -958,7 +958,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
                 <button type="button" class="rename-stored" data-index="${i}">Rename</button>
                 <button type="button" class="activate-ship" data-index="${i}">Activate</button>
                 ${currentTab === 'shipyard'
-                  ? `<button type="button" class="sell-ship" data-index="${i}">Sell (${sellPrice}cr)</button>`
+                  ? `<button type="button" class="sell-ship" data-index="${i}">Sell (${sellPrice} BU)</button>`
                   : ''}
               </div>
             </div>`
@@ -1056,7 +1056,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     if (sub === 'goods') {
       bodyHtml = `
         <p style="opacity:0.7;font-size:12px;margin:0 0 10px">Buy and sell use <strong>station storage</strong> — transfer cargo (including Survey Data) to the bay on Storage, then sell here.</p>
-        <div class="credits">Station cargo bay · Credits: ${credits}cr · Ship hold: ${cargoUsed}/${shipClass.stats.cargoCapacity}</div>
+        <div class="credits">Station cargo bay · Barter Units: ${credits} BU · Ship hold: ${cargoUsed}/${shipClass.stats.cargoCapacity}</div>
         <table>
           <thead><tr><th>Good</th><th>Price</th><th>Available</th><th>Stored</th><th></th></tr></thead>
           <tbody>${GOODS.filter((g) => isTradeListGood(g.id))
@@ -1068,12 +1068,12 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
             if (g.id === SURVEY_DATA_GOOD_ID) {
               if (held <= 0) return ''
               return `<tr>
-                <td>${itemNameCell(goodIcon(g.id), g.name)}</td><td>${price}cr</td><td>—</td><td>${held}</td>
+                <td>${itemNameCell(goodIcon(g.id), g.name)}</td><td>${price} BU</td><td>—</td><td>${held}</td>
                 <td><button class="sell" data-good="${g.id}" data-price="${price}" data-held="${held}">Sell</button></td>
               </tr>`
             }
             return `<tr>
-              <td>${itemNameCell(goodIcon(g.id), g.name)}</td><td>${price}cr</td><td>${available}</td><td>${held}</td>
+              <td>${itemNameCell(goodIcon(g.id), g.name)}</td><td>${price} BU</td><td>${available}</td><td>${held}</td>
               <td>
                 <button class="buy" data-good="${g.id}" data-price="${price}" data-available="${available}" ${available < 1 ? 'disabled' : ''}>Buy</button>
                 <button class="sell" data-good="${g.id}" data-price="${price}" data-held="${held}">Sell</button>
@@ -1089,7 +1089,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     } else {
       bodyHtml = `
         <p style="opacity:0.7;font-size:12px;margin:0 0 10px">Buy and sell use <strong>station ore storage</strong> — transfer ore on Storage or Industry. Selling restocks the bay.</p>
-        <div class="credits">Station ore bay · Credits: ${credits}cr · Ship ore: ${miningUsed}/${effectiveMiningCapacity(ship, shipClass)}</div>
+        <div class="credits">Station ore bay · Barter Units: ${credits} BU · Ship ore: ${miningUsed}/${effectiveMiningCapacity(ship, shipClass)}</div>
         <table>
           <thead><tr><th>Salvage</th><th>Price</th><th>Available</th><th>Stored</th><th></th></tr></thead>
           <tbody>${MINED_ORE_GOOD_IDS
@@ -1103,7 +1103,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
             const held = stationOre[goodId] ?? 0
             const available = getMarketAvailable(gameState, currentBody.id, goodId)
             return `<tr>
-              <td>${itemNameCell(goodIcon(goodId), good.name)}</td><td>${price}cr</td><td>${available}</td><td>${held}</td>
+              <td>${itemNameCell(goodIcon(goodId), good.name)}</td><td>${price} BU</td><td>${available}</td><td>${held}</td>
               <td>
                 <button class="buy-ore" data-good="${goodId}" data-price="${price}" data-available="${available}" ${available < 1 ? 'disabled' : ''}>Buy</button>
                 <button class="sell-ore" data-good="${goodId}" data-price="${price}" data-held="${held}">Sell</button>
@@ -1412,7 +1412,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
       <h3>Ship stats</h3>
       <div class="stat" style="font-size:13px;color:var(--ui-accent);margin-bottom:8px">${escapeHtml(statsTitle)}</div>
       <div class="stat">Role: ${escapeHtml(roleLabel)}</div>
-      <div class="stat">Price: ${selectedClass.price}cr</div>
+      <div class="stat">Price: ${selectedClass.price} BU</div>
       <div class="stat">Accessory slots: ${accessorySlotCount(selectedClass)}</div>
       <div class="stat">Hardpoints: ${selectedHps.length}${selectedHps.length ? ` <span style="opacity:0.6">(${turretCount} turret${turretCount === 1 ? '' : 's'}, ${launcherCount} launcher${launcherCount === 1 ? '' : 's'})</span>` : ''}</div>
       ${selectedDroneBays > 0 ? `<div class="stat">Drone bays: ${selectedDroneBays}</div>` : ''}
@@ -1702,7 +1702,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
     const repairSection = canRepairHere
       ? `<div class="repair-row">
           Hull: ${Math.round(ship.hull)}/${shipClass.stats.hull} | Armour: ${Math.round(ship.armor)}/${shipClass.stats.armor}
-          <button class="repair-btn" ${repairCostHere === 0 ? 'disabled' : ''}>${repairCostHere === 0 ? 'Fully Repaired' : `Repair Ship (${repairCostHere}cr)`}</button>
+          <button class="repair-btn" ${repairCostHere === 0 ? 'disabled' : ''}>${repairCostHere === 0 ? 'Fully Repaired' : `Repair Ship (${repairCostHere} BU)`}</button>
         </div>`
       : ''
 
@@ -1736,11 +1736,11 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
               const sellPrice = Math.round(c.price * 0.5)
               return `
               <tr data-class="${c.id}" class="${c.id === selectedShipClassId ? 'selected' : ''}">
-                <td>${itemNameCell(itemIcon('ship', { alien: !!c.alien }), capitalizeLabel(c.name))}</td><td>${escapeHtml(shipRoleLabel(c.role))}</td><td>${accessorySlotCount(c)}</td><td>${c.price}cr</td>
+                <td>${itemNameCell(itemIcon('ship', { alien: !!c.alien }), capitalizeLabel(c.name))}</td><td>${escapeHtml(shipRoleLabel(c.role))}</td><td>${accessorySlotCount(c)}</td><td>${c.price} BU</td>
                 <td>${stored}</td>
                 <td><button class="buy-ship" data-class="${c.id}">Buy</button></td>
                 <td>${stored > 0
-                  ? `<button class="sell-ship-class" data-class="${c.id}" data-price="${sellPrice}">Sell (${sellPrice}cr)</button>`
+                  ? `<button class="sell-ship-class" data-class="${c.id}" data-price="${sellPrice}">Sell (${sellPrice} BU)</button>`
                   : ''}</td>
               </tr>`
             }).join('')}</tbody>
@@ -1762,7 +1762,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
                   return `<tr>
                     <td>${itemNameCell(itemIcon('ship', { alien }), s.instanceName)}</td>
                     <td>${escapeHtml(className)}</td>
-                    <td><button class="sell-ship" data-index="${i}">Sell (${sellPrice}cr)</button></td>
+                    <td><button class="sell-ship" data-index="${i}">Sell (${sellPrice} BU)</button></td>
                   </tr>`
                 }).join('')}</tbody>
               </table>`
@@ -1782,7 +1782,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
             <tr>
               <td>${itemNameCell(itemIcon('weapon', { weaponCategory: w.category }), w.name)}${w.alien ? ' <span style="color:#9bff4a">◆</span>' : ''}</td>
               <td>${w.damage}</td>
-              <td>${w.alien ? '—' : `${w.price}cr`}</td>
+              <td>${w.alien ? '—' : `${w.price} BU`}</td>
               <td>${st}</td>
               <td class="armoury-actions">${canBuy
                 ? `<button type="button" class="buy-weapon" data-weapon="${w.id}" data-price="${w.price}">Buy</button>`
@@ -1843,7 +1843,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
               <tr>
                 <td>${itemNameCell(itemIcon('drone'), d.name)}</td>
                 <td>${d.armor}/${d.hull}</td>
-                <td>${d.price}cr</td>
+                <td>${d.price} BU</td>
                 <td>${st}</td>
                 <td>${onShip}</td>
                 <td class="armoury-actions">${canBuy
@@ -1879,7 +1879,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
                   <div>${itemNameCell(itemIcon('accessory'), a.name)}</div>
                   <div class="acc-desc">${escapeHtml(a.description)}</div>
                 </td>
-                <td>${a.price}cr</td>
+                <td>${a.price} BU</td>
                 <td>${st}</td>
                 <td><button class="buy-accessory" data-accessory="${a.id}" data-price="${a.price}">Buy</button></td>
                 <td>${st > 0
@@ -2334,7 +2334,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
         <tbody>${boardMissions.length
           ? boardMissions.map((m) => `
           <tr>
-            <td>${m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : ''}</td><td>${m.title}</td><td>${m.reward}cr</td>
+            <td>${m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : ''}</td><td>${m.title}</td><td>${m.reward} BU</td>
             <td><button class="accept-mission" data-id="${m.id}">Accept</button></td>
           </tr>`).join('')
           : '<tr><td colspan="4" style="opacity:0.5">No contracts available.</td></tr>'}</tbody>
@@ -2460,7 +2460,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
                 <td>${itemNameCell(itemIcon('blueprint', { blueprintKind: key }), bp.itemName)}</td>
                 <td>${qty}</td>
                 <td style="font-size:10px;opacity:0.85">${formatOreCost(cost)}</td>
-                <td>${fee}cr</td>
+                <td>${fee} BU</td>
                 <td>${formatDuration(dur)}</td>
                 <td><button class="assemble-btn" data-bp="${escapeHtml(id)}" ${canAssemble ? '' : 'disabled'}>Assemble</button></td>
               </tr>`

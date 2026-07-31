@@ -204,7 +204,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
       body.innerHTML = nearby.map(({ mission: m, giver, dist }) => `
         <div class="mission">
           <div class="title">${escapeHtml(m.title)}</div>
-          <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward}cr</div>
+          <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward} BU</div>
           <div class="meta">Posted at ${escapeHtml(giver?.name ?? m.giverStationId)} · ${Math.round(dist)} m</div>
           <div class="mission-actions">
             <button class="accept" data-id="${m.id}">Accept</button>
@@ -253,7 +253,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
       return `
         <div class="mission">
           <div class="title">${escapeHtml(m.title)}${chain}</div>
-          <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward}cr</div>
+          <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward} BU</div>
           <div class="meta">${escapeHtml(describeTarget(m, gameState))}</div>
           ${renderLog(m)}
           <div class="status progress">${progress}</div>

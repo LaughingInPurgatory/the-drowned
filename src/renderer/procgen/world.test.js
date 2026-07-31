@@ -12,6 +12,7 @@ import {
   WORLD_RADIUS,
   TEST_WORLD_OPTS
 } from './world.js'
+import { islandShorelineToward, SHORE_KEEP_OUT } from '../render/islandMesh.js'
 
 function world(opts = TEST_WORLD_OPTS) {
   return generateWorld(1234, opts)
@@ -90,6 +91,22 @@ test('every harbour is attached to an island shore', () => {
         d < host.radius * 1.15 + 400,
         `${port.name} sits ${d.toFixed(0)} from ${host.name} (radius ${host.radius}) — too far offshore`
       )
+    }
+  }
+})
+
+test('ports sit snug to their island shoreline', () => {
+  for (const seed of [1, 42, 99, 8675309]) {
+    const bodies = getWorld(generateWorld(seed, TEST_WORLD_OPTS)).bodies
+    for (const port of bodies.filter((b) => b.kind === 'port')) {
+      const host = bodies.find((b) => b.id === port.parentId)
+      const shore = islandShorelineToward(host, port.position[0], port.position[2]) - SHORE_KEEP_OUT
+      const distance = Math.hypot(
+        port.position[0] - host.position[0],
+        port.position[2] - host.position[2]
+      )
+      const gap = distance - shore
+      assert.ok(gap >= 60 && gap <= 140, `${port.name} sits ${gap.toFixed(0)} m off ${host.name}`)
     }
   }
 })

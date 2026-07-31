@@ -161,7 +161,7 @@ export function startCraft(gameState, bodyId, blueprintId, nowMs = Date.now()) {
     Math.round(creditCostForBlueprint(blueprintId) * industryMult)
   )
   if (gameState.player.credits < creditCost) {
-    throw new Error(`Need ${creditCost}cr for bay fees (have ${gameState.player.credits}cr)`)
+    throw new Error(`Need ${creditCost} BU for bay fees (have ${gameState.player.credits} BU)`)
   }
 
   removeBlueprint(storage.blueprints, blueprintId, 1)

@@ -433,7 +433,7 @@ const _searchLightPos = new THREE.Vector3()
 const _searchLightDir = new THREE.Vector3()
 const _searchLightTarget = new THREE.Vector3()
 
-/** Fair-weather frame — title screen never rolls rain/storm. */
+/** Fair-weather fallback used before the first weather tick. */
 const CLEAR_WEATHER_FRAME = Object.freeze({
   mode: 'clear',
   rain: 0,
@@ -455,15 +455,20 @@ const CLEAR_WEATHER_FRAME = Object.freeze({
  * @param {number} t campaign or menu time
  */
 function tickWeather(dt, t) {
-  // No rain or thunderstorms on the title screen.
+  const aspect =
+    renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
   if (!gameState) {
-    weatherFx.clear()
-    weatherFrame = CLEAR_WEATHER_FRAME
+    if (titleStormActive) {
+      // Occasional visual-only title storm; keep the menu quiet.
+      const titleStormTime = 4750 + (t % 70)
+      weatherFrame = weatherFx.update(dt, titleStormTime, aspect)
+    } else {
+      weatherFx.clear()
+      weatherFrame = CLEAR_WEATHER_FRAME
+    }
     audio.setRainLevel(0)
     return
   }
-  const aspect =
-    renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
   weatherFrame = weatherFx.update(dt, t, aspect)
   audio.setRainLevel(weatherFrame.rain)
   if (weatherFrame.thunder) audio.playThunder(weatherFrame.thunder)
@@ -1923,17 +1928,21 @@ let nextAmbientSpawnAt = 0
 
 /** @type {THREE.Object3D[]} */
 let menuBodyMeshes = []
+let menuLighthouse = null
 let menuAnimT = 0
 let menuActive = false
+let titleStormActive = false
 /** Cached world from CANONICAL_WORLD_SEED (same layout as New Game). */
 let menuWorld = null
 
-// The title view drifts over the water off Haven Reach — the same sea the
+// The title view drifts over a randomly chosen island — the same sea the
 // player is about to sail, at the same scale, rather than a separate showpiece.
 const MENU_ORBIT_RADIUS = 2600
 const MENU_ORBIT_HEIGHT = 190
 const MENU_ORBIT_PERIOD_S = 96
 const MENU_LOOK_AT = new THREE.Vector3(0, 0, 0)
+let menuOrbitRadius = MENU_ORBIT_RADIUS
+let menuOrbitHeight = MENU_ORBIT_HEIGHT
 /** How far from the title camera a body is worth building at all. */
 const MENU_BODY_RANGE = 9000
 
@@ -1948,28 +1957,94 @@ function getMenuWorld() {
 function clearMenuBodies() {
   for (const mesh of menuBodyMeshes) scene.remove(mesh)
   menuBodyMeshes = []
+  if (menuLighthouse) {
+    scene.remove(menuLighthouse)
+    menuLighthouse = null
+  }
+  ocean.setSearchlight(null)
 }
 
-/** Haven Reach and its neighbours, for the title. */
+function buildMenuLighthouse(portMesh, body) {
+  if (!portMesh || !body?.position) return
+  portMesh.updateWorldMatrix(true, true)
+  let window = null
+  portMesh.traverse((child) => {
+    if (!window && child.userData?.lighthouseWindow) window = child
+  })
+  if (!window) return
+  const root = new THREE.Group()
+  window.getWorldPosition(root.position)
+  root.position.y += 0.15
+
+  const lamp = new THREE.Mesh(
+    new THREE.SphereGeometry(1.8, 12, 8),
+    new THREE.MeshBasicMaterial({ color: 0xffe3a4 })
+  )
+  root.add(lamp)
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(18, 0.8, 260, 20, 1, true),
+    new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: { uColor: { value: new THREE.Color(0xffedbd) } },
+      vertexShader: `varying float vBeamEnd; void main() { vBeamEnd = uv.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `uniform vec3 uColor; varying float vBeamEnd; void main() { float fade = 1.0 - smoothstep(0.55, 1.0, vBeamEnd); gl_FragColor = vec4(uColor, fade * 0.13); }`
+    })
+  )
+  beam.rotation.x = Math.PI / 2
+  beam.position.z = 130
+  root.add(beam)
+
+  const spot = new THREE.SpotLight(0xffedbd, 420, 420, 0.13, 0.65, 1.4)
+  spot.position.set(0, 0, 0)
+  spot.castShadow = false
+  spot.target.position.set(0, 0, 260)
+  root.add(spot, spot.target)
+  root.userData.searchlight = { spot, lamp, beam }
+  menuLighthouse = root
+  scene.add(root)
+}
+
+/** Pick one island and show its nearby bodies for the title. */
 function buildMenuSystemVisuals(world) {
   if (!world || !menuActive || gameState) return
   clearMenuBodies()
 
+  const anchor =
+    world.bodies.find((body) => body.kind === 'island' && body.name === 'Haven Reach') ??
+    world.bodies.find((body) => body.kind === 'island') ??
+    world.bodies[0]
+  menuOrbitRadius = MENU_ORBIT_RADIUS
+  menuOrbitHeight = MENU_ORBIT_HEIGHT
+  if (anchor?.position) MENU_LOOK_AT.set(anchor.position[0], 0, anchor.position[2])
+
+  let portMesh = null
+  let portBody = null
   for (const body of world.bodies) {
-    if (Math.hypot(body.position[0], body.position[2]) > MENU_BODY_RANGE) continue
+    if (
+      !anchor?.position ||
+      Math.hypot(body.position[0] - anchor.position[0], body.position[2] - anchor.position[2]) > MENU_BODY_RANGE
+    ) continue
     const mesh = buildBodyMesh(body)
     const floatY = mesh.position.y
     mesh.position.set(body.position[0], floatY, body.position[2])
     if (body.surfaceOffset) orientSettlementOnSurface(mesh, body.surfaceOffset)
     menuBodyMeshes.push(mesh)
     scene.add(mesh)
+    if (body.kind === 'port' && body.name === 'Port Haven') {
+      portMesh = mesh
+      portBody = body
+    }
   }
+  buildMenuLighthouse(portMesh, portBody)
 }
 
 function startMenuBackground() {
   if (menuActive) return
   menuActive = true
   menuAnimT = 0
+  titleStormActive = true
   weatherFx.clear()
   weatherFrame = CLEAR_WEATHER_FRAME
   audio.setRainLevel(0)
@@ -1986,6 +2061,7 @@ function startMenuBackground() {
 
 function stopMenuBackground() {
   menuActive = false
+  titleStormActive = false
   clearMenuBodies()
   audio.stopTitleMusic()
 }
@@ -1994,12 +2070,31 @@ function updateMenuBackground(dt) {
   if (!menuActive) return
   menuAnimT += dt
   for (const mesh of menuBodyMeshes) updateHarbourMesh(mesh, menuAnimT)
+  if (menuLighthouse) {
+    const lampAngle = menuAnimT * 0.72
+    menuLighthouse.rotation.y = lampAngle
+    const sl = menuLighthouse.userData.searchlight
+    sl.spot.updateWorldMatrix(true, false)
+    sl.spot.target.updateWorldMatrix(true, false)
+    sl.spot.getWorldPosition(_searchLightPos)
+    sl.spot.target.getWorldPosition(_searchLightTarget)
+    _searchLightDir.subVectors(_searchLightTarget, _searchLightPos).normalize()
+    ocean.setSearchlight({
+      position: _searchLightPos,
+      direction: _searchLightDir,
+      intensity: 1.15,
+      range: 260,
+      angle: 0.15,
+      penumbra: 0.55,
+      color: 0xffedbd
+    })
+  }
   // Slow circuit of the home archipelago, low over the water.
   const angle = (menuAnimT / MENU_ORBIT_PERIOD_S) * Math.PI * 2
   camera.position.set(
-    Math.cos(angle) * MENU_ORBIT_RADIUS,
-    MENU_ORBIT_HEIGHT,
-    Math.sin(angle) * MENU_ORBIT_RADIUS
+    MENU_LOOK_AT.x + Math.cos(angle) * menuOrbitRadius,
+    menuOrbitHeight,
+    MENU_LOOK_AT.z + Math.sin(angle) * menuOrbitRadius
   )
   camera.lookAt(MENU_LOOK_AT)
   refreshEnvironment(menuAnimT)
@@ -2613,7 +2708,7 @@ function tryDamageAlienBase(hitPos, damage = 40) {
         }
       }
       playShipDeathFx(alienSiteRuntime.position, 40)
-      let baseMsg = `Drowned base destroyed — +${credits} cr (site despawns in 5 min)`
+      let baseMsg = `Drowned base destroyed — +${credits} BU (site despawns in 5 min)`
       if (loot?.blueprints || loot?.skillbooks) baseMsg += ' · rare salvage in wreck!'
       flashToast(baseMsg, 4.5)
     }
@@ -3945,7 +4040,7 @@ setMissionCompletedHandler((info) => {
     ? `${info.giverBodyName}${info.giverSystemName ? ` · ${info.giverSystemName}` : ''}`
     : 'mission board'
   const reward = Math.max(0, Math.floor(Number(info?.reward) || 0))
-  flashToast(`Mission complete: ${title} · +${reward}cr · from ${where}`, 5.5)
+  flashToast(`Mission complete: ${title} · +${reward} BU · from ${where}`, 5.5)
 })
 
 function showCraftToast(text, durationMs = 5500) {

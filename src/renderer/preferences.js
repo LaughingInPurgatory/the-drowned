@@ -1,6 +1,6 @@
 /**
  * User preferences that outlive a session.
- * SFX + music + UI colour are applied in the renderer and mirrored in
+ * SFX + music + sea volume + UI colour are applied in the renderer and mirrored in
  * localStorage for a fast cold-start; Electron settings.json is the long-term
  * source of truth.
  */
@@ -16,6 +16,9 @@ import {
 
 const SFX_LS_KEY = 'witv.sfxEnabled'
 const MUSIC_LS_KEY = 'witv.musicEnabled'
+const SFX_VOLUME_LS_KEY = 'witv.sfxVolume'
+const MUSIC_VOLUME_LS_KEY = 'witv.musicVolume'
+const SEA_VOLUME_LS_KEY = 'witv.seaVolume'
 const UI_HUE_LS_KEY = 'witv.uiHue'
 const UI_BG_HUE_LS_KEY = 'witv.uiBgHue'
 /** Legacy master key — migrated once into sfx + music. */
@@ -40,24 +43,58 @@ function writeLocalBool(key, enabled) {
   }
 }
 
+function clampVolume(value, fallback = 1) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
+}
+
+function readLocalVolume(key) {
+  try {
+    const v = localStorage.getItem(key)
+    if (v == null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? clampVolume(n) : null
+  } catch {
+    return null
+  }
+}
+
+function writeLocalVolume(key, value) {
+  try {
+    localStorage.setItem(key, String(clampVolume(value)))
+  } catch {
+    /* */
+  }
+}
+
 function readLocalChannels() {
-  let sfx = readLocalBool(SFX_LS_KEY)
-  let music = readLocalBool(MUSIC_LS_KEY)
-  if (sfx == null || music == null) {
+  let sfxVolume = readLocalVolume(SFX_VOLUME_LS_KEY)
+  let musicVolume = readLocalVolume(MUSIC_VOLUME_LS_KEY)
+  const seaVolume = readLocalVolume(SEA_VOLUME_LS_KEY)
+  if (sfxVolume == null || musicVolume == null) {
     const legacy = readLocalBool(LEGACY_SOUND_LS_KEY)
     if (legacy != null) {
-      if (sfx == null) sfx = legacy
-      if (music == null) music = legacy
+      if (sfxVolume == null) sfxVolume = legacy ? 1 : 0
+      if (musicVolume == null) musicVolume = legacy ? 1 : 0
     }
   }
-  return { sfx, music }
+  if (sfxVolume == null) {
+    const enabled = readLocalBool(SFX_LS_KEY)
+    if (enabled != null) sfxVolume = enabled ? 1 : 0
+  }
+  if (musicVolume == null) {
+    const enabled = readLocalBool(MUSIC_LS_KEY)
+    if (enabled != null) musicVolume = enabled ? 1 : 0
+  }
+  return { sfxVolume, musicVolume, seaVolume }
 }
 
 /** Apply cached channels immediately (sync) so title music respects last choice. */
 export function applyLocalSoundCache() {
-  const { sfx, music } = readLocalChannels()
-  if (sfx != null) audio.setSfxEnabled(sfx)
-  if (music != null) audio.setMusicEnabled(music)
+  const { sfxVolume, musicVolume, seaVolume } = readLocalChannels()
+  if (sfxVolume != null) audio.setSfxVolume(sfxVolume)
+  if (musicVolume != null) audio.setMusicVolume(musicVolume)
+  if (seaVolume != null) audio.setSeaVolume(seaVolume)
 }
 
 /**
@@ -68,64 +105,154 @@ export async function loadSoundPreference() {
   applyLocalSoundCache()
   try {
     const api = window.electronAPI
+    if (typeof api?.getSfxVolume === 'function') {
+      const [sfxVolume, musicVolume, seaVolume] = await Promise.all([
+        api.getSfxVolume(),
+        api.getMusicVolume?.(),
+        api.getSeaVolume?.()
+      ])
+      if (typeof sfxVolume === 'number' && Number.isFinite(sfxVolume)) {
+        audio.setSfxVolume(sfxVolume)
+        writeLocalVolume(SFX_VOLUME_LS_KEY, sfxVolume)
+        writeLocalBool(SFX_LS_KEY, sfxVolume > 0)
+      }
+      if (typeof musicVolume === 'number' && Number.isFinite(musicVolume)) {
+        audio.setMusicVolume(musicVolume)
+        writeLocalVolume(MUSIC_VOLUME_LS_KEY, musicVolume)
+        writeLocalBool(MUSIC_LS_KEY, musicVolume > 0)
+      }
+      if (typeof seaVolume === 'number' && Number.isFinite(seaVolume)) {
+        audio.setSeaVolume(seaVolume)
+        writeLocalVolume(SEA_VOLUME_LS_KEY, seaVolume)
+      }
+      return {
+        sfx: audio.isSfxEnabled(),
+        music: audio.isMusicEnabled(),
+        sea: audio.getSeaVolume(),
+        sfxVolume: audio.getSfxVolume(),
+        musicVolume: audio.getMusicVolume(),
+        seaVolume: audio.getSeaVolume()
+      }
+    }
     if (typeof api?.getSfxEnabled === 'function') {
       const sfx = await api.getSfxEnabled()
       const music = await api.getMusicEnabled()
       if (typeof sfx === 'boolean') {
-        audio.setSfxEnabled(sfx)
+        audio.setSfxVolume(sfx ? (audio.getSfxVolume() || 1) : 0)
         writeLocalBool(SFX_LS_KEY, sfx)
+        writeLocalVolume(SFX_VOLUME_LS_KEY, audio.getSfxVolume())
       }
       if (typeof music === 'boolean') {
-        audio.setMusicEnabled(music)
+        audio.setMusicVolume(music ? (audio.getMusicVolume() || 1) : 0)
         writeLocalBool(MUSIC_LS_KEY, music)
+        writeLocalVolume(MUSIC_VOLUME_LS_KEY, audio.getMusicVolume())
       }
-      return { sfx: audio.isSfxEnabled(), music: audio.isMusicEnabled() }
+      return {
+        sfx: audio.isSfxEnabled(),
+        music: audio.isMusicEnabled(),
+        sea: audio.getSeaVolume(),
+        sfxVolume: audio.getSfxVolume(),
+        musicVolume: audio.getMusicVolume(),
+        seaVolume: audio.getSeaVolume()
+      }
     }
     // Older main process: single master flag.
     const enabled = await api?.getSoundEnabled?.()
     if (typeof enabled === 'boolean') {
-      audio.setSoundEnabled(enabled)
+      audio.setSfxVolume(enabled ? (audio.getSfxVolume() || 1) : 0)
+      audio.setMusicVolume(enabled ? (audio.getMusicVolume() || 1) : 0)
       writeLocalBool(SFX_LS_KEY, enabled)
       writeLocalBool(MUSIC_LS_KEY, enabled)
-      return { sfx: enabled, music: enabled }
+      writeLocalVolume(SFX_VOLUME_LS_KEY, audio.getSfxVolume())
+      writeLocalVolume(MUSIC_VOLUME_LS_KEY, audio.getMusicVolume())
+      return {
+        sfx: audio.isSfxEnabled(),
+        music: audio.isMusicEnabled(),
+        sea: audio.getSeaVolume(),
+        sfxVolume: audio.getSfxVolume(),
+        musicVolume: audio.getMusicVolume(),
+        seaVolume: audio.getSeaVolume()
+      }
     }
   } catch (err) {
     console.warn('loadSoundPreference failed', err)
   }
-  return { sfx: audio.isSfxEnabled(), music: audio.isMusicEnabled() }
+  return {
+    sfx: audio.isSfxEnabled(),
+    music: audio.isMusicEnabled(),
+    sea: audio.getSeaVolume(),
+    sfxVolume: audio.getSfxVolume(),
+    musicVolume: audio.getMusicVolume(),
+    seaVolume: audio.getSeaVolume()
+  }
+}
+
+async function persistVolume(value, audioSetter, localKey, apiSetter, legacyKey) {
+  const volume = clampVolume(value)
+  audioSetter(volume)
+  writeLocalVolume(localKey, volume)
+  if (legacyKey) writeLocalBool(legacyKey, volume > 0)
+  try {
+    const saved = await apiSetter?.(volume)
+    if (typeof saved === 'number' && Number.isFinite(saved)) {
+      const normalized = clampVolume(saved)
+      audioSetter(normalized)
+      writeLocalVolume(localKey, normalized)
+      if (legacyKey) writeLocalBool(legacyKey, normalized > 0)
+      return normalized
+    }
+  } catch (err) {
+    console.error(`persist ${localKey} failed`, err)
+  }
+  return volume
+}
+
+export function persistSfxVolume(value) {
+  return persistVolume(
+    value,
+    audio.setSfxVolume,
+    SFX_VOLUME_LS_KEY,
+    window.electronAPI?.setSfxVolume,
+    SFX_LS_KEY
+  )
+}
+
+export function persistMusicVolume(value) {
+  return persistVolume(
+    value,
+    audio.setMusicVolume,
+    MUSIC_VOLUME_LS_KEY,
+    window.electronAPI?.setMusicVolume,
+    MUSIC_LS_KEY
+  )
+}
+
+export function persistSeaVolume(value) {
+  return persistVolume(
+    value,
+    audio.setSeaVolume,
+    SEA_VOLUME_LS_KEY,
+    window.electronAPI?.setSeaVolume
+  )
 }
 
 export async function persistSfxEnabled(enabled) {
   const on = enabled !== false
+  if (typeof window.electronAPI?.setSfxVolume === 'function') {
+    return (await persistSfxVolume(on ? (audio.getSfxVolume() || 1) : 0)) > 0
+  }
   audio.setSfxEnabled(on)
   writeLocalBool(SFX_LS_KEY, on)
-  try {
-    const saved = await window.electronAPI?.setSfxEnabled?.(on)
-    if (typeof saved === 'boolean') {
-      audio.setSfxEnabled(saved)
-      writeLocalBool(SFX_LS_KEY, saved)
-      return saved
-    }
-  } catch (err) {
-    console.error('persistSfxEnabled failed', err)
-  }
   return on
 }
 
 export async function persistMusicEnabled(enabled) {
   const on = enabled !== false
+  if (typeof window.electronAPI?.setMusicVolume === 'function') {
+    return (await persistMusicVolume(on ? (audio.getMusicVolume() || 1) : 0)) > 0
+  }
   audio.setMusicEnabled(on)
   writeLocalBool(MUSIC_LS_KEY, on)
-  try {
-    const saved = await window.electronAPI?.setMusicEnabled?.(on)
-    if (typeof saved === 'boolean') {
-      audio.setMusicEnabled(saved)
-      writeLocalBool(MUSIC_LS_KEY, saved)
-      return saved
-    }
-  } catch (err) {
-    console.error('persistMusicEnabled failed', err)
-  }
   return on
 }
 

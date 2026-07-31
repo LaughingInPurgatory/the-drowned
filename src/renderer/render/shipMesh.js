@@ -1464,7 +1464,9 @@ function makeSearchlightBeamMaterial(beamLen) {
       varying vec3 vViewDir;
       void main() {
         // Bright near the lamp, dies out toward the tip.
-        float along = pow(1.0 - vAlong, 1.55);
+        // Smoothly roll the visual volume away before the mesh tip; the real
+        // SpotLight below keeps its existing range and throw unchanged.
+        float along = pow(1.0 - smoothstep(0.0, 1.0, vAlong), 1.15);
         // Soften hard cone walls without killing the beam in chase cam
         // (looking along +Z, walls are edge-on — keep a floor of haze).
         float facing = abs(dot(normalize(vNormal), normalize(vViewDir)));
@@ -1472,7 +1474,7 @@ function makeSearchlightBeamMaterial(beamLen) {
         // Hot core near the source.
         float core = mix(1.4, 0.7, vAlong);
         float a = uOpacity * along * soft * core;
-        if (a < 0.003) discard;
+        if (a < 0.001) discard;
         gl_FragColor = vec4(uColor * (0.55 + 0.45 * along), a);
       }
     `,

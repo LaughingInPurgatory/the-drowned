@@ -16,8 +16,8 @@
 </table>
 
 <p align="center">
-  <strong>A procedurally generated open-world ocean trading and combat game</strong><br/>
-  Electron + Three.js · one seamless sea · arcade boat handling · saves
+  <strong>A procedural open-world sea of trade, salvage and combat</strong><br/>
+  Electron + Three.js · one seamless ocean · arcade boat handling · persistent saves
 </p>
 
 <p align="center">
@@ -26,133 +26,128 @@
 
 ---
 
-The seas rose after the war. What is left is water, a scatter of islands, and whatever people have nailed together on top of them.
+## The world
 
-A desktop ocean sim on **one seamless sea 160 km across** (80 km radius from Haven Reach, ~20 100 km²) — about **330** islands, harbours, outposts and wreck fields on the canonical seed, **100+** vessel classes (including salvage-only Drowned hulls), real-time boat handling and gunnery, harbour workshops, local security and law standing, and saves. No loading screens: the whole world is one coordinate space you can sail across.
+The flood did not arrive as one clean ending. It came in broken coastlines, drowned roads, dead radio towers and ships that never found a port again. Decades later, the old continents are gone beneath one enormous sea. People live on the islands that remain, trade between half-working harbours, and go out every day to pull something useful from the wreckage.
 
-New Game starts you alongside at **Port Haven** on **Haven Reach** — the middle of the sea, the last harbour with a working harbourmaster, always **Security 6**.
+You begin at **Port Haven**, the last dependable harbour in **Haven Reach**, with a patched-up light runner, a clean record and a sea full of reasons to leave. There is work close to home: haul cargo, chart a coast, recover salvage, follow a signal. There are better Barter Unit payouts farther out, where the patrol lights thin, the weather turns, and the deep still holds things that were never meant to be found.
 
-## Features
+Somewhere beyond the safe water, the old military order called **the Drowned** is still moving. Their hulls and weapons are not sold across a counter. They are recovered from Drowned wrecks and sealed sites, studied, and assembled piece by piece in harbour Industry. Every captain eventually decides whether the deep is worth the answer it might contain.
 
-- **One seamless sea** — a fixed canonical seed builds the same **160 km** disk for every player (radius **80 km** from the centre, open water past the rim). Roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields** (~330 places in all). No regions, no jumps, no loading seam. Home is always **Haven Reach** at the middle; remoteness (and difficulty) climb toward the edge.
-- **It's a real sea** — a summed swell drives both the water you can see and the water your hull sits on, from one shared wave field. Boats pitch, roll and heave with it; whitecaps break on steep crests; the sun lays a track across it. No painted foam collars on shores or quays — just open water and the wake.
-- **Boat handling** — rudder, throttle and side thrusters, not a flight stick. The rudder bites harder with way on but still works stopped; A/D crab the hull sideways so you can put it on a quay. Hulls heel into a turn, trim bow-up under power, carry way off the throttle, and slide sideways for about a second before the water stops them. Deck guns free-traverse a full 360°.
-- **Cruise Control (C)** — holds course and way at normal top speed (no boost). **A/D still helm** while under way; **W/S/Q/E cancel** and hand the boat back. Guns, sonar, drones, and other keys stay free. No automatic land avoidance and no waypoint required — if you leave it pointed at a shore, you can run aground. Waypoints are a separate **yellow** cue from the **sea chart**, **Overview**, or **Region Sonar**.
-- **Day and night** — a full cycle every 25 minutes. The sun tracks across, the sky and the sea change colour with it, dawn and dusk burn along the horizon, and the stars (and thin night colour in the upper sky) come out. Harbour lamps and mast lights carry the night.
-- **Weather overhead** — a drifting procedural cloud deck, lit from the sun side, thickening toward the horizon the way real cloud does. Fair skies most of the time; **occasional thunderstorms** load the deck dark, put fine dense rain on the glass, flash lightning through the fog, and answer with deep thunder over the water.
-- **How far out you are is the difficulty curve** — Haven Reach is policed and picked over. The further you sail, the worse the law, the harder the raiders, and the better the salvage still lying on the bottom.
-- **Local security** — every harbour has its own rating **0–6** and patrols the water around it. Between them is open sea, which answers to nobody. **Law standing 0–10** (start 10): attacking honest traffic only costs you where someone is watching. Low standing draws patrols, refused docking, and eventually shoot-on-sight.
-- **100+ vessel classes** — boat-shaped hulls lofted from station lines (transom, **sheer** that lifts the stem and counter, freeboard, rocker, wider working decks), round bilge or hard chine, then fitted out: deck, wheelhouse, **glass bridge panes**, funnel, mast and rigging, railings, fenders, anchor and bollards. Hulls wear **photo PBR plate** (rust streaks, freckled steel, heavy corrosion) tinted by class colour. What sits on the deck is the trade — deck cargo and a crane on a freighter, a gun tub and ammo lockers on a gunboat, davits and a survey winch on an explorer, an A-frame and a dive platform on a salvage boat.
-- **Hulls bump** — ships push each other in the horizontal plane (no soft-collision damage). A slow scrape kills the way into the other hull; a harder hit bounces them apart. Suicide-ram AI is still a deliberate combat act.
-- **Islands with shapes** — six landforms (dome, ridge, mesa, sea stack, atoll with a lagoon, scattered cluster) crossed with surface materials (sand, grass, rock, shingle, concrete, brick, basalt). Coloured by height, slope and tide line, with **photo terrain textures**, talus, and **vegetation** (trees, scrub, grass) on the high ground where the land still holds.
-- **The Drowned** — pre-war military hulls and ordnance that never stood down. Never sold in any boatyard: rare blueprints only, off their wrecks or sealed sites, then built in harbour workshops. On the radio they still sound like a navy; on the water they take what they need. Corsairs may call a truce with you against them.
-- **Salvage diving** — work sunken hulks with your deck guns for **salvage** (not ore); finite yield per hulk, better grades further out, and stripped fields settle again on the campaign clock. In **Security 0–3** there is a **10%** chance per hit of attracting raiders.
-- **Anomalous Signals** — region sonar (**B** / the region chip) deploys four scan probes to lock hidden sites: **Drowned Incursion** (wave defence then destroy the base), **Datacore** relics and takeovers (hack sealed nodules), **Pre-war Datacore** sites, and **Rare Salvage Caches**. Empty water reads **No signatures in this region.** Sites reshuffle on a long campaign clock.
-- **Gunnery** — **LMB** fires every gun mount, **RMB** every launcher — deck guns, autocannon and catapults on one, harpoons, torpedoes and depth charges on the other; armour and hull, and nothing grows back; boats that circle, break off when hit, run when beaten, and occasionally ram.
-- **Bounties** — sinking a hostile pays a random credit bounty, higher in lawless water, plus whatever floats up out of the wreck.
-- **Escorts** — hulls with davits can carry launched RIBs; buy at **Boatyard → Armoury**, launch (**G**), recall (**H**). They engage only once shots are exchanged.
-- **Sonar pulse (P)** — sound islands and wreck fields from the boat for survey data, classification reports, and rare blueprints. Separate from region-wide **Anomalous Signal** locking on **B**.
-- **Contracts** — bounty, charting, signal, survey and haulage work, priced by distance over the water. Half of every board is short work close to home. Objectives auto-complete in the field.
-- **Trading economy** — tag-driven prices and per-harbour stock. Home waters are awash with scrap and short of anything rare; the deep is the other way round. Buy and sell through **harbour storage** (you move it to the boat yourself).
-- **Harbours** — every one is generated: quay on piles, finger jetties, warehouses, fuel tanks, gantry cranes, a harbourmaster's tower, a rubble mole and lamps down the quay. Come alongside into a walkable interior; per-harbour cargo, salvage, parts, laid-up boats, weapons, accessories, blueprints. Every harbour has a boatyard; outposts do repairs only.
-- **Workshop** — rare blueprints from wrecks and soundings (one-shot, not sellable); build boats, weapons and accessories from stored salvage. Jobs run on wall-clock time and keep working while you are away.
-- **Skills & skillbooks** — **0–20** per skill, loot-only books from wrecks.
-- **Wall-clock campaign time** — offline catch-up on load, so wreck fields settle and workshop jobs finish while the game is closed.
-- **Chase camera** — astern and low, riding a smoothed waterline so it does not bob with every crest, and level however hard the boat heels. The seat follows the independent turret so the reticle stays with the guns. Same FOV under helm and Cruise Control.
-- **HUD** — velocity and armour/hull up top; place name is the nearest island, harbour, outpost or wreck field within **1 km**, otherwise **Open Water**. Active waypoint shows as **Waypoint: name** under that box, with a yellow ship-relative direction arrow. Heading-up radar below; contacts / **Overview** to the right; **sea chart (M)** and **Region Sonar (B)** as movable floating panels.
-- **Sea chart (M)** — opens centred on your boat (bright yellow heading mark); drag to pan, scroll to zoom, click a mark for a waypoint. Closing with **M** returns to play without opening pause.
-- **Music & SFX** — title, ambient and death music; synthesised diesel, dock/mooring, rain, deep thunder and most guns; sampled thruster engage and heavy launchers. Separate **Sound Effects** and **Music** toggles in **Settings**.
-- **UI Colour** — retint accent and panel background in **Settings → UI Colour**; applies live and saves.
-- **Windowed app + fullscreen** — default windowed with OS frame (**1600×900**, size/position remembered). **Alt + Enter** toggles fullscreen.
-- **Saves** — manual/quick save; death screen names what sank you.
+## What kind of game is it?
 
-## Getting started
+The Drowned is a small-boat open-world game about making a living on a flooded Earth. Sail by hand, line up the guns, take contracts, trade between harbours, strip wrecks, build a better vessel, and decide how much trouble you are willing to bring home.
 
-```
-npm install
-npm run dev
-```
+- **A whole sea, not a chain of levels.** The canonical world is one seamless **160 km-wide** ocean. It has roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields**, all in one coordinate space with no loading seam. The same seeded world is generated for every New Game.
+- **Boats that feel like boats.** W/S controls throttle, A/D puts the helm over, and Q/E use the bow and stern thrusters to crab sideways onto a berth. The hull carries way when you come off the throttle, heels into a turn and follows the living wave field beneath it.
+- **A sea with a clock.** A full day lasts **25 minutes**. Sunlight, cloud, rain, thunder, fog, running lights and harbour lamps all move with the campaign clock. Wreck fields recover and Industry jobs keep running while you are away.
+- **Distance is the difficulty curve.** Haven Reach is watched. Farther out, security falls away, hostile ships become more dangerous and the salvage gets better. Open water between patrol zones belongs to whoever is strong enough to claim it.
+- **A working captain’s economy.** Buy and sell goods, survey data, mined material and ship parts through harbour Services. Storage is local, so cargo left behind stays where you put it. Outposts are leaner; harbours offer the full Trade, Shipyard, Armoury and Industry spread.
+- **100+ vessel classes.** Buy, salvage or assemble hulls ranging from fast runners and workboats to heavy freighters, gunboats, explorers and salvage craft. Fit weapons, accessories and drone bays to make a ship that suits the way you actually play.
+- **Combat drones.** Ships with drone bays can carry small airborne combat drones. Buy them in the Armoury, install them in the loadout, then launch with **G** and recall with **H**. They are support craft that fight alongside your boat; they are not extra player-controlled ships.
+- **The law remembers.** Local security runs from **0–6** and changes with your position. Your **Notoriety** rises when you attack non-aggressors in watched water. Lose enough standing and police respond faster, high-security harbours refuse a berth, and eventually every patrol sees you as a target.
+- **Salvage with consequences.** Wreck fields hold finite material and recover on the campaign clock. In low-security water, successful salvage hits can attract a pirate ambush. The farther out you go, the more valuable the wrecks become—and the more likely someone else is already watching them.
+- **Signals in the empty water.** Use the boat’s sonar pulse to survey nearby islands and wreck fields. Use **Region Sonar** to deploy scan probes and hunt Anomalous Signals: Drowned incursions, datacores, sealed sites and rare salvage caches.
+- **Contracts that pull you outward.** Take bounty, charting, survey, signal and haulage work from harbour boards. Objectives complete in the field, so a good contract can turn into the beginning of a longer voyage.
+- **A living weather deck.** Procedural islands, cloud cover, rain, storms, sea state, wakes and night lighting make the same route feel different on the second crossing. At night, a searchlight and a few distant lamps may be all you have.
 
-Launches the app with hot module reloading. Editing `src/renderer/main.js` while `npm run dev` is running resets the current game to the main menu — expected.
+Harbours are generated from the same world seed as the islands around them: quays, jetties, warehouses, tanks, cranes, towers, moles and working lights. Come alongside to tie up and open the dockside Services UI; the water remains the centre of the game.
 
-### Building
+## Your first voyage
 
-```
-npm run build     # electron-vite build
-npm run package   # build + electron-builder --dir (unpacked)
-npm run make      # build + electron-builder (macOS arm64 DMG, unsigned)
-```
-
-Artifacts land in `release/` (e.g. `release/mac-arm64/The Drowned.app`). `.blockmap` files are for remote auto-update deltas and can be deleted for local testing.
-
-Prebuilt builds are on the [Releases](https://github.com/LaughingInPurgatory/the-drowned/releases) page:
-
-- **macOS** arm64 DMG (ad-hoc signed)
-- **Linux** AppImage x64 + arm64
-- **Windows** NSIS installer x64 + arm64
-
-Pushing a `v*` tag — or running the **Release** workflow — runs tests and attaches those artifacts (`.github/workflows/release.yml`).
-
-The build is unsigned, so macOS quarantines it on first open: right-click → Open, or `xattr -dr com.apple.quarantine "/Applications/The Drowned.app"`.
-
-### Testing
-
-Tests use Node’s built-in runner, colocated as `*.test.js`:
-
-```
-node --test src/renderer/game/*.test.js src/renderer/procgen/*.test.js src/renderer/data/*.test.js
-node --test src/renderer/game/combat.test.js
-```
+1. Start a New Game at Port Haven and choose **Undock**.
+2. Press **Space** to take the helm. Use **W/S** for throttle, **A/D** to steer and **Q/E** to move sideways.
+3. Use **Tab** to lock a contact under the crosshair. Press **P** to survey a nearby island or wreck field, and **F** to use a locked contact when the HUD says it is in range.
+4. Return to a harbour, come alongside, then press **S** to open Services. Transfer cargo through **Inventory (I)** before buying or selling; harbour storage is local.
+5. Open **M** for the sea chart, **B** for Region Sonar and **J** for your missions. The yellow waypoint is guidance, not autopilot.
 
 ## Controls
 
-You take the helm with **Space**. While you have the helm the pointer is locked for aiming; open a panel or press Space again for a normal cursor. After alt-tab, click the canvas or press Space to take it back. **Settings → Controls** (intro menu or pause) matches these bindings.
+You take the helm with **Space**. While the helm is active, the pointer is locked for turret aiming. Open a panel or press Space again to free the pointer. After alt-tab, click the game canvas or press Space to take control back. **Settings → Controls** in the main menu and pause menu uses this same list.
 
 | Input | Action |
 | --- | --- |
 | **Space** | Take / leave the helm |
-| **Mouse movement** | Lay the gun — traverses and elevates the turret |
-| **Mouse wheel** | Chase-camera zoom (closer / further) |
-| **Mouse wheel** over **Overview** | Scroll the body list (does not zoom the camera) |
+| **Mouse movement** | Aim the turret — traverse and elevate the guns |
+| **Mouse wheel** | Chase-camera zoom |
+| **Mouse wheel over Overview** | Scroll the body list |
 | **Alt + Enter** | Toggle fullscreen |
-| **Left click** | Fire all guns (can hold with RMB) |
-| **Right click** | Fire all launchers (can hold with LMB) |
-| **W / S** | Ahead / astern (coasts down when released; astern capped at 25% of ahead) |
-| **S** | While alongside: open/close **Services** |
-| **A / D** | Helm to port / starboard — bites harder under way, but works stopped |
-| **Q / E** | Thrusters — crab sideways, for coming alongside |
-| **Tab** | Target under crosshair, or cycle nearby contacts |
-| **Shift+Tab** | Clear target lock |
+| **Left click** | Fire gun mounts; can be held with RMB |
+| **Right click** | Fire launchers; can be held with LMB |
+| **W / S** | Ahead / astern; release to coast down |
+| **S (alongside)** | Open / close dockside Services |
+| **A / D** | Helm to port / starboard |
+| **Q / E** | Bow and stern thrusters — crab sideways to port / starboard |
+| **Tab** | Lock the contact under the crosshair, or cycle nearby contacts |
+| **Shift + Tab** | Clear target lock |
+| **Ctrl/Cmd + Tab** | Clear target lock |
 | **Backspace** | Clear target lock |
-| **C** | Cruise Control — holds course; A/D helm; W/S/Q/E cancel (no auto land dodge) |
-| **M** | Sea chart (opens on you; pan / zoom; click a mark for a waypoint) |
-| **B** | Region Sonar Scan — lock Anomalous Signals (or click the region chip) |
-| **F** | Use targeted contact: salvage wreck · come alongside · crack a datacore nodule |
-| **P** | Sonar pulse — sound the water around a nearby island or wreck field |
-| **G** | Launch combat drones (airborne escorts; requires drones in the bays) |
+| **C** | Cruise Control — holds heading and speed; A/D steer; W/S/Q/E cancel |
+| **M** | Open the sea chart; pan, zoom and set a waypoint |
+| **B** | Open Region Sonar; deploy scan probes and investigate signals |
+| **F** | Use the locked contact — salvage, dock or hack when in range |
+| **P** | Sonar pulse — survey a nearby island or wreck field |
+| **G** | Launch installed combat drones; requires drone bays and drones aboard |
 | **H** | Recall combat drones |
-| **L** | Bow searchlight on / off (fixed dead ahead) |
-| **I** | Hold |
-| **J** | Contracts |
+| **L** | Bow searchlight on / off |
+| **I** | Inventory |
+| **J** | Missions journal |
 | **F1** | Character sheet |
-| **Esc** | Pause (Resume to continue; dismisses open panels) |
-| **F5** | Hail locked target (flavour dialogue — corsairs, coast guard, The Drowned, …) |
-| **Free mouse** | Click **Overview** / sea chart / Region Sonar to set waypoints; scroll Overview with the wheel |
+| **Esc** | Pause / resume; back out of open panels |
+| **F5** | Hail the locked target |
+| **Free mouse** | Click Overview, the sea chart or Region Sonar to set waypoints; scroll Overview with the wheel |
 
-There is no roll, no pitch and no vertical thrust — a boat has a rudder, a throttle, and thrusters to shove it sideways onto a berth.
+There is no roll, pitch or vertical thrust input. You are driving a surface vessel: throttle, helm, thrusters, guns and the water under the hull.
 
-Main menu and pause menu both open **Settings**: **Sound Effects**, **Music**, **UI Colour** (accent + panel background), and **Controls**. Preferences are saved for the next launch.
+## Settings and saves
 
-## Tech stack
+The main menu and pause menu both include **Settings** with separate **Sound & Volume**, **UI Colour** and **Controls** panels. Sound & Volume has independent Sound Effects, Music and Sea Sound sliders; each updates live, and moving a volume to 0 mutes that channel. Preferences are saved for the next launch.
 
-- [Electron](https://www.electronjs.org/) (`electron-vite`, `electron-builder`)
-- [Three.js](https://threejs.org/) for 3D
-- Plain DOM for HUD, menus, and harbour UI (in-game dialogs via `gameDialog.js` — no `window.alert`/`prompt`)
-- Node’s built-in test runner (`node:test`)
-- Remaining SFX samples: [Kenney Sci-Fi Sounds](https://kenney.nl/assets/sci-fi-sounds) (CC0); most ship audio is synthesised
-- Hull, terrain and water-detail PBR textures: [ambientCG](https://ambientcg.com/) (CC0)
-- Harbour, interior and nature kit pieces: [Kenney](https://kenney.nl/) (CC0); trees/scrub props from [Quaternius](https://quaternius.com/) (CC0)
+Saves are manual and persistent. They remember your ship, local harbour storage, market stock, crafting jobs, depleted wreck material, campaign time, waypoints and notoriety. NPCs, projectiles and temporary combat wrecks are not saved. The ocean world is a new-game world, so old space-era saves are not compatible.
 
-## License / credit
+## Development
+
+The game is an Electron desktop app with a plain DOM UI and a Three.js renderer. The renderer is split into procedural world generation, pure game logic, Three.js scene builders and small UI modules. The sea’s wave field is shared by simulation and rendering so boats sit on the water they appear to be floating on.
+
+### Run locally
+
+```sh
+npm install
+npm run dev
+```
+
+This starts Electron with hot module reloading. Editing `src/renderer/main.js` during `npm run dev` resets the current session to the main menu; that is expected.
+
+### Build and package
+
+```sh
+npm run build      # electron-vite build
+npm run package    # build + unpacked electron-builder app
+npm run make       # macOS arm64 DMG, unsigned
+npm run make:linux # Linux AppImage, x64 + arm64
+npm run make:win   # Windows NSIS installer, x64 + arm64
+```
+
+Build output goes to `release/`. The app is unsigned, so macOS may require right-clicking the app and choosing **Open** the first time.
+
+### Tests
+
+Tests use Node’s built-in runner and live beside the modules they cover:
+
+```sh
+node --test src/renderer/game/*.test.js src/renderer/procgen/*.test.js src/renderer/data/*.test.js src/renderer/world/*.test.js
+```
+
+There is no `npm test` script. Releases are built by `.github/workflows/release.yml` and publish macOS arm64, Linux x64/arm64 and Windows x64/arm64 artifacts.
+
+## Attributions
+
+- [Electron](https://www.electronjs.org/) and [electron-vite](https://electron-vite.org/)
+- [Three.js](https://threejs.org/)
+- [Kenney Sci-Fi Sounds](https://kenney.nl/assets/sci-fi-sounds) (CC0)
+- [ambientCG](https://ambientcg.com/) PBR textures (CC0)
+- [Kenney](https://kenney.nl/) and [Quaternius](https://quaternius.com/) environment assets (CC0)
+
+## License
 
 © Laughing In Purgatory 2026

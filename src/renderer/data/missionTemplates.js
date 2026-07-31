@@ -191,7 +191,7 @@ export function generateProbeMission(rng, galaxy, giverSystemId, giverStationId)
 }
 
 /**
- * Buy at the origin harbour (own credits), haul it a long way across the sea,
+ * Buy at the origin harbour (own Barter Units), haul it a long way across the sea,
  * and sell where the market pays more than it cost. Turned in at the
  * destination, not the origin. Reward scales with quantity × price margin.
  */

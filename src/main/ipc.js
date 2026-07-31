@@ -5,8 +5,14 @@ import {
   setSoundEnabled,
   getSfxEnabled,
   setSfxEnabled,
+  getSfxVolume,
+  setSfxVolume,
   getMusicEnabled,
   setMusicEnabled,
+  getMusicVolume,
+  setMusicVolume,
+  getSeaVolume,
+  setSeaVolume,
   getUiHue,
   setUiHue,
   getUiBgHue,
@@ -41,8 +47,14 @@ export function registerSaveHandlers() {
   // Separate channels — persisted in userData/settings.json.
   ipcMain.handle('get-sfx-enabled', () => getSfxEnabled())
   ipcMain.handle('set-sfx-enabled', (_event, enabled) => setSfxEnabled(enabled))
+  ipcMain.handle('get-sfx-volume', () => getSfxVolume())
+  ipcMain.handle('set-sfx-volume', (_event, volume) => setSfxVolume(volume))
   ipcMain.handle('get-music-enabled', () => getMusicEnabled())
   ipcMain.handle('set-music-enabled', (_event, enabled) => setMusicEnabled(enabled))
+  ipcMain.handle('get-music-volume', () => getMusicVolume())
+  ipcMain.handle('set-music-volume', (_event, volume) => setMusicVolume(volume))
+  ipcMain.handle('get-sea-volume', () => getSeaVolume())
+  ipcMain.handle('set-sea-volume', (_event, volume) => setSeaVolume(volume))
   ipcMain.handle('get-ui-hue', () => getUiHue())
   ipcMain.handle('set-ui-hue', (_event, hue) => setUiHue(hue))
   ipcMain.handle('get-ui-bg-hue', () => getUiBgHue())

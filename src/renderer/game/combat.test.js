@@ -305,7 +305,7 @@ test('destroying an NPC with a player projectile leaves a lootable wreck at the 
   // No galaxy/system in fixture → security 0; still pays a random bounty.
   assert.ok(gameState.player.credits >= 100, 'player kill should award bounty credits')
   const toasts = flushPendingToasts(gameState)
-  assert.ok(toasts.some((t) => /Bounty \+\d+ cr/.test(t)), 'bounty toast should be queued')
+  assert.ok(toasts.some((t) => /Bounty \+\d+ BU/.test(t)), 'bounty toast should be queued')
 })
 
 test('rollShipBounty pays more in lower security systems', () => {
@@ -323,7 +323,7 @@ test('applyShipBounty adds credits and queues a toast', () => {
   const paid = applyShipBounty(gs, { shipClassId: 'light_runner' }, 3, () => 0.5)
   assert.ok(paid >= 100)
   assert.equal(gs.player.credits, 500 + paid)
-  assert.deepEqual(flushPendingToasts(gs), [`Bounty +${paid} cr`])
+  assert.deepEqual(flushPendingToasts(gs), [`Bounty +${paid} BU`])
 })
 
 test('NPC AI: a pirate close to the player transitions from patrol to attack', () => {

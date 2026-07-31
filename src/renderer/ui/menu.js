@@ -2,8 +2,10 @@ import { STARTER_SHIP_CLASS_ID, getShipClass } from '../data/shipClasses.js'
 import {
   SETTINGS_VIEW_CSS,
   settingsViewHTML,
+  soundVolumeViewHTML,
   uiColourViewHTML,
   bindSettingsView,
+  bindSoundVolumeView,
   bindUiColourView
 } from './settingsView.js'
 import { controlsListHTML } from './controlsList.js'
@@ -545,6 +547,7 @@ const STYLE = `
 #main-menu.reveal .panel > button:nth-of-type(5) { animation-delay: 0.32s; }
 /* Settings panel (same shell as Create Captain). */
 #main-menu .settings-view,
+#main-menu .sound-volume-view,
 #main-menu .controls-view,
 #main-menu .ui-colour-view {
   width: min(360px, 92vw);
@@ -555,12 +558,14 @@ const STYLE = `
 }
 #main-menu .controls-view { width: min(460px, 92vw); max-height: min(80vh, 640px); overflow: hidden; }
 #main-menu .settings-view h2,
+#main-menu .sound-volume-view h2,
 #main-menu .controls-view h2,
 #main-menu .ui-colour-view h2 {
   margin: 0 0 14px 0; text-align: center; font-weight: normal; letter-spacing: 4px;
   text-transform: uppercase; color: var(--ui-accent); text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.7);
 }
 #main-menu .settings-view button,
+#main-menu .sound-volume-view button,
 #main-menu .controls-view button,
 #main-menu .ui-colour-view button {
   background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.1); border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.4); color: var(--ui-text);
@@ -569,6 +574,7 @@ const STYLE = `
   transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 #main-menu .settings-view button:hover:not(:disabled),
+#main-menu .sound-volume-view button:hover:not(:disabled),
 #main-menu .controls-view button:hover:not(:disabled),
 #main-menu .ui-colour-view button:hover:not(:disabled) {
   background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.22); box-shadow: 0 2px 6px rgba(0,0,0,0.65);
@@ -761,6 +767,9 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
     <div class="panel settings-view" style="display:none">
       ${settingsViewHTML()}
     </div>
+    <div class="panel sound-volume-view" style="display:none">
+      ${soundVolumeViewHTML()}
+    </div>
     <div class="panel ui-colour-view" style="display:none">
       ${uiColourViewHTML()}
     </div>
@@ -778,6 +787,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
   const titlePunEl = root.querySelector('.title-pun')
   const newGameView = root.querySelector('.new-game-view')
   const settingsView = root.querySelector('.settings-view')
+  const soundVolumeView = root.querySelector('.sound-volume-view')
   const uiColourView = root.querySelector('.ui-colour-view')
   const controlsView = root.querySelector('.controls-view')
   const loadBtn = root.querySelector('.load-game')
@@ -826,6 +836,7 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
 
   function hideSubpanels() {
     settingsView.style.display = 'none'
+    if (soundVolumeView) soundVolumeView.style.display = 'none'
     if (controlsView) controlsView.style.display = 'none'
     if (uiColourView) uiColourView.style.display = 'none'
   }
@@ -843,6 +854,17 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
     hideSubpanels()
     settingsView.style.display = 'flex'
     settingsApi.refresh()
+    replayEntrance()
+  }
+
+  function showSoundVolume() {
+    mainView.style.display = 'none'
+    newGameView.style.display = 'none'
+    hideSubpanels()
+    if (soundVolumeView) {
+      soundVolumeView.style.display = 'flex'
+      soundVolumeApi.refresh()
+    }
     replayEntrance()
   }
 
@@ -917,8 +939,12 @@ export function createMenu(container, { onNewGame, onLoadGame }) {
 
   const settingsApi = bindSettingsView(settingsView, {
     onBack: showMain,
+    onShowSoundVolume: showSoundVolume,
     onShowControls: showControls,
     onShowUiColour: showUiColour
+  })
+  const soundVolumeApi = bindSoundVolumeView(soundVolumeView, {
+    onBack: showSettings
   })
   const uiColourApi = bindUiColourView(uiColourView, {
     onBack: showSettings

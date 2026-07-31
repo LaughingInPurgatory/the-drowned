@@ -34,11 +34,11 @@ test('an outpost is a smaller obstruction than a harbour', () => {
 test('an island is solid out to its coastline, not its whole disc', () => {
   // The disc is the volume the shape was generated in; the land inside it can
   // be a fraction of that. Blocking the disc would hold a boat hundreds of
-  // metres off a rock it can plainly see. Collision reach includes a short
-  // keep-out past the traced waterline (keel / beach), so it may exceed radius.
+  // metres off a rock it can plainly see. The shaped coastline can extend
+  // beyond the nominal disc radius on a headland.
   const island = { id: 'i-shore', kind: 'island', position: [0, 0, 0], radius: 900 }
   const reach = islandMaxShoreline(island)
-  assert.ok(reach > 0 && reach <= 900 + 20, `coastline ${reach} should sit near the disc`)
+  assert.ok(reach > 0 && reach <= island.radius * 1.2, `coastline ${reach} should stay within the shaped island`)
   assert.equal(collisionRadiusFor(island), reach)
   assert.equal(exteriorRadiusFor(island), reach)
   assert.equal(npcExclusionRadiusFor(island), reach)

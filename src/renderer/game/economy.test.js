@@ -287,7 +287,7 @@ test('repairShip restores hull/armor to max and deducts credits; throws if alrea
 
   gameState.player.ship.hull -= 50
   gameState.player.credits = 0
-  assert.throws(() => repairShip(gameState), /Not enough credits/)
+  assert.throws(() => repairShip(gameState), /Not enough Barter Units/)
 })
 
 test('sellMinedOre pays out from station ore storage, not the ship mining hold', () => {

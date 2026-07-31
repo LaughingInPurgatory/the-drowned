@@ -156,6 +156,25 @@ test('every island mesh can carry vegetation and ruins — not only the home roc
   assert.ok(vegOnly + ruinsOnly >= 1, 'expected mixed cover (trees without ruins or ruins without trees)')
 })
 
+test('Haven Reach keeps a small ruin cluster', () => {
+  const haven = getWorld(generateWorld(8675309)).bodies.find((b) => b.name === 'Haven Reach')
+  const ruins = buildIslandMesh(haven).getObjectByName('ruins')
+  assert.ok(ruins.children.length > 0, 'Haven Reach should have visible ruined buildings')
+  assert.ok(
+    ruins.children.some((piece) => Math.hypot(piece.position.x, piece.position.z) > haven.radius * 0.65),
+    'Haven Reach should have ruins nearer the coastline'
+  )
+})
+
+test('Haven Reach has a broken coastline rather than a round disc', () => {
+  const haven = getWorld(generateWorld(8675309)).bodies.find((b) => b.name === 'Haven Reach')
+  const shore = [...getIslandProfile(haven).shore]
+  const min = Math.min(...shore)
+  const max = Math.max(...shore)
+  assert.ok(min < max * 0.8, `Haven shoreline is too uniform: ${min.toFixed(0)}–${max.toFixed(0)} m`)
+  assert.ok(max - min > haven.radius * 0.25, 'Haven should have a visible bay/headland silhouette')
+})
+
 test('island props are stable across rebuilds', () => {
   const body = islands(1)[0]
   getIslandProfile(body) // collision / shore can warm the profile first

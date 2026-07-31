@@ -61,7 +61,7 @@ export function applyShipBounty(gameState, target, securityRating, rng = Math.ra
   const credits = rollShipBounty(shipClassId, securityRating, rng)
   gameState.player.credits = (gameState.player.credits ?? 0) + credits
   gameState._pendingToasts = gameState._pendingToasts ?? []
-  gameState._pendingToasts.push(`Bounty +${credits} cr`)
+  gameState._pendingToasts.push(`Bounty +${credits} BU`)
   return credits
 }
 

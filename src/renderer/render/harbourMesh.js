@@ -6,7 +6,8 @@ import {
   STATION_NORMAL_STRENGTH,
   retileUVsTriplanar,
   applySoftTriplanar,
-  cloneStationMaps
+  cloneStationMaps,
+  getAlgaeAlbedoMap
 } from './textures.js'
 import { remoteness } from '../procgen/world.js'
 import { SEA_MAX_AMPLITUDE } from '../world/sea.js'
@@ -175,13 +176,33 @@ function materials(rng, weathered) {
     rubble: texturedMat(
       'rubble',
       {
-        color: new THREE.Color(0x7d7469).lerp(rust, weathered * 0.3),
+        // Harbour stone stays dark and porous even in clean home waters; the
+        // waterline and algae do the rest of the weathering below.
+        color: new THREE.Color(0x625d55).lerp(rust, weathered * 0.24),
         roughness: 1,
         metalness: 0.04,
-        normalScale: new THREE.Vector2(1.55, 1.55)
+        normalScale: new THREE.Vector2(1.85, 1.85)
       },
       { scale: 0.12, sharpness: 2.8 }
     ),
+    rubbleWet: texturedMat(
+      'rubble',
+      {
+        color: new THREE.Color(0x39453e).lerp(rust, weathered * 0.16),
+        roughness: 1,
+        metalness: 0.02,
+        normalScale: new THREE.Vector2(2.05, 2.05)
+      },
+      { scale: 0.14, sharpness: 2.6 }
+    ),
+    seaweed: new THREE.MeshStandardMaterial({
+      map: getAlgaeAlbedoMap() ?? null,
+      color: 0x3f5b32,
+      roughness: 1,
+      metalness: 0,
+      alphaTest: 0.02,
+      side: THREE.DoubleSide
+    }),
     accent: texturedMat(
       'accent',
       {
@@ -408,6 +429,7 @@ function addCrane(group, mats, rng, { x, z, h, reach }) {
 /** Octagonal harbour-control tower, visible from sea without reading as a monolith. */
 function addHarbourTower(group, mats, { x, z, h, radius }) {
   const tower = new THREE.Group()
+  tower.userData.lighthouse = true
   tower.position.set(x, DECK_HEIGHT, z)
   const shaft = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.72, radius, h, 8), mats.wall)
   shaft.position.y = h / 2
@@ -419,6 +441,7 @@ function addHarbourTower(group, mats, { x, z, h, radius }) {
   tower.add(balcony)
   const cab = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.04, radius * 1.04, h * 0.2, 8), mats.glass)
   cab.position.y = h * 0.96
+  cab.userData.lighthouseWindow = true
   tower.add(cab)
   const roof = new THREE.Mesh(new THREE.ConeGeometry(radius * 1.28, h * 0.16, 8), mats.plate)
   roof.position.y = h * 1.14
@@ -442,6 +465,8 @@ function addBreakwater(group, mats, rng, radius) {
   const arc = range(rng, 1.4, 2.4)
   const start = rng() * Math.PI * 2
   const segs = Math.max(18, Math.round(arc * 22))
+  const seaweedMatrices = []
+  const seaweedDummy = new THREE.Object3D()
   // One subdivision plus a per-vertex wobble. A bare icosahedron has twenty
   // identical faces and reads as a cut gem; this gives the lumpy, weathered
   // silhouette of tipped stone for a handful more triangles. Built once and
@@ -467,7 +492,6 @@ function addBreakwater(group, mats, rng, radius) {
     // Two staggered rows so it reads as a tipped bank with width, not a line.
     for (const lane of [-1, 1]) {
       if (lane > 0 && rng() < 0.35) continue
-      const block = new THREE.Mesh(geo, mats.rubble)
       const r = radius * range(rng, 0.97, 1.03) + lane * radius * 0.035
       let s = range(rng, radius * 0.035, radius * 0.07)
       let sy = s * range(rng, 0.5, 0.95)
@@ -476,6 +500,8 @@ function addBreakwater(group, mats, rng, radius) {
       // with daylight under them — a mole is tipped rock resting on the bottom,
       // so every block has to run well below the surface whatever its size.
       const crest = range(rng, -1.2, 1.6) + SEA_MAX_AMPLITUDE * 0.5
+      const wetRock = crest < 0.8 || rng() < 0.28
+      const block = new THREE.Mesh(geo, wetRock ? mats.rubbleWet : mats.rubble)
       // Guarantee the bottom clears the deepest trough. Positioning by the
       // underside is not enough on its own — a small block with a high crest
       // still ends up hanging in the air.
@@ -499,7 +525,52 @@ function addBreakwater(group, mats, rng, radius) {
       block.castShadow = true
       block.receiveShadow = true
       group.add(block)
+
+      // Seaweed takes hold on the sheltered, damp sides of the mole. Keep it
+      // as one instanced draw after placement so a little coastal life does
+      // not turn every harbour into dozens of extra render calls.
+      if (rng() < 0.72) {
+        const outward = new THREE.Vector3(block.position.x, 0, block.position.z)
+        if (outward.lengthSq() < 1e-4) outward.set(Math.cos(a), 0, Math.sin(a))
+        else outward.normalize()
+        const tangent = new THREE.Vector3(-outward.z, 0, outward.x)
+        const blades = 1 + (rng() < 0.48 ? 1 : 0) + (rng() < 0.16 ? 1 : 0)
+        for (let w = 0; w < blades; w++) {
+          const h = range(rng, 1.1, 3.8)
+          const sideOffset = range(rng, -s * 0.62, s * 0.62)
+          const outOffset = range(rng, s * 0.62, s * 1.05)
+          const baseY = range(rng, -1.65, 0.65)
+          seaweedDummy.position.set(
+            block.position.x + outward.x * outOffset + tangent.x * sideOffset,
+            baseY + h * 0.5,
+            block.position.z + outward.z * outOffset + tangent.z * sideOffset
+          )
+          seaweedDummy.rotation.set(
+            range(rng, -0.24, 0.24),
+            rng() * Math.PI * 2,
+            range(rng, -0.28, 0.28)
+          )
+          const width = range(rng, 0.7, 1.25)
+          seaweedDummy.scale.set(width, h, width)
+          seaweedDummy.updateMatrix()
+          seaweedMatrices.push(seaweedDummy.matrix.clone())
+        }
+      }
     }
+  }
+  if (seaweedMatrices.length) {
+    const weed = new THREE.InstancedMesh(
+      new THREE.ConeGeometry(0.16, 1, 5),
+      mats.seaweed,
+      seaweedMatrices.length
+    )
+    weed.name = 'tidal-seaweed'
+    weed.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+    for (let i = 0; i < seaweedMatrices.length; i++) weed.setMatrixAt(i, seaweedMatrices[i])
+    weed.instanceMatrix.needsUpdate = true
+    weed.castShadow = true
+    weed.receiveShadow = true
+    group.add(weed)
   }
   // Light on the head of the mole — pole planted through the waterline.
   const headA = start + arc

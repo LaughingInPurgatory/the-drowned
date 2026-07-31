@@ -1,13 +1,14 @@
 /**
  * Shared Settings panel for main menu and pause menu.
- * Separate SFX and music toggles; window size is remembered by the main process.
+ * Separate SFX, music, and sea volume controls; window size is remembered by the main process.
  * UI Colour opens a sub-panel to retint chrome away from the default blue.
  */
 import * as audio from '../audio.js'
 import {
   loadSoundPreference,
-  persistSfxEnabled,
-  persistMusicEnabled,
+  persistSfxVolume,
+  persistMusicVolume,
+  persistSeaVolume,
   loadUiThemePreference,
   persistUiHue,
   persistUiBgHue
@@ -87,43 +88,54 @@ button.ui-btn-danger.active {
     0 6px 16px rgba(0,0,0,0.5),
     inset 0 1px 0 rgba(255,255,255,0.15) !important;
 }
-/* Settings layout: full-width Back; Off shares the row 50/50. */
+/* Settings layout: full-width Back button. */
 .settings-view button.settings-back.ui-btn-gold,
+.sound-volume-view button.sound-volume-back.ui-btn-gold,
 .controls-view button.controls-back.ui-btn-gold,
 .ui-colour-view button.ui-colour-back.ui-btn-gold {
   display: block;
   width: 100%;
   margin-top: 10px;
 }
-.settings-view .settings-btns button.ui-btn-danger {
-  flex: 1;
-  padding: 11px 12px;
-  font-size: 12px;
-}
 `
 
 /** Shared styles — scope with a parent id (#pause-menu / #main-menu). */
 export const SETTINGS_VIEW_CSS = `
 ${UI_ACTION_BTN_CSS}
-.settings-view .settings-section {
+.settings-view .settings-section,
+.sound-volume-view .settings-section {
   display: flex; flex-direction: column; gap: 6px; margin: 4px 0 8px;
   padding: 10px 0 4px; border-top: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.2);
 }
-.settings-view .settings-section:first-of-type { border-top: none; padding-top: 0; }
-.settings-view .settings-label {
+.settings-view .settings-section:first-of-type,
+.sound-volume-view .settings-section:first-of-type { border-top: none; padding-top: 0; }
+.settings-view .settings-label,
+.sound-volume-view .settings-label {
   font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--ui-accent); opacity: 0.8;
   text-align: center;
 }
-.settings-view .settings-btns { display: flex; gap: 6px; }
-.settings-view .settings-btns button {
-  flex: 1; padding: 8px 6px; font-size: 11px; letter-spacing: 0.5px;
-}
-.settings-view .settings-btns button.active:not(.ui-btn-danger) {
-  background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.28); border-color: var(--ui-accent-mid);
-  box-shadow: 0 2px 6px rgba(0,0,0,0.65); color: var(--ui-bright);
-}
-.settings-view .settings-note {
+.settings-view .settings-note,
+.sound-volume-view .settings-note {
   font-size: 10px; opacity: 0.55; text-align: center; line-height: 1.35; margin: 0;
+}
+.settings-view .settings-volume-row,
+.sound-volume-view .settings-volume-row {
+  display: flex; align-items: center; gap: 8px;
+}
+.settings-view .settings-volume-row input[type="range"],
+.sound-volume-view .settings-volume-row input[type="range"] {
+  flex: 1; width: 100%; accent-color: var(--ui-accent); cursor: pointer;
+}
+.settings-view .settings-volume-end,
+.sound-volume-view .settings-volume-end {
+  width: 24px; font-size: 9px; opacity: 0.55; text-align: center;
+}
+.settings-view .settings-volume-value,
+.sound-volume-view .settings-volume-value {
+  float: right; margin-left: 8px; color: var(--ui-bright); opacity: 0.9;
+}
+.sound-volume-view .sound-volume-reset {
+  width: 100%; margin-top: 4px;
 }
 .ui-colour-view .ui-colour-preview {
   display: flex; flex-direction: column; gap: 8px; align-items: stretch;
@@ -167,10 +179,21 @@ ${UI_ACTION_BTN_CSS}
   border: 1px solid rgba(255,255,255,0.35); cursor: pointer;
   box-shadow: 0 0 8px rgba(0,0,0,0.4);
 }
+.ui-colour-view .ui-colour-presets button.ui-colour-preset {
+  background: var(--preset-colour) !important;
+}
+.ui-colour-view .ui-bg-presets button.ui-bg-preset {
+  background: var(--preset-colour) !important;
+}
 .ui-colour-view .ui-colour-presets button:hover,
 .ui-colour-view .ui-bg-presets button:hover {
   transform: scale(1.08);
   box-shadow: 0 2px 6px rgba(0,0,0,0.65);
+  filter: brightness(1.16);
+}
+.ui-colour-view .ui-colour-presets button.ui-colour-preset:hover,
+.ui-colour-view .ui-bg-presets button.ui-bg-preset:hover {
+  background: var(--preset-colour) !important;
 }
 .ui-colour-view .ui-colour-reset,
 .ui-colour-view .ui-bg-reset {
@@ -204,20 +227,8 @@ export function settingsViewHTML() {
   return `
     <h2>Settings</h2>
     <div class="settings-section">
-      <div class="settings-label">Sound Effects</div>
-      <div class="settings-btns">
-        <button type="button" class="sfx-on">On</button>
-        <button type="button" class="sfx-off ui-btn-danger">Off</button>
-      </div>
-      <p class="settings-note">Weapons, thrusters, docks, and voice callouts.</p>
-    </div>
-    <div class="settings-section">
-      <div class="settings-label">Music</div>
-      <div class="settings-btns">
-        <button type="button" class="music-on">On</button>
-        <button type="button" class="music-off ui-btn-danger">Off</button>
-      </div>
-      <p class="settings-note">Title, ambient, and death tracks. Saved as defaults.</p>
+      <button type="button" class="settings-sound-volume">Sound &amp; Volume</button>
+      <p class="settings-note">Sound effects, music, and sea ambience.</p>
     </div>
     <div class="settings-section">
       <button type="button" class="settings-ui-colour">UI Colour</button>
@@ -228,6 +239,41 @@ export function settingsViewHTML() {
       <p class="settings-note">Keyboard and mouse bindings.</p>
     </div>
     <button type="button" class="settings-back ui-btn-gold">Back</button>
+  `
+}
+
+export function soundVolumeViewHTML() {
+  return `
+    <h2>Sound &amp; Volume</h2>
+    <div class="settings-section">
+      <div class="settings-label">Sound Effects <span class="settings-volume-value sfx-volume-value">100%</span></div>
+      <div class="settings-volume-row">
+        <span class="settings-volume-end">0</span>
+        <input type="range" class="settings-volume sfx-volume" min="0" max="100" step="1" value="100" aria-label="Sound effects volume" />
+        <span class="settings-volume-end">100</span>
+      </div>
+      <p class="settings-note">Weapons, thrusters, docks, and voice callouts.</p>
+    </div>
+    <div class="settings-section">
+      <div class="settings-label">Music <span class="settings-volume-value music-volume-value">100%</span></div>
+      <div class="settings-volume-row">
+        <span class="settings-volume-end">0</span>
+        <input type="range" class="settings-volume music-volume" min="0" max="100" step="1" value="100" aria-label="Music volume" />
+        <span class="settings-volume-end">100</span>
+      </div>
+      <p class="settings-note">Title, ambient, and death tracks.</p>
+    </div>
+    <div class="settings-section">
+      <div class="settings-label">Sea Sound <span class="settings-volume-value sea-volume-value">100%</span></div>
+      <div class="settings-volume-row">
+        <span class="settings-volume-end">0</span>
+        <input type="range" class="settings-volume sea-volume" min="0" max="100" step="1" value="100" aria-label="Sea sound volume" />
+        <span class="settings-volume-end">100</span>
+      </div>
+      <p class="settings-note">Water wash, waves, and lapping around the hull.</p>
+    </div>
+    <button type="button" class="sound-volume-reset">Reset audio defaults</button>
+    <button type="button" class="sound-volume-back ui-btn-gold">Back</button>
   `
 }
 
@@ -261,11 +307,11 @@ const UI_BG_PRESETS = [
 export function uiColourViewHTML() {
   const presets = UI_COLOUR_PRESETS.map(
     (p) =>
-      `<button type="button" class="ui-colour-preset" data-hue="${p.hue}" title="${p.title}" style="background:hsl(${p.hue},90%,62%)"></button>`
+      `<button type="button" class="ui-colour-preset" data-hue="${p.hue}" title="${p.title}" style="--preset-colour:hsl(${p.hue},90%,62%)"></button>`
   ).join('')
   const bgPresets = UI_BG_PRESETS.map(
     (p) =>
-      `<button type="button" class="ui-bg-preset" data-hue="${p.hue}" title="${p.title}" style="background:hsl(${p.hue},40%,14%)"></button>`
+      `<button type="button" class="ui-bg-preset" data-hue="${p.hue}" title="${p.title}" style="--preset-colour:hsl(${p.hue},40%,14%)"></button>`
   ).join('')
   return `
     <h2>UI Colour</h2>
@@ -290,7 +336,7 @@ export function uiColourViewHTML() {
     </div>
     <div class="ui-colour-block">
       <div class="ui-colour-block-title">Panel background</div>
-      <p class="settings-note">menu and HUD panel fills only — not space or interiors.</p>
+      <p class="settings-note">Menu and HUD panel fills only.</p>
       <div class="ui-bg-preview" aria-hidden="true"></div>
       <div class="ui-colour-field">
         <label>Hue <span class="ui-bg-hue-value">220</span>°
@@ -305,50 +351,21 @@ export function uiColourViewHTML() {
 }
 
 /**
- * Wire SFX + music + colour entry inside a settings view root.
+ * Wire the top-level Settings panel.
  * @param {HTMLElement} rootEl
- * @param {{ onBack: () => void, onShowControls?: () => void, onShowUiColour?: () => void }} opts
+ * @param {{ onBack: () => void, onShowSoundVolume?: () => void, onShowControls?: () => void, onShowUiColour?: () => void }} opts
  * @returns {{ refresh: () => Promise<void> }}
  */
-export function bindSettingsView(rootEl, { onBack, onShowControls, onShowUiColour } = {}) {
-  const btnSfxOn = rootEl.querySelector('.sfx-on')
-  const btnSfxOff = rootEl.querySelector('.sfx-off')
-  const btnMusicOn = rootEl.querySelector('.music-on')
-  const btnMusicOff = rootEl.querySelector('.music-off')
+export function bindSettingsView(rootEl, { onBack, onShowSoundVolume, onShowControls, onShowUiColour } = {}) {
+  const btnSoundVolume = rootEl.querySelector('.settings-sound-volume')
   const btnControls = rootEl.querySelector('.settings-controls')
   const btnUiColour = rootEl.querySelector('.settings-ui-colour')
 
-  function refreshButtons() {
-    const sfx = audio.isSfxEnabled()
-    const music = audio.isMusicEnabled()
-    btnSfxOn.classList.toggle('active', sfx)
-    btnSfxOff.classList.toggle('active', !sfx)
-    btnMusicOn.classList.toggle('active', music)
-    btnMusicOff.classList.toggle('active', !music)
-  }
-
   async function refresh() {
-    await loadSoundPreference()
     await loadUiThemePreference()
-    refreshButtons()
   }
 
-  btnSfxOn.addEventListener('click', async () => {
-    await persistSfxEnabled(true)
-    refreshButtons()
-  })
-  btnSfxOff.addEventListener('click', async () => {
-    await persistSfxEnabled(false)
-    refreshButtons()
-  })
-  btnMusicOn.addEventListener('click', async () => {
-    await persistMusicEnabled(true)
-    refreshButtons()
-  })
-  btnMusicOff.addEventListener('click', async () => {
-    await persistMusicEnabled(false)
-    refreshButtons()
-  })
+  btnSoundVolume?.addEventListener('click', () => onShowSoundVolume?.())
   btnControls?.addEventListener('click', () => {
     if (onShowControls) onShowControls()
   })
@@ -356,6 +373,83 @@ export function bindSettingsView(rootEl, { onBack, onShowControls, onShowUiColou
     if (onShowUiColour) onShowUiColour()
   })
   rootEl.querySelector('.settings-back').addEventListener('click', () => onBack())
+
+  return { refresh }
+}
+
+/**
+ * Wire the separate Sound & Volume sub-panel.
+ * @param {HTMLElement} rootEl
+ * @param {{ onBack: () => void }} opts
+ * @returns {{ refresh: () => Promise<void> }}
+ */
+export function bindSoundVolumeView(rootEl, { onBack } = {}) {
+  const sfxSlider = rootEl.querySelector('.sfx-volume')
+  const sfxValue = rootEl.querySelector('.sfx-volume-value')
+  const musicSlider = rootEl.querySelector('.music-volume')
+  const musicValue = rootEl.querySelector('.music-volume-value')
+  const seaSlider = rootEl.querySelector('.sea-volume')
+  const seaValue = rootEl.querySelector('.sea-volume-value')
+  const resetButton = rootEl.querySelector('.sound-volume-reset')
+  const saveTimers = new Map()
+
+  function paintVolume(slider, label, volume) {
+    const percent = Math.round(Math.max(0, Math.min(1, volume)) * 100)
+    if (slider) slider.value = String(percent)
+    if (label) label.textContent = `${percent}%`
+  }
+
+  function refreshVolumes() {
+    paintVolume(sfxSlider, sfxValue, audio.getSfxVolume())
+    paintVolume(musicSlider, musicValue, audio.getMusicVolume())
+    paintVolume(seaSlider, seaValue, audio.getSeaVolume())
+  }
+
+  function bindVolumeSlider(slider, label, setLive, persist) {
+    if (!slider) return
+    const update = () => {
+      const volume = Math.max(0, Math.min(100, Number(slider.value))) / 100
+      setLive(volume)
+      paintVolume(slider, label, volume)
+      if (saveTimers.has(slider)) clearTimeout(saveTimers.get(slider))
+      saveTimers.set(slider, setTimeout(() => {
+        saveTimers.delete(slider)
+        void persist(volume)
+      }, 160))
+    }
+    slider.addEventListener('input', update)
+    slider.addEventListener('change', () => {
+      const timer = saveTimers.get(slider)
+      if (timer) clearTimeout(timer)
+      saveTimers.delete(slider)
+      const volume = Math.max(0, Math.min(100, Number(slider.value))) / 100
+      void persist(volume)
+    })
+  }
+
+  async function refresh() {
+    await loadSoundPreference()
+    refreshVolumes()
+  }
+
+  bindVolumeSlider(sfxSlider, sfxValue, audio.setSfxVolume, persistSfxVolume)
+  bindVolumeSlider(musicSlider, musicValue, audio.setMusicVolume, persistMusicVolume)
+  bindVolumeSlider(seaSlider, seaValue, audio.setSeaVolume, persistSeaVolume)
+
+  resetButton?.addEventListener('click', async () => {
+    resetButton.disabled = true
+    try {
+      // Write sequentially because each Electron settings update reads and
+      // rewrites the same JSON file.
+      await persistSfxVolume(1)
+      await persistMusicVolume(1)
+      await persistSeaVolume(1)
+      refreshVolumes()
+    } finally {
+      resetButton.disabled = false
+    }
+  })
+  rootEl.querySelector('.sound-volume-back')?.addEventListener('click', () => onBack?.())
 
   return { refresh }
 }

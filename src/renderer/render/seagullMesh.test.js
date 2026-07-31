@@ -21,3 +21,26 @@ test('a shot through a nearby gull makes the flock scatter', () => {
   assert.equal(flock.children[0].visible, false)
   assert.ok(flock.userData.fleeUntil > 4)
 })
+
+test('a shot through the flock centre scatters birds between individual gulls', () => {
+  const flock = createGullFlock()
+  updateGullFlock(flock, [0, 0, 0], 4)
+  flock.updateWorldMatrix(true, true)
+  const from = flock.position.clone().add(new THREE.Vector3(-4, 0, 0))
+  const to = flock.position.clone().add(new THREE.Vector3(4, 0, 0))
+
+  assert.equal(tryHitGullFlock(flock, from, to, 4), true)
+  assert.ok(flock.userData.fleeUntil > 4)
+  assert.equal(flock.userData.lastSquawkAt, 4)
+})
+
+test('a shot outside the flock envelope does not trigger a scatter', () => {
+  const flock = createGullFlock()
+  updateGullFlock(flock, [0, 0, 0], 4)
+  flock.updateWorldMatrix(true, true)
+  const from = flock.position.clone().add(new THREE.Vector3(0, 30, 0))
+  const to = flock.position.clone().add(new THREE.Vector3(0, 40, 0))
+
+  assert.equal(tryHitGullFlock(flock, from, to, 4), false)
+  assert.equal(flock.userData.fleeUntil, -Infinity)
+})

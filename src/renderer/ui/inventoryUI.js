@@ -279,7 +279,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
   })
 
   function formatCredits(n) {
-    return `${Math.max(0, Math.floor(Number(n) || 0)).toLocaleString()} cr`
+    return `${Math.max(0, Math.floor(Number(n) || 0)).toLocaleString()} BU`
   }
 
   function formatBodyKind(kind) {

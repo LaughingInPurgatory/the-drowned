@@ -1,8 +1,10 @@
 import {
   SETTINGS_VIEW_CSS,
   settingsViewHTML,
+  soundVolumeViewHTML,
   uiColourViewHTML,
   bindSettingsView,
+  bindSoundVolumeView,
   bindUiColourView
 } from './settingsView.js'
 import { controlsListHTML } from './controlsList.js'
@@ -18,6 +20,7 @@ const STYLE = `
 }
 #pause-menu .panel.controls-view { width: min(460px, 92vw); max-height: min(80vh, 640px); }
 #pause-menu .panel.settings-view,
+#pause-menu .panel.sound-volume-view,
 #pause-menu .panel.ui-colour-view { width: min(360px, 92vw); }
 #pause-menu h2 {
   margin: 0 0 14px 0; text-align: center; font-weight: normal;
@@ -173,6 +176,9 @@ export function createPauseMenu(container, { onResume, onSave, onRestart, onQuit
     <div class="panel settings-view" style="display:none;">
       ${settingsViewHTML()}
     </div>
+    <div class="panel sound-volume-view" style="display:none;">
+      ${soundVolumeViewHTML()}
+    </div>
     <div class="panel ui-colour-view" style="display:none;">
       ${uiColourViewHTML()}
     </div>
@@ -183,12 +189,14 @@ export function createPauseMenu(container, { onResume, onSave, onRestart, onQuit
   const pausePunEl = root.querySelector('.pause-pun')
   const controlsView = root.querySelector('.controls-view')
   const settingsView = root.querySelector('.settings-view')
+  const soundVolumeView = root.querySelector('.sound-volume-view')
   const uiColourView = root.querySelector('.ui-colour-view')
 
   function showMain() {
     mainView.style.display = 'flex'
     controlsView.style.display = 'none'
     settingsView.style.display = 'none'
+    if (soundVolumeView) soundVolumeView.style.display = 'none'
     if (uiColourView) uiColourView.style.display = 'none'
   }
 
@@ -196,6 +204,7 @@ export function createPauseMenu(container, { onResume, onSave, onRestart, onQuit
     mainView.style.display = 'none'
     controlsView.style.display = 'flex'
     settingsView.style.display = 'none'
+    if (soundVolumeView) soundVolumeView.style.display = 'none'
     if (uiColourView) uiColourView.style.display = 'none'
   }
 
@@ -203,14 +212,27 @@ export function createPauseMenu(container, { onResume, onSave, onRestart, onQuit
     mainView.style.display = 'none'
     controlsView.style.display = 'none'
     settingsView.style.display = 'flex'
+    if (soundVolumeView) soundVolumeView.style.display = 'none'
     if (uiColourView) uiColourView.style.display = 'none'
     settingsApi.refresh()
+  }
+
+  function showSoundVolume() {
+    mainView.style.display = 'none'
+    controlsView.style.display = 'none'
+    settingsView.style.display = 'none'
+    if (soundVolumeView) {
+      soundVolumeView.style.display = 'flex'
+      soundVolumeApi.refresh()
+    }
+    if (uiColourView) uiColourView.style.display = 'none'
   }
 
   function showUiColour() {
     mainView.style.display = 'none'
     controlsView.style.display = 'none'
     settingsView.style.display = 'none'
+    if (soundVolumeView) soundVolumeView.style.display = 'none'
     if (uiColourView) {
       uiColourView.style.display = 'flex'
       uiColourApi.refresh()
@@ -224,8 +246,12 @@ export function createPauseMenu(container, { onResume, onSave, onRestart, onQuit
 
   const settingsApi = bindSettingsView(settingsView, {
     onBack: showMain,
+    onShowSoundVolume: showSoundVolume,
     onShowControls: showControls,
     onShowUiColour: showUiColour
+  })
+  const soundVolumeApi = bindSoundVolumeView(soundVolumeView, {
+    onBack: showSettings
   })
   const uiColourApi = bindUiColourView(uiColourView, {
     onBack: showSettings

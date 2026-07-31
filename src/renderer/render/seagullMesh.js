@@ -3,10 +3,15 @@ import * as THREE from 'three'
 const FLOCK_PERIOD_S = 70
 const FLOCK_DURATION_S = 19
 const HIT_RADIUS = 1.25
+// Treat the flock as one soft target as well as checking individual birds.
+// The birds are intentionally tiny, so requiring a pixel-perfect hit made a
+// shot through the middle of the group pass harmlessly between them.
+const FLOCK_HIT_RADIUS = 22
 const _segment = new THREE.Vector3()
 const _toGull = new THREE.Vector3()
 const _closest = new THREE.Vector3()
 const _gullWorldPosition = new THREE.Vector3()
+const _flockWorldPosition = new THREE.Vector3()
 
 export function gullFlockActiveAt(simTime) {
   return ((Number(simTime) || 0) % FLOCK_PERIOD_S) < FLOCK_DURATION_S
@@ -68,8 +73,9 @@ export function updateGullFlock(group, playerPosition, simTime) {
 }
 
 /**
- * Ambient gulls are deliberately not game entities. A shot only gives the
- * flock a reaction: one bird disappears and the rest fly farther away.
+ * Ambient gulls are deliberately not game entities. A shot gives the flock a
+ * reaction: a direct bird hit hides one bird, while any shot through the
+ * flock's overall envelope makes the rest fly farther away.
  */
 export function tryHitGullFlock(group, from, to, simTime) {
   if (!group?.visible) return false
@@ -80,6 +86,14 @@ export function tryHitGullFlock(group, from, to, simTime) {
   const lengthSq = _segment.lengthSq()
   if (lengthSq === 0) return false
   group.updateWorldMatrix(true, true)
+  group.getWorldPosition(_flockWorldPosition)
+
+  _toGull.subVectors(_flockWorldPosition, from)
+  const flockAlong = THREE.MathUtils.clamp(_toGull.dot(_segment) / lengthSq, 0, 1)
+  _closest.copy(_segment).multiplyScalar(flockAlong).add(from)
+  const inFlockEnvelope = _closest.distanceToSquared(_flockWorldPosition) <= FLOCK_HIT_RADIUS * FLOCK_HIT_RADIUS
+  let directHit = null
+  let directHitDistanceSq = Infinity
 
   for (const gull of group.children) {
     if (!gull.visible || t < (gull.userData.goneUntil ?? -Infinity)) continue
@@ -87,13 +101,19 @@ export function tryHitGullFlock(group, from, to, simTime) {
     _toGull.subVectors(_gullWorldPosition, from)
     const along = THREE.MathUtils.clamp(_toGull.dot(_segment) / lengthSq, 0, 1)
     _closest.copy(_segment).multiplyScalar(along).add(from)
-    if (_closest.distanceToSquared(_gullWorldPosition) > HIT_RADIUS * HIT_RADIUS) continue
-
-    gull.visible = false
-    gull.userData.goneUntil = t + 7
-    group.userData.fleeUntil = t + 5
-    group.userData.lastSquawkAt = t
-    return true
+    const distanceSq = _closest.distanceToSquared(_gullWorldPosition)
+    if (distanceSq <= HIT_RADIUS * HIT_RADIUS && distanceSq < directHitDistanceSq) {
+      directHit = gull
+      directHitDistanceSq = distanceSq
+    }
   }
-  return false
+
+  if (!inFlockEnvelope && !directHit) return false
+  if (directHit) {
+    directHit.visible = false
+    directHit.userData.goneUntil = t + 7
+  }
+  group.userData.fleeUntil = t + 5
+  group.userData.lastSquawkAt = t
+  return true
 }

@@ -105,10 +105,11 @@ const RIM_FADE_FROM = 0.97
 /** How far the skirt runs below the surface, so no swell can undercut it. */
 const SKIRT_DEPTH = SEA_MAX_AMPLITUDE + 14
 /**
- * Land mesh edge sits this far under mean water so swell always covers the
- * foot — waves lap a submerged bank instead of skating over dry sand.
+ * The post-waterline drop sits below the deepest wave trough. Keeping this
+ * separate from the visible shoreline preserves beaches/props while hiding
+ * the flat construction disc under the sea.
  */
-const COAST_FOOT_Y = -SEA_MAX_AMPLITUDE * 0.55
+const COAST_FOOT_Y = -SEA_MAX_AMPLITUDE - 2
 /** Outer land band (in ring parameter 0..1) forced into the steep coastal bank. */
 const COAST_BANK_FROM = 0.86
 /**
@@ -150,14 +151,14 @@ function makeHeightField(rng, landform) {
     lobes.push({
       freq: 1 + Math.floor(rng() * 4),
       phase: rng() * Math.PI * 2,
-      amp: range(rng, 0.1, 0.4)
+      amp: range(rng, 0.16, 0.58)
     })
   }
   const lobeAt = (theta) => {
     let v = 1
     for (const l of lobes) v += l.amp * Math.sin(theta * l.freq + l.phase)
     // Cap so lobes reshape the plan, not carve knife fins into the summit.
-    return Math.max(0.55, Math.min(1.55, v))
+    return Math.max(0.42, Math.min(1.72, v))
   }
 
   const noiseSeed = rng() * 1000
@@ -213,15 +214,27 @@ function makeHeightField(rng, landform) {
     // stack and not a gentle island hill.
     const peakOffR = range(rng, 0, 0.1)
     const peakOffTh = rng() * Math.PI * 2
-    const steep = range(rng, 1.55, 2.35)
+    const style = rng()
+    const steep = range(rng, style < 0.33 ? 1.25 : 1.65, style > 0.7 ? 3.1 : 2.45)
+    const facetFreq = 3 + Math.floor(rng() * 6)
+    const facetPhase = rng() * Math.PI * 2
+    const secondary =
+      style > 0.42
+        ? { r: range(rng, 0.18, 0.48), theta: rng() * Math.PI * 2, amp: range(rng, 0.28, 0.72), width: range(rng, 0.12, 0.25) }
+        : null
     const ridges = []
-    const ridgeN = 4 + Math.floor(rng() * 4)
+    const ridgeN = 3 + Math.floor(rng() * 7)
     for (let i = 0; i < ridgeN; i++) {
       ridges.push({
         theta: rng() * Math.PI * 2,
-        amp: range(rng, 0.12, 0.42),
-        width: range(rng, 0.18, 0.48)
+        amp: range(rng, 0.1, style > 0.65 ? 0.58 : 0.42),
+        width: range(rng, 0.1, style < 0.35 ? 0.3 : 0.52)
       })
+    }
+    const scars = []
+    const scarN = 1 + Math.floor(rng() * 4)
+    for (let i = 0; i < scarN; i++) {
+      scars.push({ theta: rng() * Math.PI * 2, width: range(rng, 0.04, 0.16), depth: range(rng, 0.08, 0.3) })
     }
     const crag = range(rng, 0.07, 0.14)
     return (r, theta) => {
@@ -234,12 +247,27 @@ function makeHeightField(rng, landform) {
       const d = Math.hypot(x, z)
       // Core cone — high power keeps a sharp summit and steep walls.
       let h = Math.pow(Math.max(0, 1 - d / Math.max(0.12, 0.92 * l)), steep)
+      if (secondary) {
+        let sd = Math.abs(r - secondary.r)
+        const angular = Math.cos(theta - secondary.theta)
+        sd = Math.hypot(sd, (angular - 1) * secondary.width)
+        h += secondary.amp * Math.exp(-(sd * sd) / (2 * secondary.width * secondary.width)) * Math.pow(Math.max(0, 1 - r), 0.7)
+      }
       // Buttresses / aretes running down the flanks.
       for (const ridge of ridges) {
         let dt = Math.abs(theta - ridge.theta) % (Math.PI * 2)
         if (dt > Math.PI) dt = Math.PI * 2 - dt
         const along = Math.exp(-(dt * dt) / (2 * ridge.width * ridge.width))
         h += ridge.amp * along * Math.pow(Math.max(0, 1 - r), 0.85)
+      }
+      // Faceted rock planes and vertical erosion scars break the radial cone
+      // into irregular buttresses rather than a smooth mathematical surface.
+      const facet = 0.82 + 0.18 * (0.5 + 0.5 * Math.sin(theta * facetFreq + facetPhase + r * 8))
+      h *= facet
+      for (const scar of scars) {
+        let dt = Math.abs(theta - scar.theta) % (Math.PI * 2)
+        if (dt > Math.PI) dt = Math.PI * 2 - dt
+        h -= scar.depth * Math.exp(-(dt * dt) / (2 * scar.width * scar.width)) * Math.pow(Math.max(0, 1 - r), 0.55)
       }
       // High-frequency crag so the rock reads broken rather than smooth.
       h +=
@@ -371,7 +399,79 @@ export function getIslandProfile(body) {
   const radius = Math.max(60, body.radius ?? 400)
   const heightBand = LANDFORM_HEIGHT[landform] ?? LANDFORM_HEIGHT.dome
   const height = radius * range(rng, heightBand[0], heightBand[1])
-  const rawHeight = makeHeightField(rng, landform)
+  const baseHeight = makeHeightField(rng, landform)
+  const greenTerrain = archetype === 'scrub' || archetype === 'drowned'
+  const reliefSeed = hashString(`${body?.id ?? 'island'}:rolling-ground`) * 0.001
+  const roughnessSeed = hashString(`${body?.id ?? 'island'}:surface-roughness`) * 0.001
+  const surfaceRoughness =
+    landform === 'atoll' ? 0.022
+    : landform === 'mesa' ? 0.038
+    : archetype === 'barren' || archetype === 'volcanic' ? 0.072
+    : 0.052
+  const rawHeight = (r, theta) => {
+    const base = baseHeight(r, theta)
+    const rr = Math.max(0, Math.min(1, r))
+    const envelope = Math.sin(Math.PI * rr) * Math.pow(Math.max(0, 1 - rr), 0.45)
+    const px = rr * Math.cos(theta)
+    const pz = rr * Math.sin(theta)
+    let h = base
+    if (landform !== 'spire') {
+      // Shared macro/mid/fine breakup for every surface: bare rock gets more
+      // bite, atolls stay comparatively calm, and the rim fades back to the
+      // same bank used by the shoreline and placeable sampler.
+      const macro =
+        Math.sin(px * 5.2 + roughnessSeed) * Math.cos(pz * 4.4 - roughnessSeed * 0.7) * 0.56 +
+        Math.sin((px + pz) * 8.4 + roughnessSeed * 1.3) * 0.24 +
+        Math.cos(theta * 15.0 + rr * 23.0 - roughnessSeed * 0.4) * 0.2
+      h += macro * surfaceRoughness * envelope
+    }
+    if (greenTerrain && landform !== 'spire' && landform !== 'stack') {
+      // Grassy islands also get broader meadow folds so their surface does
+      // not read as a single smooth green dome from the water.
+      const rolling =
+        Math.sin(px * 3.4 + reliefSeed) * Math.cos(pz * 4.6 - reliefSeed * 0.7) * 0.58 +
+        Math.sin(px * 7.8 - pz * 5.9 + reliefSeed * 0.9) * 0.24 +
+        Math.sin(theta * 5.0 + rr * 12.0 + reliefSeed * 1.4) * 0.18
+      const gullies = Math.cos((px - pz) * 13.0 + reliefSeed * 0.35) * 0.035
+      h += (rolling * 0.105 + gullies) * envelope
+    }
+    return Math.max(0, h)
+  }
+  // Independent coastline warp: deterministic per island, and separate from
+  // the summit height field so every island gets a different footprint.
+  const shapeRng = mulberry32(seed ^ 0x6d2b79f5)
+  const coastAxis = shapeRng() * Math.PI * 2
+  const coastStretch = range(shapeRng, -0.28, 0.34)
+  const coastWaves = []
+  const coastWaveN = 2 + Math.floor(shapeRng() * 4)
+  for (let i = 0; i < coastWaveN; i++) {
+    coastWaves.push({
+      freq: 1 + Math.floor(shapeRng() * 5),
+      phase: shapeRng() * Math.PI * 2,
+      amp: range(shapeRng, 0.05, 0.18)
+    })
+  }
+  const isHaven = body?.name === 'Haven Reach'
+  const havenAxis = isHaven ? shapeRng() * Math.PI * 2 : 0
+  const havenCoveAxis = isHaven ? havenAxis + range(shapeRng, 0.85, 1.2) : 0
+  const havenBackCoveAxis = isHaven ? havenAxis + Math.PI + range(shapeRng, -0.35, 0.35) : 0
+  const warpedRadius = (r, theta) => {
+    let scale = 1 + coastStretch * Math.cos(theta - coastAxis) ** 2
+    for (const wave of coastWaves) scale += wave.amp * Math.sin(theta * wave.freq + wave.phase)
+    if (isHaven) {
+      // Haven grew around an old settlement, not a volcanic plug: one broad
+      // headland, a deep harbour-side bite, and a smaller lee-side cove give
+      // its shoreline a readable silhouette from the title orbit.
+      const headland = Math.max(0, Math.cos(theta - havenAxis))
+      const harbourCove = Math.max(0, Math.cos(theta - havenCoveAxis))
+      const backCove = Math.max(0, Math.cos(theta - havenBackCoveAxis))
+      scale += 0.24 * headland ** 4
+      scale -= 0.28 * harbourCove ** 6
+      scale -= 0.14 * backCove ** 8
+      scale += 0.06 * Math.sin(theta * 3 - havenAxis * 0.7)
+    }
+    return Math.max(0, Math.min(1.18, r * scale))
+  }
   // Disc mesh collapses every theta to one XZ point at r = 0. Height fields
   // still vary with angle there (lobes, ridge spines, detail noise), which
   // stacks different Ys on the same pole and grows a vertical fin / knife edge
@@ -390,7 +490,8 @@ export function getIslandProfile(body) {
   const heightAt = (r, theta) => {
     if (r >= 1) return 0
     if (r <= 1e-5) return poleH
-    let h = rawHeight(r, theta)
+    const fieldR = warpedRadius(r, theta)
+    let h = rawHeight(fieldR, theta)
     if (r < POLE_BLEND) {
       // smoothstep so the pole is one height and flanks open smoothly
       const t = r / POLE_BLEND
@@ -483,28 +584,79 @@ export function islandMaxShoreline(body) {
  * costs one extra sample. Without it every island is one material, and a rocky
  * headland with a sandy beach is not expressible.
  */
-function applyBlendShader(material, accentMaps) {
-  if (!accentMaps?.map) return material
+function applyBlendShader(material, accentMaps, terrainMaps = null) {
+  const hasAccent = Boolean(accentMaps?.map)
+  const hasTerrain = Boolean(terrainMaps?.map)
+  if (!hasAccent && !hasTerrain) return material
   material.onBeforeCompile = (shader) => {
-    shader.uniforms.uAccentMap = { value: accentMaps.map }
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aBlend;\nvarying float vBlend;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBlend = aBlend;')
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform sampler2D uAccentMap;\nvarying float vBlend;')
-      .replace(
-        '#include <map_fragment>',
-        `#include <map_fragment>
-        {
+    if (hasAccent) shader.uniforms.uAccentMap = { value: accentMaps.map }
+    if (hasTerrain) shader.uniforms.uTerrainRockMap = { value: terrainMaps.map }
+    const vertexDecl = [
+      hasAccent ? 'attribute float aBlend;\nvarying float vBlend;' : '',
+      hasTerrain ? 'varying vec3 vTerrainPosition;' : ''
+    ].filter(Boolean).join('\n')
+    const vertexAssign = [
+      hasAccent ? 'vBlend = aBlend;' : '',
+      hasTerrain ? 'vTerrainPosition = transformed;' : ''
+    ].filter(Boolean).join('\n')
+    const fragmentDecl = [
+      hasAccent ? 'uniform sampler2D uAccentMap;\nvarying float vBlend;' : '',
+      hasTerrain
+        ? `uniform sampler2D uTerrainRockMap;
+varying vec3 vTerrainPosition;
+float terrainHash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+float terrainNoise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = terrainHash(i);
+  float b = terrainHash(i + vec2(1.0, 0.0));
+  float c = terrainHash(i + vec2(0.0, 1.0));
+  float d = terrainHash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}`
+        : ''
+    ].filter(Boolean).join('\n')
+    const surfaceCode = [
+      hasAccent
+        ? `{
           // Accent (shore sand etc.) already in linear via SRGBColorSpace.
           // Mix full accent albedo, then let color_fragment tint both layers.
           vec4 accent = texture2D(uAccentMap, vMapUv);
           diffuseColor.rgb = mix(diffuseColor.rgb, accent.rgb, clamp(vBlend, 0.0, 1.0));
         }`
-      )
+        : '',
+      hasTerrain
+        ? `{
+          // The grass photo map is useful up close but averages to one green
+          // plane at range. Keep the broad texture, then layer a second
+          // sampling scale and exposed-soil patches over it. This is cheap
+          // fragment work and costs no additional terrain geometry.
+          vec2 detailUv = vMapUv * 3.2 + vec2(7.31, -11.17);
+          vec3 closeGrass = texture2D(map, detailUv).rgb;
+          float broad = terrainNoise(vTerrainPosition.xz * 0.0024 + vec2(3.0, 8.0));
+          float medium = terrainNoise(vTerrainPosition.xz * 0.008 + vec2(-4.0, 2.0));
+          float patchNoise = broad * 0.72 + medium * 0.28;
+          float exposedSoil = smoothstep(0.48, 0.72, patchNoise);
+          vec3 rock = texture2D(uTerrainRockMap, vMapUv * 0.72 + vec2(-4.0, 5.0)).rgb;
+          vec3 soil = mix(rock * vec3(0.88, 0.9, 0.86), vec3(0.24, 0.16, 0.075), 0.62);
+          vec3 grass = mix(diffuseColor.rgb, diffuseColor.rgb * (0.62 + closeGrass * 0.94), 0.46);
+          grass *= mix(vec3(0.7, 0.77, 0.48), vec3(1.12, 1.06, 0.76), medium * 0.9);
+          diffuseColor.rgb = mix(grass, soil, exposedSoil * 0.7);
+        }`
+        : ''
+    ].filter(Boolean).join('\n')
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${vertexDecl}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${vertexAssign}`)
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\n${fragmentDecl}`)
+      .replace('#include <map_fragment>', `#include <map_fragment>\n${surfaceCode}`)
   }
   // Unique key so three doesn't reuse an un-patched program.
-  material.customProgramCacheKey = () => 'islandBlend_v2'
+  material.customProgramCacheKey = () => `islandBlend_v3_${hasAccent ? 1 : 0}_${hasTerrain ? 1 : 0}`
   return material
 }
 
@@ -522,6 +674,12 @@ export function buildIslandMesh(body) {
   const mid = new THREE.Color(surfaces.body.color)
   const high = new THREE.Color(surfaces.crown.color)
   const tmp = new THREE.Color()
+  const meadowSurface =
+    archetype === 'scrub' || surfaces.body.tex === 'grass' || surfaces.crown.tex === 'grass'
+  const meadowDry = new THREE.Color(0x817548)
+  const meadowSoil = new THREE.Color(0x6b4f2e)
+  const meadowFresh = new THREE.Color(0x9eaa58)
+  const meadowSeed = hashString(`${body?.id ?? 'island'}:meadow-colour`) * 0.001
 
   // Land rings are denser near the coast (nonlinear t) so the bank that waves
   // actually hit is not a handful of huge flat triangles. Outer land is forced
@@ -534,7 +692,8 @@ export function buildIslandMesh(body) {
   const skirtDepth = landform === 'spire' ? SKIRT_DEPTH + 90 : SKIRT_DEPTH
   const shelfReach = landform === 'spire' ? SHELF_REACH * 0.55 : SHELF_REACH
   const coastBankFrom = landform === 'spire' ? 0.9 : COAST_BANK_FROM
-  const texScale = landform === 'spire' ? TEXTURE_SCALE * 0.72 : TEXTURE_SCALE
+  const texScale =
+    landform === 'spire' ? TEXTURE_SCALE * 0.72 : meadowSurface ? TEXTURE_SCALE * 0.62 : TEXTURE_SCALE
   const heights = []
   for (let i = 0; i <= total; i++) {
     const onLand = i <= rings
@@ -653,11 +812,26 @@ export function buildIslandMesh(body) {
       tmp.lerp(TIDE_COLOR, 1 - (y - wetAbove) / Math.max(1e-3, tideBand - wetAbove))
     }
 
-    // Pull palette toward white so map × vertexColor still shows photo detail
-    // (full-strength greens were averaging to a solid plastic fill at range).
-    tmp.r = 0.52 + tmp.r * 0.48
-    tmp.g = 0.52 + tmp.g * 0.48
-    tmp.b = 0.52 + tmp.b * 0.48
+    if (meadowSurface && y >= wetAbove && steep < 0.82) {
+      const px = positions[i * 3]
+      const pz = positions[i * 3 + 2]
+      const signal =
+        Math.sin(px * 0.0042 + meadowSeed) * 0.5 +
+        Math.cos(pz * 0.0051 - meadowSeed * 0.8) * 0.3 +
+        Math.sin((px - pz) * 0.008 + meadowSeed * 1.7) * 0.2
+      const patch = Math.max(0, Math.min(1, signal * 0.5 + 0.5))
+      tmp.multiplyScalar(0.72 + patch * 0.46)
+      if (patch < 0.34) tmp.lerp(meadowDry, (0.34 - patch) * 0.38)
+      else if (patch > 0.86) tmp.lerp(meadowFresh, (patch - 0.86) * 0.5)
+      else if (patch > 0.68) tmp.lerp(meadowSoil, (patch - 0.68) * 0.72)
+    }
+
+    // Keep enough of the terrain palette for broad meadow/soil variation to
+    // survive distance lighting; the texture shader supplies the fine grain.
+    const paletteLift = meadowSurface ? 0.42 : 0.52
+    tmp.r = paletteLift + tmp.r * (1 - paletteLift)
+    tmp.g = paletteLift + tmp.g * (1 - paletteLift)
+    tmp.b = paletteLift + tmp.b * (1 - paletteLift)
     color.setXYZ(i, tmp.r, tmp.g, tmp.b)
     blend.setX(i, Math.max(0, Math.min(1, accent)))
   }
@@ -668,6 +842,7 @@ export function buildIslandMesh(body) {
   // Body texture is the base; the shore's is blended in over the beach.
   const baseMaps = getSurfaceTextures(surfaces.body.tex) ?? {}
   const shoreMaps = getSurfaceTextures(surfaces.shore.tex) ?? {}
+  const terrainMaps = meadowSurface ? getSurfaceTextures('rocky') : null
   const material = applyBlendShader(
     new THREE.MeshStandardMaterial({
       map: baseMaps.map ?? null,
@@ -680,9 +855,10 @@ export function buildIslandMesh(body) {
       roughness: 0.97,
       metalness: 0,
       envMapIntensity: 0.02,
-      normalScale: new THREE.Vector2(1.15, 1.15)
+      normalScale: new THREE.Vector2(meadowSurface ? 1.45 : 1.15, meadowSurface ? 1.45 : 1.15)
     }),
-    surfaces.shore.tex === surfaces.body.tex ? null : shoreMaps
+    surfaces.shore.tex === surfaces.body.tex ? null : shoreMaps,
+    terrainMaps
   )
 
   const mesh = new THREE.Mesh(geometry, material)
@@ -695,11 +871,13 @@ export function buildIslandMesh(body) {
   // Props on every island mesh (title orbit and in-game share this builder).
   // Cover is rolled per island: some rocks are bare, some hold a few trees,
   // some still have buildings, and a few are both wooded and ruined.
-  mesh.add(buildVegetation(rng, radius, height, heightAt, archetype, landform))
-  mesh.add(buildRuins(rng, radius, height, heightAt, archetype, landform))
+  mesh.add(
+    buildVegetation(rng, radius, height, heightAt, archetype, landform, body?.name === 'Haven Reach')
+  )
+  mesh.add(buildRuins(rng, radius, height, heightAt, archetype, landform, body?.name === 'Haven Reach'))
   // Loose rock at the foot of anything steep (always for mountain tips).
   if (landform === 'stack' || landform === 'mesa' || landform === 'spire' || rng() < 0.5) {
-    mesh.add(buildTalus(rng, radius, height, heightAt, surfaces.body))
+    mesh.add(buildTalus(rng, radius, height, heightAt, surfaces.body, landform))
   }
   return mesh
 }
@@ -712,7 +890,8 @@ function propGeometries() {
     trunk: new THREE.CylinderGeometry(0.35, 0.55, 1, 5),
     canopy: new THREE.ConeGeometry(1, 1.6, 6),
     canopyRound: new THREE.IcosahedronGeometry(1, 0),
-    bush: new THREE.IcosahedronGeometry(1, 0)
+    bush: new THREE.IcosahedronGeometry(1, 0),
+    rebar: new THREE.CylinderGeometry(0.12, 0.12, 1, 6)
   }
   // Trunk sits on y=0 with top at 1; canopy centres will be placed above.
   _propGeo.trunk.translate(0, 0.5, 0)
@@ -765,7 +944,7 @@ function boulderGeometries() {
 }
 
 /** Box at final size with triplanar UVs — ruins must not stretch one photo face. */
-function ruinBoxGeometry(w, h, d, tiles = 0.12) {
+function ruinBoxGeometry(w, h, d, tiles = 0.28) {
   return retileUVsTriplanar(new THREE.BoxGeometry(w, h, d), tiles)
 }
 
@@ -798,12 +977,21 @@ function propMaterials() {
     canopyDry: propMapMaterial(foliage, 0xc4c090, { rough: 0.94, metal: 0.0, normal: 0.85 }),
     bush: propMapMaterial(foliage, 0xb8cc88, { rough: 0.93, metal: 0.0, normal: 0.9 }),
     bushDry: propMapMaterial(foliage, 0xb0a868, { rough: 0.94, metal: 0.0, normal: 0.85 }),
-    // Weathered concrete / plaster — drowned settlements (light tint = maps show)
-    ruin: propMapMaterial(concrete, 0xe8e4dc, { rough: 0.96, metal: 0.03, normal: 1.75 }),
-    // Darker industrial masonry
-    ruinDark: propMapMaterial(concrete, 0xb8b0a4, { rough: 0.95, metal: 0.06, normal: 1.65 }),
-    // Brick / blockwork fragments
-    ruinBrick: propMapMaterial(brick, 0xe8d0b8, { rough: 0.97, metal: 0.02, normal: 1.9 }),
+    // Weathered concrete / plaster — darkened so ruins do not read as clean
+    // white blocks against the island. The concrete PBR map still supplies
+    // the chips and pores; this tint supplies the drowned-world grime.
+    ruin: propMapMaterial(concrete, 0xa6a199, { rough: 0.98, metal: 0.02, normal: 2.0 }),
+    // Charcoal structural concrete for cores, columns and shadowed remnants.
+    ruinDark: propMapMaterial(concrete, 0x6b6863, { rough: 0.99, metal: 0.04, normal: 2.1 }),
+    // Brick / blockwork fragments — warm but subdued beside the dark concrete.
+    ruinBrick: propMapMaterial(brick, 0xa17f6b, { rough: 0.98, metal: 0.01, normal: 2.0 }),
+    // Exposed reinforcement in broken slabs and facade edges.
+    rebar: new THREE.MeshStandardMaterial({
+      color: 0x5a4f43,
+      roughness: 0.78,
+      metalness: 0.5,
+      envMapIntensity: 0.08
+    }),
     // Shore boulders
     boulder: propMapMaterial(boulder, 0xe4ddd4, { rough: 0.98, metal: 0.02, normal: 2.0 }),
     boulderDark: propMapMaterial(boulder, 0xc0b8ae, { rough: 0.98, metal: 0.02, normal: 1.85 })
@@ -927,15 +1115,15 @@ function rollVegetationCover(rng, archetype, landform) {
  */
 function rollRuinCover(rng, archetype, landform) {
   let bareChance =
-    archetype === 'volcanic' ? 0.7
-    : archetype === 'barren' ? 0.45
-    : archetype === 'scrub' ? 0.35
+    archetype === 'volcanic' ? 0.55
+    : archetype === 'barren' ? 0.3
+    : archetype === 'scrub' ? 0.2
     : archetype === 'industrial' ? 0.08
     : archetype === 'drowned' ? 0.05
     : 0.3
-  if (landform === 'stack') bareChance += 0.25
-  if (landform === 'spire') bareChance = 0.72 // maybe a summit hut or beacon
-  if (landform === 'atoll') bareChance += 0.15
+  if (landform === 'stack') bareChance += 0.15
+  if (landform === 'spire') bareChance = 0.65 // maybe a summit hut or beacon
+  if (landform === 'atoll') bareChance += 0.08
   if (rng() < bareChance) return 0
 
   const u = rng()
@@ -947,13 +1135,24 @@ function rollRuinCover(rng, archetype, landform) {
   }
   if (archetype === 'industrial') return range(rng, 0.4, 0.95)
   if (archetype === 'volcanic') return range(rng, 0.12, 0.35)
-  return range(rng, 0.15, 0.6)
+  return range(rng, 0.28, 0.78)
 }
 
 /** Area scale for prop counts — larger islands get more props, hard-capped. */
 function propAreaScale(radius) {
   return Math.min(2.4, Math.max(0.45, Math.pow(radius / 420, 0.95)))
 }
+
+// Denser islands should feel alive from the boat, but lush islands can have
+// hundreds of individual prop clones. Double the normal targets, then allow
+// only 50% more than the old per-layer ceiling as a memory/draw-call budget
+// (the home island gets the full twofold ceiling). Grass stays instanced, and
+// hero trees keep their separate small cap below.
+const VEGETATION_DENSITY_MULTIPLIER = 2
+const VEGETATION_CAP_HEADROOM = 1.5
+const VEGETATION_HOME_CAP_HEADROOM = 2
+const vegetationCap = (oldCap, isHome = false) =>
+  Math.ceil(oldCap * (isHome ? VEGETATION_HOME_CAP_HEADROOM : VEGETATION_CAP_HEADROOM))
 
 /** Prop silhouette scale so trees/ruins read from a boat near shore. */
 function propSizeScale(radius) {
@@ -967,7 +1166,7 @@ function propSizeScale(radius) {
  * Prefers Quaternius Ultimate Nature (CC0) when preloaded; falls back to
  * simple low-poly shapes if assets are not ready yet (tests / cold load).
  */
-function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
+function buildVegetation(rng, radius, height, heightAt, archetype, landform, isHome = false) {
   const group = new THREE.Group()
   group.name = 'vegetation'
   const cover = rollVegetationCover(rng, archetype, landform)
@@ -999,11 +1198,23 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
     treeTarget = Math.floor(treeTarget * 0.4)
     bushTarget = Math.floor(bushTarget * 0.55)
   }
-  // Forests need room for real clumps; hard caps used to flatten every island.
-  treeTarget = Math.min(layout === 'forest' ? 160 : layout === 'copses' ? 94 : 54, treeTarget)
+  // Double ordinary prop density. Barren islands returned above never enter
+  // this path, while the cap keeps the biggest forests from becoming a wall
+  // of clones when many nearby islands are streamed at once.
+  treeTarget = Math.floor(treeTarget * VEGETATION_DENSITY_MULTIPLIER)
+  bushTarget = Math.floor(bushTarget * VEGETATION_DENSITY_MULTIPLIER)
+  // Forests need room for real clumps; keep a little headroom over the old
+  // caps rather than allowing the density multiplier to grow without bound.
+  treeTarget = Math.min(
+    vegetationCap(layout === 'forest' ? 160 : layout === 'copses' ? 94 : 54, isHome),
+    treeTarget
+  )
   if (layout === 'forest') bushTarget = Math.floor(bushTarget * 1.55)
   else if (layout === 'copses') bushTarget = Math.floor(bushTarget * 1.25)
-  bushTarget = Math.min(layout === 'forest' ? 150 : layout === 'copses' ? 118 : 100, bushTarget)
+  bushTarget = Math.min(
+    vegetationCap(layout === 'forest' ? 150 : layout === 'copses' ? 118 : 100, isHome),
+    bushTarget
+  )
   const tryLimit = (n) => n * 6 + 10
 
   const treeProtos = getTreeProtos()
@@ -1181,7 +1392,8 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
       if (layout === 'forest') grassTarget = Math.floor(grassTarget * 1.25)
       if (landform === 'atoll') grassTarget = Math.floor(grassTarget * 0.75)
       if (archetype === 'industrial') grassTarget = Math.floor(grassTarget * 0.45)
-      grassTarget = Math.min(520, Math.max(80, grassTarget))
+      grassTarget = Math.floor(grassTarget * VEGETATION_DENSITY_MULTIPLIER)
+      grassTarget = Math.min(vegetationCap(520, isHome), Math.max(80, grassTarget))
 
       const perType = Math.ceil(grassTarget / grassData.length)
       const _m = new THREE.Matrix4()
@@ -1228,7 +1440,8 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
     if (grassProtos.length) {
       let clumpTarget = Math.floor((22 + cover * 40) * Math.min(1.4, areaK))
       if (layout === 'forest') clumpTarget = Math.floor(clumpTarget * 1.3)
-      clumpTarget = Math.min(70, Math.max(12, clumpTarget))
+      clumpTarget = Math.floor(clumpTarget * VEGETATION_DENSITY_MULTIPLIER)
+      clumpTarget = Math.min(vegetationCap(70, isHome), Math.max(12, clumpTarget))
       let clumps = 0
       for (let a = 0; a < clumpTarget * 6 && clumps < clumpTarget; a++) {
         const spot = samplePlantSpot(rng, radius, height, heightAt, spotOpts({
@@ -1273,10 +1486,14 @@ function placeRuinPiece(group, geo, mat, x, y, z, rotX, rotY, rotZ) {
  * Ruined buildings — human-scale, clustered into a few shoreline hamlets.
  * (Radius-scaled walls read as grey billboards from the title orbit.)
  */
-function buildRuins(rng, radius, height, heightAt, archetype, landform) {
+function buildRuins(rng, radius, height, heightAt, archetype, landform, isHome = false) {
   const group = new THREE.Group()
   group.name = 'ruins'
-  const cover = rollRuinCover(rng, archetype, landform)
+  // Port Haven grew around the remains of the old island settlement. Keep a
+  // small ruin cluster on Haven Reach even though its seeded archetype is scrub.
+  const cover = isHome
+    ? Math.max(0.42, rollRuinCover(rng, archetype, landform))
+    : rollRuinCover(rng, archetype, landform)
   if (cover <= 0) return group
 
   const mats = propMaterials()
@@ -1290,25 +1507,31 @@ function buildRuins(rng, radius, height, heightAt, archetype, landform) {
   const sizeK = propSizeScale(radius)
 
   // A few settlement clusters, not freckles across the whole island.
-  let hamlets = 1 + Math.floor(cover * 3.5)
+  let hamlets = 1 + Math.floor(cover * 4.5)
   if (drowned) hamlets += 1
   if (industrial) hamlets += 1
   if (landform === 'atoll' || landform === 'spire') hamlets = Math.max(1, hamlets - 1)
-  hamlets = Math.min(5, hamlets)
+  hamlets = Math.min(7, hamlets)
 
   for (let h = 0; h < hamlets; h++) {
-    // Pick a cluster centre on mid slopes / shore shelf.
+    // Keep one Haven cluster on the lower coastal slope; the others stay
+    // inland so the settlement still has a natural spread.
+    const coastal = isHome && h === hamlets - 1
+    const rMin = coastal ? 0.7 : 0.2
+    const rMax = coastal
+      ? landform === 'atoll' ? 0.92 : 0.88
+      : landform === 'atoll' ? 0.88 : 0.68
     let centre = null
-    for (let t = 0; t < 24 && !centre; t++) {
+    for (let t = 0; t < (coastal ? 48 : 24) && !centre; t++) {
       centre = samplePlantSpot(rng, radius, height, heightAt, {
-        rMin: 0.2,
-        rMax: landform === 'atoll' ? 0.88 : 0.68,
+        rMin,
+        rMax,
         landform
       })
     }
     if (!centre) continue
 
-    const buildings = 2 + Math.floor(rng() * (drowned ? 5 : 3))
+    const buildings = 3 + Math.floor(rng() * (drowned ? 6 : 5))
     for (let b = 0; b < buildings; b++) {
       // Jitter around the hamlet centre (local metres, not island radius).
       const ang = rng() * Math.PI * 2
@@ -1324,6 +1547,204 @@ function buildRuins(rng, radius, height, heightAt, archetype, landform) {
       const yaw = rng() * Math.PI * 2
       const fp = ruinFootprint(rng, sizeK)
       const kind = rng()
+      const highRiseChance = industrial || drowned ? 0.2 : 0.08
+
+      if (kind < highRiseChance) {
+        // A flooded-city remnant: thin floor plates, broken facade sections,
+        // exposed columns and missing levels. Full-height slabs read as a
+        // stack of floating blocks from the sea, so the floor plate is only a
+        // structural lip and the walls do the architectural work.
+        const towerW = range(rng, 16, 26) * sizeK
+        const towerD = range(rng, 14, 23) * sizeK
+        const floors = 4 + Math.floor(rng() * 4)
+        const floorH = range(rng, 4.2, 6.3) * sizeK
+        const damageStart = Math.max(2, Math.ceil(floors * 0.5))
+        const missing = new Set()
+        for (let damagedFloor = damageStart; damagedFloor < floors; damagedFloor++) {
+          if (rng() < 0.42) missing.add(damagedFloor)
+        }
+        if (missing.size === 0 && damageStart < floors) missing.add(damageStart)
+
+        // A ruin needs a believable foot. The old version started with
+        // isolated floor plates, which read as floating blocks from offshore.
+        const footingH = floorH * range(rng, 0.22, 0.35)
+        placeRuinPiece(
+          group,
+          ruinBoxGeometry(towerW * 0.74, footingH, towerD * 0.74),
+          mat,
+          x,
+          ground + footingH * 0.5,
+          z,
+          range(rng, -0.06, 0.06),
+          yaw,
+          range(rng, -0.06, 0.06)
+        )
+
+        // The lift/stair core is the spine that keeps a gutted tower reading
+        // as one building after its rooms and facade have fallen away.
+        const coreW = towerW * range(rng, 0.14, 0.2)
+        const coreD = towerD * range(rng, 0.14, 0.2)
+        const coreFloors = Math.max(2, floors - (rng() < 0.35 ? 1 : 0))
+        for (let coreFloor = 0; coreFloor < coreFloors; coreFloor++) {
+          if (coreFloor > 0 && missing.has(coreFloor) && rng() < 0.65) continue
+          const coreH = floorH * range(rng, 0.78, 1.05)
+          placeRuinPiece(
+            group,
+            ruinBoxGeometry(coreW, coreH, coreD),
+            rng() < 0.72 ? mats.ruinDark : mat,
+            x + (rng() - 0.5) * towerW * 0.04 * coreFloor,
+            ground + coreFloor * floorH + coreH * 0.5,
+            z + (rng() - 0.5) * towerD * 0.04 * coreFloor,
+            range(rng, -0.06, 0.06),
+            yaw,
+            range(rng, -0.06, 0.06)
+          )
+        }
+
+        for (let floor = 0; floor < floors; floor++) {
+          if (missing.has(floor)) continue
+          const upper = floor >= damageStart
+          const lean = upper ? (floor - damageStart + 1) / Math.max(1, floors - damageStart) : 0
+          const dx = upper ? (rng() - 0.5) * towerW * 0.18 * lean : 0
+          const dz = upper ? (rng() - 0.5) * towerD * 0.18 * lean : 0
+          const slabH = floorH * (upper ? range(rng, 0.1, 0.22) : range(rng, 0.18, 0.28))
+          const slabMat = rng() < 0.62 ? mat : rng() < 0.55 ? mats.ruinDark : mats.ruinBrick
+          placeRuinPiece(
+            group,
+            ruinBoxGeometry(towerW * range(rng, 0.82, 1.05), slabH, towerD * range(rng, 0.82, 1.05)),
+            slabMat,
+            x + dx,
+            ground + slabH * 0.5 + floor * floorH,
+            z + dz,
+            range(rng, -0.05, 0.05) + lean * range(rng, -0.08, 0.08),
+            yaw + lean * range(rng, -0.12, 0.12),
+            range(rng, -0.05, 0.05) + lean * range(rng, -0.1, 0.1)
+          )
+
+          // Leave a few structural stubs under surviving upper floors. They
+          // are deliberately incomplete, but stop a missing level looking
+          // like a perfectly suspended concrete tile.
+          if (floor < damageStart || missing.has(floor - 1) || rng() < 0.7) {
+            const columnH = floorH * range(rng, 0.72, 1.02)
+            const columnW = towerW * range(rng, 0.055, 0.1)
+            const columnD = towerD * range(rng, 0.055, 0.1)
+            const floorBase = ground + floor * floorH
+            const corners = [
+              [-1, -1],
+              [1, -1],
+              [-1, 1],
+              [1, 1]
+            ]
+            const count = floor < damageStart ? 4 : 2 + Math.floor(rng() * 2)
+            for (let c = 0; c < count; c++) {
+              const [side, front] = corners[(c + Math.floor(rng() * corners.length)) % corners.length]
+              if (upper && rng() < 0.18) continue
+              const column = placeRuinPiece(
+                group,
+                ruinBoxGeometry(columnW, columnH, columnD),
+                rng() < 0.75 ? mats.ruinDark : mat,
+                x + side * towerW * 0.34 + dx,
+                floor === 0 ? floorBase + columnH * 0.5 : floorBase - columnH * 0.5,
+                z + front * towerD * 0.34 + dz,
+                range(rng, -0.12, 0.12),
+                yaw + lean * range(rng, -0.08, 0.08),
+                range(rng, -0.12, 0.12)
+              )
+              column.scale.x *= range(rng, 0.7, 1.15)
+            }
+          }
+
+          // Broken wall panels leave recognisable rooms/facades between the
+          // frame members. Keep them partial so the missing floors stay open.
+          const panelCount = floor < damageStart ? 3 : 2 + Math.floor(rng() * 2)
+          for (let panel = 0; panel < panelCount; panel++) {
+            if (upper && panel > 0 && rng() < 0.28) continue
+            const wallH = floorH * (upper ? range(rng, 0.28, 0.64) : range(rng, 0.52, 0.82))
+            const wallW = towerW * range(rng, 0.2, 0.52)
+            const wallT = Math.max(0.7, towerD * range(rng, 0.07, 0.13))
+            const front = panel % 2 === 0
+            const side = rng() < 0.5 ? -1 : 1
+            const offset = (rng() - 0.5) * towerW * 0.38
+            const floorBase = ground + floor * floorH
+            const panelMat = rng() < 0.58 ? mat : rng() < 0.5 ? mats.ruinDark : mats.ruinBrick
+            placeRuinPiece(
+              group,
+              front
+                ? ruinBoxGeometry(wallW, wallH, wallT)
+                : ruinBoxGeometry(wallT, wallH, wallW),
+              panelMat,
+              front ? x + offset : x + side * towerW * 0.38,
+              floorBase + wallH * 0.5,
+              front ? z + side * towerD * 0.42 : z + offset,
+              range(rng, -0.16, 0.16),
+              yaw + lean * range(rng, -0.1, 0.1),
+              range(rng, -0.16, 0.16)
+            )
+          }
+
+          // Short rusty rods break the clean wall edges where the facade has
+          // sheared away. They are sparse, but readable as reinforcement.
+          if (upper && rng() < 0.78) {
+            const rods = 1 + Math.floor(rng() * 3)
+            for (let rodIndex = 0; rodIndex < rods; rodIndex++) {
+              const rodLength = range(rng, 1.4, 3.6) * sizeK
+              const rod = new THREE.Mesh(propGeometries().rebar, mats.rebar)
+              rod.position.set(
+                x + dx + (rng() - 0.5) * towerW * 0.72,
+                ground + floor * floorH + slabH + rodLength * 0.35,
+                z + dz + (rng() < 0.5 ? -1 : 1) * towerD * 0.43
+              )
+              rod.scale.set(0.7, rodLength, 0.7)
+              rod.rotation.set(range(rng, -0.38, 0.38), yaw, range(rng, -0.38, 0.38))
+              rod.castShadow = true
+              group.add(rod)
+            }
+          }
+        }
+
+        // Concrete chunks at the foot tie the building into the slope and
+        // soften the clean rectangular silhouette at boat distance.
+        const rubbleGeos = boulderGeometries()
+        const rubbleCount = 4 + Math.floor(rng() * 4)
+        for (let rubble = 0; rubble < rubbleCount; rubble++) {
+          const angle = rng() * Math.PI * 2
+          const distance = range(rng, 0.35, 0.85) * Math.max(towerW, towerD)
+          const size = range(rng, 1.8, 4.8) * sizeK
+          const chunk = new THREE.Mesh(pick(rng, rubbleGeos), mat)
+          chunk.position.set(
+            x + Math.cos(angle) * distance,
+            ground + size * range(rng, 0.2, 0.45),
+            z + Math.sin(angle) * distance
+          )
+          chunk.scale.set(
+            size * range(rng, 0.8, 1.5),
+            size * range(rng, 0.5, 1.05),
+            size * range(rng, 0.8, 1.4)
+          )
+          chunk.rotation.set(rng() * Math.PI, rng() * Math.PI, rng() * Math.PI)
+          chunk.castShadow = true
+          chunk.receiveShadow = true
+          group.add(chunk)
+        }
+
+        // A broken side wall makes the missing floors legible in silhouette.
+        if (rng() < 0.8) {
+          const sideH = floorH * range(rng, 1.2, 2.8)
+          const sideBase = ground + damageStart * floorH
+          placeRuinPiece(
+            group,
+            ruinBoxGeometry(towerW * 0.18, sideH, towerD * range(rng, 0.7, 1.1)),
+            mat,
+            x + towerW * range(rng, -0.45, 0.45),
+            sideBase + sideH * 0.5,
+            z + towerD * range(rng, -0.35, 0.35),
+            range(rng, -0.18, 0.18),
+            yaw,
+            range(rng, -0.18, 0.18)
+          )
+        }
+        continue
+      }
 
       if (kind < 0.38) {
         // Standing wall / broken facade
@@ -1418,7 +1839,7 @@ function buildRuins(rng, radius, height, heightAt, archetype, landform) {
  * Boulders piled on the shore and lower slopes — irregular rock meshes with
  * boulder albedo, not smooth plastic icosahedrons.
  */
-function buildTalus(rng, radius, height, heightAt, surface) {
+function buildTalus(rng, radius, height, heightAt, surface, landform = 'dome') {
   const group = new THREE.Group()
   group.name = 'talus'
   const mats = propMaterials()
@@ -1436,11 +1857,13 @@ function buildTalus(rng, radius, height, heightAt, surface) {
   for (let i = 0; i < count; i++) {
     const theta = rng() * Math.PI * 2
     // Prefer the waterline band; a few further inland as fall debris.
-    const r = rng() < 0.72 ? range(rng, 0.78, 1.04) : range(rng, 0.55, 0.78)
-    const ground = heightAt(Math.min(0.98, r), theta) * height
+    // Keep talus on the rendered land surface. Sampling beyond r=1 and then
+    // applying a minimum Y made occasional boulders hover outside the coast.
+    const r = rng() < 0.72 ? range(rng, 0.78, 0.96) : range(rng, 0.55, 0.78)
+    const ground = meshGroundY(r, theta, height, heightAt, landform)
     const s = range(rng, 3.5, 12) * sizeK
     const rock = new THREE.Mesh(pick(rng, geos), rng() < 0.55 ? matLight : matDark)
-    const y = Math.max(ground * 0.85, propMinGround() * 0.35) + s * range(rng, 0.15, 0.4)
+    const y = ground + s * range(rng, 0.15, 0.4)
     rock.position.set(Math.cos(theta) * radius * r, y, Math.sin(theta) * radius * r)
     // Flatten into the beach / stack like real talus, not floating orbs.
     rock.scale.set(
@@ -1458,13 +1881,13 @@ function buildTalus(rng, radius, height, heightAt, surface) {
   const pebbles = 6 + Math.floor(rng() * 8)
   for (let i = 0; i < pebbles; i++) {
     const theta = rng() * Math.PI * 2
-    const r = range(rng, 0.82, 1.02)
-    const ground = heightAt(Math.min(0.98, r), theta) * height
+    const r = range(rng, 0.82, 0.96)
+    const ground = meshGroundY(r, theta, height, heightAt, landform)
     const s = range(rng, 1.2, 4) * sizeK
     const rock = new THREE.Mesh(pick(rng, geos), matDark)
     rock.position.set(
       Math.cos(theta) * radius * r,
-      Math.max(ground * 0.8, propMinGround() * 0.3) + s * 0.25,
+      ground + s * 0.25,
       Math.sin(theta) * radius * r
     )
     rock.scale.set(s, s * range(rng, 0.35, 0.6), s * range(rng, 0.7, 1.1))

@@ -1,9 +1,20 @@
 let ctx = null
 /** Web Audio graph (SFX, thrusters, weapons, synth) + voice callouts. */
 let sfxEnabled = true
+let sfxVolume = 1
 /** HTMLAudio title / ambient / death tracks. */
 let musicEnabled = true
+let musicVolume = 1
+/** Sea wash/lapping has its own level so it can sit under the rest of the mix. */
+let seaVolume = 1
 let masterGain = null
+let sfxBusGain = null
+let seaBusGain = null
+
+function clampVolume(value, fallback = 1) {
+  const n = Number(value)
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : fallback
+}
 
 function getContext() {
   if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)()
@@ -30,15 +41,18 @@ function makeImpulseResponse(audio, seconds, decay) {
  * Shared output so SFX mute can zero the whole Web Audio graph at once.
  *
  * Master bus is masterGain → [dry + dark reverb send] → compressor → out.
- * Everything in the game already connects here, so the whole SFX set gets the
- * space and glue for free — no call site knows about it. Mute still works
- * because both paths hang off masterGain.
+ * SFX and sea each feed a small level bus before the shared space/glue, so
+ * their sliders remain independent without changing every sound call site.
  */
 function getMasterDestination() {
   const audio = getContext()
   if (!masterGain) {
     masterGain = audio.createGain()
-    masterGain.gain.value = sfxEnabled ? 1 : 0
+    masterGain.gain.value = 1
+    sfxBusGain = audio.createGain()
+    sfxBusGain.gain.value = sfxVolume
+    seaBusGain = audio.createGain()
+    seaBusGain.gain.value = seaVolume
 
     // Glue compressor: stops a missile volley + thrusters + hull hits from
     // summing into clipping, and holds a consistent perceived loudness.
@@ -64,19 +78,41 @@ function getMasterDestination() {
     const verb = audio.createConvolver()
     verb.buffer = makeImpulseResponse(audio, 2.4, 3.4)
     masterGain.connect(send).connect(tone).connect(verb).connect(comp)
+    sfxBusGain.connect(masterGain)
+    seaBusGain.connect(masterGain)
   }
-  return masterGain
+  return sfxBusGain
+}
+
+function getSeaDestination() {
+  getMasterDestination()
+  return seaBusGain
 }
 
 function applyMusicMute() {
-  const muted = !musicEnabled
+  const muted = !musicEnabled || musicVolume <= 0
   if (titleMusic) titleMusic.muted = muted
   if (deathMusic) deathMusic.muted = muted
   if (ambientMusic) ambientMusic.muted = muted
 }
 
+function applySeaVolume() {
+  if (seaBusGain) seaBusGain.gain.value = seaVolume
+  if (seaAmbient) {
+    try {
+      const audio = getContext()
+      const now = audio.currentTime
+      seaAmbient.gain.gain.cancelScheduledValues(now)
+      seaAmbient.gain.gain.setValueAtTime(Math.max(0.0001, seaAmbient.gain.gain.value), now)
+      seaAmbient.gain.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME * seaVolume, now + 0.12)
+    } catch {
+      /* */
+    }
+  }
+}
+
 function applySfxMute() {
-  if (masterGain) masterGain.gain.value = sfxEnabled ? 1 : 0
+  if (sfxBusGain) sfxBusGain.gain.value = sfxVolume
   if (!sfxEnabled && window.speechSynthesis) {
     try { window.speechSynthesis.cancel() } catch { /* */ }
     try { stopAnnounceBed() } catch { /* */ }
@@ -84,11 +120,48 @@ function applySfxMute() {
 }
 
 export function isSfxEnabled() {
-  return sfxEnabled
+  return sfxVolume > 0
+}
+
+export function getSfxVolume() {
+  return sfxVolume
+}
+
+export function setSfxVolume(value) {
+  sfxVolume = clampVolume(value)
+  sfxEnabled = sfxVolume > 0
+  applySfxMute()
+  return sfxVolume
 }
 
 export function isMusicEnabled() {
-  return musicEnabled
+  return musicVolume > 0
+}
+
+export function getMusicVolume() {
+  return musicVolume
+}
+
+export function setMusicVolume(value) {
+  musicVolume = clampVolume(value)
+  musicEnabled = musicVolume > 0
+  applyMusicMute()
+  for (const el of [titleMusic, deathMusic, ambientMusic]) {
+    if (!el) continue
+    const base = el._drownedBaseVolume ?? el.volume
+    fadeMusicVolume(el, base * musicVolume, 0.08)
+  }
+  return musicVolume
+}
+
+export function getSeaVolume() {
+  return seaVolume
+}
+
+export function setSeaVolume(value) {
+  seaVolume = clampVolume(value)
+  applySeaVolume()
+  return seaVolume
 }
 
 /** @deprecated true if either channel is on */
@@ -97,13 +170,11 @@ export function isSoundEnabled() {
 }
 
 export function setSfxEnabled(enabled) {
-  sfxEnabled = enabled !== false
-  applySfxMute()
+  setSfxVolume(enabled !== false ? (sfxVolume > 0 ? sfxVolume : 1) : 0)
 }
 
 export function setMusicEnabled(enabled) {
-  musicEnabled = enabled !== false
-  applyMusicMute()
+  setMusicVolume(enabled !== false ? (musicVolume > 0 ? musicVolume : 1) : 0)
 }
 
 /** Master on/off — sets both SFX and music (legacy). */
@@ -147,8 +218,6 @@ const SFX_FILES = [
   'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
   // CC0 OpenGameArt field recording; see public/audio/sfx/SEAGULL_CREDITS.txt
   'seagull_ambient_1.wav',
-  // CC-BY 3.0 OpenGameArt sample; see public/audio/sfx/CHICKEN_SQUAWK_CREDITS.txt
-  'chicken_squawk.ogg',
   // Sounding (P) — CC0 Freesound samples; see public/audio/sfx/SONAR_CREDITS.txt
   'sonar_ping.ogg', 'sonar_return.ogg'
 ]
@@ -171,7 +240,7 @@ function ensureSfx() {
 }
 
 // One-shot or looping sample. Returns { source, gain, volume } or null if not loaded.
-function playSample(name, { volume = 0.5, rate = 1, loop = false, fadeIn = 0, delay = 0 } = {}) {
+function playSample(name, { volume = 0.5, rate = 1, loop = false, fadeIn = 0, delay = 0, duration = 0 } = {}) {
   const buf = sfxBuffers.get(name)
   if (!buf) return null
   const audio = getContext()
@@ -189,6 +258,7 @@ function playSample(name, { volume = 0.5, rate = 1, loop = false, fadeIn = 0, de
   }
   source.connect(gain).connect(getMasterDestination())
   source.start(now)
+  if (duration > 0 && !loop) source.stop(now + duration)
   // Store target volume — AudioParam.value is unreliable after ramps, and
   // stopSampleNodes needs a real peak to fade from (not the 0.0001 floor).
   return { source, gain, volume }
@@ -203,13 +273,31 @@ export function playGullCall() {
   })
 }
 
-/** A sharp, chicken-like protest when a stray shot catches a gull. */
+/**
+ * A sharp, alarmed gull protest when a stray shot catches the flock.
+ *
+ * This is deliberately a global UI/comedy cue: it connects straight to the
+ * master SFX bus rather than any world-positioned emitter, so range never
+ * attenuates it. The synth fallback makes the first hit audible even if the
+ * sample is still decoding after the player's initial gesture.
+ */
 export function playGullSquawk() {
   ensureSfx()
-  return !!playSample('chicken_squawk.ogg', {
-    volume: 0.18,
-    rate: 0.92 + Math.random() * 0.16
-  })
+  if (playSample('seagull_ambient_1.wav', {
+    // Comedy hit: this must cut through the diesel and sea bed, unlike the
+    // deliberately distant ambient flock call above.
+    volume: 0.78,
+    // Pitch the natural call up and cut it short so it reads as alarm, not
+    // relaxed background ambience.
+    rate: 1.34 + Math.random() * 0.16,
+    duration: 0.72
+  })) return true
+
+  // Do not leave the gag silent while the OGG is loading.
+  tone({ type: 'triangle', freq: 2100, freqEnd: 820, duration: 0.17, peak: 0.34 })
+  tone({ type: 'triangle', freq: 2450, freqEnd: 980, duration: 0.15, peak: 0.3, delay: 0.12 })
+  noiseBurst({ duration: 0.045, filterFreq: 3600, peak: 0.12, drive: 1.1, delay: 0.02 })
+  return true
 }
 
 function stopSampleNodes(nodes, fadeOut = 0.12) {
@@ -267,7 +355,7 @@ function distortionCurve(amount) {
   return curve
 }
 
-function noiseBurst({ duration, filterFreq = 800, peak = 0.4, drive = 0, delay = 0 }) {
+function noiseBurst({ duration, filterFreq = 800, peak = 0.4, drive = 0, delay = 0, destination = null }) {
   const audio = getContext()
   const start = audio.currentTime + delay
   const bufferSize = Math.floor(audio.sampleRate * duration)
@@ -292,7 +380,7 @@ function noiseBurst({ duration, filterFreq = 800, peak = 0.4, drive = 0, delay =
     tail = shaper
   }
   source.connect(filter)
-  tail.connect(gain).connect(getMasterDestination())
+  tail.connect(gain).connect(destination ?? getMasterDestination())
   source.start(start)
 }
 
@@ -739,7 +827,7 @@ function scheduleSeaLap() {
   const wait = 2200 + Math.random() * 3200
   seaLapTimer = setTimeout(() => {
     seaLapTimer = null
-    if (!seaAmbient || !sfxEnabled) {
+    if (!seaAmbient || seaVolume <= 0) {
       scheduleSeaLap()
       return
     }
@@ -748,7 +836,8 @@ function scheduleSeaLap() {
       duration: 0.4 + Math.random() * 0.55,
       filterFreq: 220 + Math.random() * 280,
       peak,
-      drive: 0.6 + Math.random() * 0.8
+      drive: 0.6 + Math.random() * 0.8,
+      destination: getSeaDestination()
     })
     // Occasional deeper wash under the pile.
     if (Math.random() < 0.35) {
@@ -757,7 +846,8 @@ function scheduleSeaLap() {
         filterFreq: 120 + Math.random() * 80,
         peak: peak * 0.7,
         drive: 1.2,
-        delay: 0.08
+        delay: 0.08,
+        destination: getSeaDestination()
       })
     }
     scheduleSeaLap()
@@ -778,7 +868,7 @@ export function startSeaAmbient() {
       const g = seaAmbient.gain
       g.gain.cancelScheduledValues(now)
       g.gain.setValueAtTime(Math.max(0.0001, g.gain.value), now)
-      g.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME, now + 0.6)
+      g.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME * seaVolume, now + 0.6)
     } catch {
       /* */
     }
@@ -814,8 +904,8 @@ export function startSeaAmbient() {
   const gain = audio.createGain()
   const now = audio.currentTime
   gain.gain.setValueAtTime(0.0001, now)
-  gain.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME, now + 2.8)
-  source.connect(high).connect(band).connect(low).connect(gain).connect(getMasterDestination())
+  gain.gain.linearRampToValueAtTime(SEA_AMBIENT_VOLUME * seaVolume, now + 2.8)
+  source.connect(high).connect(band).connect(low).connect(gain).connect(getSeaDestination())
   source.start()
   seaAmbient = { source, gain }
   scheduleSeaLap()
@@ -1649,8 +1739,9 @@ const AMBIENT_VOLUME = 0.15 // deliberately quiet — background gameplay music,
 function playFile(name, { loop = false, volume = 0.5 } = {}) {
   const el = new Audio(`audio/${name}`)
   el.loop = loop
-  el.volume = volume
-  el.muted = !musicEnabled
+  el._drownedBaseVolume = volume
+  el.volume = volume * musicVolume
+  el.muted = !musicEnabled || musicVolume <= 0
   el.play().catch(() => {}) // blocked without a user gesture; the existing
   // click/keydown listeners above already resume the Web Audio context on
   // first interaction, and the menu/game is always reached via a click.
@@ -1730,8 +1821,9 @@ function fadeOutCurrentMusic(seconds = MUSIC_FADE_S) {
 
 export function playTitleMusic() {
   fadeOutCurrentMusic()
-  titleMusic = playFile('intro.mp3', { loop: true, volume: 0 })
-  fadeMusicVolume(titleMusic, TITLE_VOLUME, MUSIC_FADE_S)
+  titleMusic = playFile('intro.mp3', { loop: true, volume: TITLE_VOLUME })
+  titleMusic.volume = 0
+  fadeMusicVolume(titleMusic, TITLE_VOLUME * musicVolume, MUSIC_FADE_S)
 }
 
 export function stopTitleMusic() {
@@ -1743,8 +1835,9 @@ export function stopTitleMusic() {
 
 export function playDeathMusic() {
   fadeOutCurrentMusic()
-  deathMusic = playFile('ded.mp3', { loop: true, volume: 0 })
-  fadeMusicVolume(deathMusic, DEATH_VOLUME, MUSIC_FADE_S)
+  deathMusic = playFile('ded.mp3', { loop: true, volume: DEATH_VOLUME })
+  deathMusic.volume = 0
+  fadeMusicVolume(deathMusic, DEATH_VOLUME * musicVolume, MUSIC_FADE_S)
 }
 
 // fadeIn only applies to the FIRST track of a session (the title -> ambient
@@ -1754,9 +1847,12 @@ export function playDeathMusic() {
 function playNextAmbientTrack(fadeIn = false) {
   const track = AMBIENT_TRACKS[ambientTrackIndex % AMBIENT_TRACKS.length]
   ambientTrackIndex++
-  ambientMusic = playFile(track, { loop: false, volume: fadeIn ? 0 : AMBIENT_VOLUME })
+  ambientMusic = playFile(track, { loop: false, volume: AMBIENT_VOLUME })
   ambientMusic.onended = () => playNextAmbientTrack(false)
-  if (fadeIn) fadeMusicVolume(ambientMusic, AMBIENT_VOLUME, MUSIC_FADE_S)
+  if (fadeIn) {
+    ambientMusic.volume = 0
+    fadeMusicVolume(ambientMusic, AMBIENT_VOLUME * musicVolume, MUSIC_FADE_S)
+  }
 }
 
 export function startAmbientMusic() {

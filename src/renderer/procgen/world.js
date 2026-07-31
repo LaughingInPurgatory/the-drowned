@@ -152,7 +152,13 @@ function coastPosition(rng, host, ownShell = 0) {
   const probeZ = host.position[2] + dirZ * (host.radius * 3 + 2000)
   const shore =
     islandShorelineToward(host, probeX, probeZ) - SHORE_KEEP_OUT
-  const jetty = range(rng, 50, 140) + Math.min(120, ownShell * 0.12)
+  // Ports are waterfront infrastructure, not offshore markers: keep their
+  // centre close enough that the quay reads as part of the island from sea.
+  // Keep the broad placement shell above unchanged for unrelated bodies.
+  const isPort = ownShell === PORT_CLEARANCE
+  const jetty = isPort
+    ? range(rng, 30, 90) + Math.min(42, ownShell * 0.08)
+    : range(rng, 50, 140) + Math.min(120, ownShell * 0.12)
   const r = Math.max(80, shore) + jetty
   return [host.position[0] + dirX * r, 0, host.position[2] + dirZ * r]
 }

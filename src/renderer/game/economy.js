@@ -208,7 +208,7 @@ export function buyGood(gameState, bodyId, goodId, quantity) {
   if (available < qty) throw new Error('Not enough stock available at this bay')
   // Purchases go into station storage — player transfers to ship separately.
   const cost = getPrice(gameState, bodyId, goodId, 'buy') * qty
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
 
   consumeMarketStock(gameState, bodyId, goodId, qty)
   gameState.player.credits -= cost
@@ -319,7 +319,7 @@ export function buyMinedOre(gameState, bodyId, goodId, quantity) {
   const available = getMarketAvailable(gameState, bodyId, goodId)
   if (available < qty) throw new Error('Not enough stock available at this bay')
   const cost = getPrice(gameState, bodyId, goodId, 'buy') * qty
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
 
   consumeMarketStock(gameState, bodyId, goodId, qty)
   gameState.player.credits -= cost
@@ -357,7 +357,7 @@ export function repairShip(gameState, body = null) {
     (d) => d.destroyed || d.hull < (d.maxHull ?? d.hull) || d.armor < (d.maxArmor ?? d.armor)
   )
   if (cost === 0 && !dronesNeed) throw new Error('Ship is already fully repaired')
-  if (cost > 0 && gameState.player.credits < cost) throw new Error('Not enough credits to repair')
+  if (cost > 0 && gameState.player.credits < cost) throw new Error('Not enough Barter Units to repair')
 
   if (cost > 0) {
     gameState.player.credits -= cost
@@ -480,7 +480,7 @@ export function purchaseShip(gameState, bodyId, newClassId, instanceName) {
   const newClass = getShipClass(newClassId)
   if (newClass.alien || newClass.npcOnly) throw new Error('That hull is not for sale')
   const cost = playerBuyCost(gameState, newClass.price)
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
 
   gameState.player.credits -= cost
   const hull = {
@@ -735,7 +735,7 @@ export function buyShipParts(gameState, bodyId, quantity) {
   const qty = Math.max(0, Math.floor(Number(quantity) || 0))
   if (qty < 1) throw new Error('Invalid quantity')
   const cost = getPrice(gameState, bodyId, SHIP_PARTS_GOOD_ID, 'buy') * qty
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
 
   gameState.player.credits -= cost
   // Into station bay — transfer to ship when needed.
@@ -770,7 +770,7 @@ export function buyWeapon(gameState, bodyId, weaponId, quantity = 1) {
   const qty = Math.max(0, Math.floor(Number(quantity) || 0))
   if (qty < 1) throw new Error('Invalid quantity')
   const cost = playerBuyCost(gameState, weapon.price) * qty
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
   gameState.player.credits -= cost
   const storage = storageFor(gameState, bodyId)
   storage.weapons[weaponId] = (storage.weapons[weaponId] ?? 0) + qty
@@ -855,7 +855,7 @@ export function buyAccessory(gameState, bodyId, accessoryId, quantity = 1) {
   const qty = Math.max(0, Math.floor(Number(quantity) || 0))
   if (qty < 1) throw new Error('Invalid quantity')
   const cost = playerBuyCost(gameState, accessory.price) * qty
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
   gameState.player.credits -= cost
   const storage = storageFor(gameState, bodyId)
   storage.accessories[accessoryId] = (storage.accessories[accessoryId] ?? 0) + qty
@@ -938,7 +938,7 @@ export function buyDrone(gameState, bodyId, droneId = DEFAULT_DRONE_ID, quantity
   const qty = Math.max(0, Math.floor(Number(quantity) || 0))
   if (qty < 1) throw new Error('Invalid quantity')
   const cost = playerBuyCost(gameState, price) * qty
-  if (gameState.player.credits < cost) throw new Error('Not enough credits')
+  if (gameState.player.credits < cost) throw new Error('Not enough Barter Units')
   gameState.player.credits -= cost
   const storage = storageFor(gameState, bodyId)
   storage.drones[droneId] = (storage.drones[droneId] ?? 0) + qty

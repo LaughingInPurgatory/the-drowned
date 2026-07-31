@@ -304,8 +304,8 @@ export function createCharacterUI(container, gameState) {
               <div class="rename-msg ship-rename-msg"></div>
             </div>
             <div class="stat-row inline">
-              <span class="label">Credits</span>
-              <span class="value credits">0 cr</span>
+              <span class="label">Barter Units</span>
+              <span class="value credits">0 BU</span>
             </div>
             <div class="stat-row inline">
               <span class="label">Notoriety</span>
@@ -418,7 +418,7 @@ export function createCharacterUI(container, gameState) {
 
     if (creditsEl) {
       creditsEl.textContent =
-        `${Math.floor(gameState.player.credits || 0).toLocaleString()} cr`
+        `${Math.floor(gameState.player.credits || 0).toLocaleString()} BU`
     }
     if (lawValueEl) {
       lawValueEl.textContent = `${notorietyOf(gameState)} / ${MAX_LAW_STANDING}`

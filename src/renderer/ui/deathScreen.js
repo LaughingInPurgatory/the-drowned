@@ -540,7 +540,7 @@ export function createDeathScreen(container, onReturnToMenu) {
       }
 
       root.querySelector('.summary').innerHTML = `
-        Final credits: ${Math.floor(credits || 0)}cr<br/>
+        Final Barter Units: ${Math.floor(credits || 0)} BU<br/>
         Reputation earned: ${reputation ?? 0}<br/>
         ${name} is gone. Load your last save.
       `

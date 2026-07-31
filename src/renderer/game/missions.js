@@ -168,7 +168,7 @@ export function acceptMission(gameState, missionId, rng) {
       mission,
       gameState,
       'intel',
-      `Buy ${q}× ${goodName} at origin (with your credits), haul to the destination bay and sell. Multiple trips are fine — the contract completes when bought and sold totals reach ${q}.`
+      `Buy ${q}× ${goodName} at origin (with your Barter Units), haul to the destination bay and sell. Multiple trips are fine — the contract completes when bought and sold totals reach ${q}.`
     )
   }
 
