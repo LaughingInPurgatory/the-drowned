@@ -16,6 +16,7 @@ import {
   SITE_BLUEPRINT_CHANCE,
   SITE_SKILLBOOK_CHANCE,
   SYSTEM_SCAN_PROBE_COUNT,
+  SYSTEM_SCAN_CONTACT_RANGE,
   ANOMALY_REFRESH_INTERVAL_S
 } from './systemScan.js'
 import { oreTierForField } from './mining.js'
@@ -57,6 +58,21 @@ test('ensureSystemAnomalies is idempotent and rolls 0 or 1–4 sites', () => {
     assert.equal(ensureSystemAnomalies(s), s.spatialAnomalies)
   }
   assert.ok(any, 'at least one system in sample should have anomalies')
+})
+
+test('the full sea rolls a denser anomaly spread while local sonar stays 20 km', () => {
+  const system = {
+    ...fakeSystem('full-sea', 2),
+    bodies: Array.from({ length: 20 }, (_, i) => ({
+      id: `body-${i}`,
+      kind: 'island',
+      radius: 120,
+      position: [((i % 5) - 2) * 7000, 0, (Math.floor(i / 5) - 2) * 7000]
+    }))
+  }
+  const anomalies = ensureSystemAnomalies(system)
+  assert.ok(anomalies.length >= 6 && anomalies.length <= 12)
+  assert.equal(SYSTEM_SCAN_CONTACT_RANGE, 20000)
 })
 
 test('all 5 anomaly types roll across a large sample, each shaped per spec', () => {

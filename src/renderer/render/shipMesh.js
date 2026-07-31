@@ -1568,9 +1568,25 @@ function addSearchlight(group, hull, { withSpot = false } = {}) {
 
   let spot = null
   if (withSpot) {
-    // One SpotLight on the player, locked to the bow.
-    spot = new THREE.SpotLight(0xfff0d0, 0, 420, 0.12, 0.65, 1.1)
+    // One real, shadow-casting lamp on the player, locked to the bow. Three's
+    // modern lights use candela; 42 only brightened the immediate housing,
+    // while a marine searchlight needs enough throw to pick out a quay or hull.
+    spot = new THREE.SpotLight(0xfff0d0, 0, 240, 0.12, 0.58, 1.8)
     spot.castShadow = false
+    spot.shadow.mapSize.set(1024, 1024)
+    spot.shadow.camera.near = 0.5
+    spot.shadow.camera.far = 240
+    spot.shadow.bias = -0.00015
+    spot.shadow.normalBias = 0.35
+    // Keep this light in Three's renderer light list from the first frame.
+    // Toggling `visible`/`castShadow` used to change shader defines and allocate
+    // the shadow target on the L key press — a very noticeable hitch at sea.
+    // Zero intensity makes it optically off; manual shadow updates make it free
+    // while off, but the first frame warms the shadow target during loading.
+    spot.visible = true
+    spot.castShadow = true
+    spot.shadow.autoUpdate = false
+    spot.shadow.needsUpdate = true
     spot.position.set(0, 0.06, 0)
     root.add(spot)
     spot.target.position.set(0, 0, 160)
@@ -1602,9 +1618,16 @@ export function setSearchlightOn(mesh, on) {
     sl.beam.material.uniforms.uOpacity.value = enabled ? 0.38 : 0
   }
   if (sl.spot) {
-    sl.spot.intensity = enabled ? 42 : 0
-    sl.spot.distance = 380
-    sl.spot.visible = enabled
+    // Candela. At 100 m this lands around ten lux before cone falloff: enough
+    // to reveal a hull and shore detail at night, without bleaching daylight.
+    sl.spot.intensity = enabled ? 115000 : 0
+    sl.spot.distance = 240
+    // Never alter renderer-facing light topology here. It is pre-warmed at
+    // scene load, so switching the lamp is uniform-only instead of a compile.
+    sl.spot.visible = true
+    sl.spot.castShadow = true
+    sl.spot.shadow.autoUpdate = enabled
+    sl.spot.shadow.needsUpdate = enabled
   }
   return enabled
 }

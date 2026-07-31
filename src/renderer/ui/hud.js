@@ -180,6 +180,13 @@ const STYLE = `
   text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.7);
   white-space: nowrap; max-width: 42vw; overflow: hidden; text-overflow: ellipsis;
 }
+#hud .system-label .location-distance {
+  display: none; margin-top: 3px;
+  font-size: 9px; letter-spacing: 1.35px; text-transform: uppercase;
+  color: var(--ui-soft); opacity: 0.82;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.7);
+}
+#hud .system-label .location-distance.visible { display: block; }
 #hud .system-label .sys-name .sec-badge {
   display: inline-block; margin-left: 10px; padding: 1px 8px 2px;
   font-size: 11px; letter-spacing: 1px; vertical-align: middle;
@@ -279,7 +286,8 @@ const STYLE = `
   50% { opacity: 0.55; filter: brightness(1.35); }
 }
 
-/* Radar — flush to bottom of viewport; bare canvas (no panel chrome). */
+/* Radar stays visually transparent outside its projected grid. The worn patina
+   is painted by updateRadar and clipped to that grid, not this canvas box. */
 #radar {
   position: fixed; left: 50%; bottom: 0; top: auto; transform: translateX(-50%);
   width: 420px; height: 160px;
@@ -293,6 +301,7 @@ const STYLE = `
   filter: none;
 }
 #radar canvas {
+  position: relative; z-index: 1;
   display: block;
   width: 100%; height: 100%;
   margin: 0; padding: 0;
@@ -315,6 +324,7 @@ export function createHud(container) {
     <div class="scanlines"></div>
     <div class="system-label" role="button" tabindex="0" title="Sounding (B)" aria-label="Sounding">
       <span class="sys-name">—</span>
+      <span class="location-distance"></span>
       <span class="nearest-body"><span class="nb-name"></span></span>
       <span class="waypoint-line"><span class="wp-tag">Waypoint:</span><span class="wp-name"></span></span>
       <span class="sys-scan-hint">Sounding (B)</span>
@@ -405,6 +415,7 @@ export function createHud(container) {
   const velocityFill = hud.querySelector('.velocity .fill')
   const speedEl = hud.querySelector('.speed')
   const systemNameEl = hud.querySelector('.system-label .sys-name')
+  const locationDistanceEl = hud.querySelector('.system-label .location-distance')
   const nearestBodyEl = hud.querySelector('.system-label .nearest-body')
   const nearestBodyNameEl = hud.querySelector('.system-label .nearest-body .nb-name')
   const waypointLineEl = hud.querySelector('.system-label .waypoint-line')
@@ -415,6 +426,7 @@ export function createHud(container) {
   const targetBarsEl = hud.querySelector('.target-panel .tp-bars')
   let lastSystemLabelKey = null
   let lastNearestBodyName = undefined
+  let lastLocationDistance = undefined
   let lastWaypointName = undefined
 
   function pct(value, max) {
@@ -449,6 +461,7 @@ export function createHud(container) {
     // is the overall (unsigned) velocity magnitude shown in the text readout.
     // nearestBodyName: string when within HUD proximity of an island /
     // station/settlement; null/undefined hides the line.
+    // nearestBodyDistance: formatted surface range, shown beneath the place.
     // securityRating: 0–6 system security shown beside the name.
     // waypointName: active chart/overview waypoint; null hides the line.
     update(
@@ -458,6 +471,7 @@ export function createHud(container) {
       forwardSpeed,
       systemName = null,
       nearestBodyName = null,
+      nearestBodyDistance = null,
       securityRating = null,
       waypointName = null
     ) {
@@ -509,6 +523,13 @@ export function createHud(container) {
           nearestBodyNameEl.textContent = ''
           nearestBodyEl.classList.remove('visible')
         }
+      }
+
+      const rangeText = nearestBodyDistance || null
+      if (rangeText !== lastLocationDistance && locationDistanceEl) {
+        lastLocationDistance = rangeText
+        locationDistanceEl.textContent = rangeText ? `Range ${rangeText}` : ''
+        locationDistanceEl.classList.toggle('visible', !!rangeText)
       }
 
       const wpName = waypointName || null
@@ -601,9 +622,8 @@ export function createHud(container) {
      * @param {null|Array<{ id?: string, name: string }|string>} hops remaining systems (dest last)
      */
     // contacts: [{ x, y, z, kind }] ship-local (x=right, y=up, z=forward).
-    // 3D rectangular floor grid (heading-up) — rotates with ship via local frame.
-    // Bare canvas (no panel chrome). elapsed: gameState.simTime.
-    updateRadar(contacts, range, elapsed = 0) {
+    // The grid is heading-up; compass labels rotate around the ship frame.
+    updateRadar(contacts, range, elapsed = 0, heading = 0) {
       radarCtx.clearRect(0, 0, radarW, radarH)
       const { accentRgb } = getUiPalette()
       const ar = (a) => `rgba(${accentRgb.r},${accentRgb.g},${accentRgb.b},${a})`
@@ -652,6 +672,34 @@ export function createHud(container) {
         radarCtx.lineTo(b.sx, b.sy)
         radarCtx.stroke()
       }
+      // The radar is a perspective quad, so CSS border-radius cannot soften
+      // its corners. Round the actual projected path instead.
+      const roundedRadarPlanePath = (points, radius = 3.5) => {
+        const toward = (from, to, amount) => {
+          const dx = to.sx - from.sx
+          const dy = to.sy - from.sy
+          const len = Math.hypot(dx, dy) || 1
+          return { sx: from.sx + (dx / len) * amount, sy: from.sy + (dy / len) * amount }
+        }
+        const cut = points.map((point, i) => {
+          const prev = points[(i + points.length - 1) % points.length]
+          const next = points[(i + 1) % points.length]
+          const inLen = Math.hypot(prev.sx - point.sx, prev.sy - point.sy)
+          const outLen = Math.hypot(next.sx - point.sx, next.sy - point.sy)
+          return {
+            from: toward(point, prev, Math.min(radius, inLen * 0.22)),
+            to: toward(point, next, Math.min(radius, outLen * 0.22))
+          }
+        })
+        radarCtx.beginPath()
+        radarCtx.moveTo(cut[0].from.sx, cut[0].from.sy)
+        for (let i = 0; i < points.length; i++) {
+          radarCtx.quadraticCurveTo(points[i].sx, points[i].sy, cut[i].to.sx, cut[i].to.sy)
+          const next = cut[(i + 1) % points.length].from
+          radarCtx.lineTo(next.sx, next.sy)
+        }
+        radarCtx.closePath()
+      }
 
       // Soft rectangular floor fill (y = 0).
       {
@@ -659,20 +707,50 @@ export function createHud(container) {
         const c1 = project(U, 0, -U)
         const c2 = project(U, 0, U)
         const c3 = project(-U, 0, U)
-        radarCtx.beginPath()
-        radarCtx.moveTo(c0.sx, c0.sy)
-        radarCtx.lineTo(c1.sx, c1.sy)
-        radarCtx.lineTo(c2.sx, c2.sy)
-        radarCtx.lineTo(c3.sx, c3.sy)
-        radarCtx.closePath()
+        const plane = [c0, c1, c2, c3]
+        // Ground the floating display against bright water without introducing
+        // a rectangular HUD card behind it.
+        radarCtx.save()
+        roundedRadarPlanePath(plane)
+        radarCtx.fillStyle = 'rgba(0,0,0,0.32)'
+        radarCtx.shadowColor = 'rgba(0,0,0,0.8)'
+        radarCtx.shadowBlur = 12
+        radarCtx.shadowOffsetY = 5
+        radarCtx.fill()
+        radarCtx.restore()
+        roundedRadarPlanePath(plane)
         radarCtx.fillStyle = 'rgba(6,12,22,0.4)'
         radarCtx.fill()
+
+        // Worn metal / salt patina belongs to the radar plane, not the
+        // rectangular canvas around it. Clip it before the crisp grid and
+        // contacts are drawn on top.
+        radarCtx.save()
+        roundedRadarPlanePath(plane)
+        radarCtx.clip()
+        const patina = radarCtx.createLinearGradient(c0.sx, c0.sy, c2.sx, c2.sy)
+        patina.addColorStop(0, 'rgba(155,70,35,0.28)')
+        patina.addColorStop(0.32, 'rgba(85,42,25,0.11)')
+        patina.addColorStop(0.7, 'rgba(6,10,16,0.04)')
+        patina.addColorStop(1, 'rgba(36,18,12,0.25)')
+        radarCtx.fillStyle = patina
+        radarCtx.fillRect(0, 0, radarW, radarH)
+        radarCtx.strokeStyle = 'rgba(226,180,128,0.1)'
+        radarCtx.lineWidth = 0.65
+        for (let i = -radarH; i < radarW + radarH; i += 31) {
+          radarCtx.beginPath()
+          radarCtx.moveTo(i, radarH)
+          radarCtx.lineTo(i + radarH * 0.42, 0)
+          radarCtx.stroke()
+        }
+        radarCtx.restore()
+
         radarCtx.strokeStyle = ar(0.4)
         radarCtx.lineWidth = 1.2
         radarCtx.stroke()
       }
 
-      // Floor grid lines (ship-local — whole plane turns with hull via contacts).
+      // Floor grid lines (ship-local / heading-up).
       radarCtx.strokeStyle = ar(0.18)
       radarCtx.lineWidth = 1
       const divs = 4
@@ -692,6 +770,21 @@ export function createHud(container) {
       // Stronger ship axes on the floor.
       line(project(0, 0, -U), project(0, 0, U), ar(0.5), 1.3)
       line(project(-U, 0, 0), project(U, 0, 0), ar(0.32), 1)
+
+      // World compass on the heading-up grid.
+      radarCtx.save()
+      radarCtx.font = 'bold 10px monospace'
+      radarCtx.textAlign = 'center'
+      radarCtx.textBaseline = 'middle'
+      radarCtx.shadowColor = 'rgba(0,0,0,0.9)'
+      radarCtx.shadowBlur = 3
+      for (const [label, bearing] of [['N', 0], ['E', Math.PI / 2], ['S', Math.PI], ['W', Math.PI * 1.5]]) {
+        const relative = bearing - heading
+        const p = project(Math.sin(relative) * U * 0.88, 0, Math.cos(relative) * U * 0.88)
+        radarCtx.fillStyle = label === 'N' ? getUiPalette().bright : ar(0.82)
+        radarCtx.fillText(label, p.sx, p.sy)
+      }
+      radarCtx.restore()
 
       // Sweep wedge on the floor plane.
       {
@@ -717,7 +810,7 @@ export function createHud(container) {
         radarCtx.restore()
       }
 
-      // Own ship — nose along +Z (forward).
+      // Own ship — fixed forward in the heading-up frame.
       const origin = project(0, 0, 0)
       const nose = project(0, 0, 0.14)
       const ndx = nose.sx - origin.sx
@@ -857,6 +950,11 @@ export function createHud(container) {
           nearestBodyNameEl.textContent = ''
           nearestBodyEl.classList.remove('visible')
         }
+      }
+      if (locationDistanceEl) {
+        lastLocationDistance = null
+        locationDistanceEl.textContent = ''
+        locationDistanceEl.classList.remove('visible')
       }
     },
     element: hud

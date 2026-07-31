@@ -60,7 +60,8 @@ const STYLE = `
 }
 #missions-ui button.close {
   background: rgba(224,90,90,0.12); border: 1px solid rgba(224,90,90,0.5); color: #ffb3b3;
-  padding: 7px 16px; cursor: pointer; font-family: monospace; letter-spacing: 1px;
+  display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  cursor: pointer; font-family: monospace; font-size: 18px; line-height: 1;
   transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 #missions-ui button.close:hover { background: rgba(224,90,90,0.22); box-shadow: 0 2px 6px rgba(0,0,0,0.65); }
@@ -163,7 +164,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
     <div class="panel">
       <div class="header">
         <h2>Missions</h2>
-        <button class="close">Close</button>
+        <button type="button" class="close" aria-label="Close missions" title="Close missions">×</button>
       </div>
       <div class="content"></div>
     </div>

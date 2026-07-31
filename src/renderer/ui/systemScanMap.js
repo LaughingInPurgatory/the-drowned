@@ -1,11 +1,12 @@
 /**
- * 3D region sonar scan map — bodies + Anomalous Signals + 4 repositionable scan probes.
+ * 3D region sonar scan map — bodies + Anomalous Signals + 4 repositionable sonar probes.
  * Opened from the radar "Region Sonar Scan" button.
  */
 import * as THREE from 'three'
-import { getSystem, WORLD_RADIUS } from '../procgen/world.js'
+import { getSystem } from '../procgen/world.js'
 import {
   SYSTEM_SCAN_PROBE_COUNT,
+  SYSTEM_SCAN_CONTACT_RANGE,
   ensureSystemAnomalies,
   updateSystemScan,
   computeProbeSignal,
@@ -51,6 +52,7 @@ ${floatingPanelElevationCss('#system-scan-map .ssm-panel')}
   padding: 10px 16px; border-bottom: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.3);
   flex-shrink: 0;
   cursor: grab; user-select: none; touch-action: none;
+  background: repeating-linear-gradient(108deg, transparent 0 17px, rgba(255,230,200,0.025) 17px 18px, transparent 18px 41px);
 }
 #system-scan-map .ssm-header.dragging { cursor: grabbing; }
 #system-scan-map .ssm-header h2 {
@@ -59,8 +61,9 @@ ${floatingPanelElevationCss('#system-scan-map .ssm-panel')}
 }
 #system-scan-map .ssm-header .ssm-sub { font-size: 10px; opacity: 0.65; margin-left: 10px; }
 #system-scan-map button.ssm-close {
+  display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
   background: rgba(224,90,90,0.12); border: 1px solid rgba(224,90,90,0.5); color: #ffb3b3;
-  padding: 6px 14px; cursor: pointer; font-family: monospace; letter-spacing: 1px;
+  cursor: pointer; font-family: monospace; font-size: 18px; line-height: 1;
 }
 #system-scan-map button.ssm-close:hover {
   background: rgba(224,90,90,0.22); box-shadow: 0 2px 6px rgba(0,0,0,0.65);
@@ -68,7 +71,7 @@ ${floatingPanelElevationCss('#system-scan-map .ssm-panel')}
 #system-scan-map .ssm-body { flex: 1; display: flex; min-height: 0; }
 #system-scan-map .ssm-canvas-wrap {
   flex: 1; position: relative; min-width: 0;
-  background: radial-gradient(ellipse at center, #0a1428 0%, #040810 70%);
+  background: radial-gradient(ellipse at center, rgba(var(--ui-bg-r),var(--ui-bg-g),var(--ui-bg-b),0.8) 0%, rgba(var(--ui-bg2-r),var(--ui-bg2-g),var(--ui-bg2-b),0.96) 70%);
 }
 #system-scan-map canvas.ssm-canvas { width: 100%; height: 100%; display: block; cursor: grab; }
 #system-scan-map canvas.ssm-canvas.dragging { cursor: grabbing; }
@@ -88,7 +91,8 @@ ${floatingPanelElevationCss('#system-scan-map .ssm-panel')}
 #system-scan-map .ssm-legend .lg-y { color: #60ff90; }
 #system-scan-map .ssm-side {
   width: 240px; flex-shrink: 0; border-left: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.25);
-  padding: 10px 12px; overflow-y: auto; background: rgba(8,14,24,0.92);
+  padding: 10px 12px; overflow-y: auto;
+  background: linear-gradient(180deg, rgba(0,0,0,0.24), rgba(var(--ui-bg2-r),var(--ui-bg2-g),var(--ui-bg2-b),0.4));
 }
 #system-scan-map .ssm-side h3 {
   margin: 0 0 8px; font-weight: normal; font-size: 11px; letter-spacing: 1.5px;
@@ -154,25 +158,25 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       <div class="ssm-header">
         <div>
           <h2>Region Sonar Scan</h2>
-          <span class="ssm-sub">Deploy probes · form on signals · lock Anomalous Signals</span>
+          <span class="ssm-sub">Local 20 km contacts · deploy sonar probes · form on signals</span>
         </div>
-        <button type="button" class="ssm-close">Close</button>
+        <button type="button" class="ssm-close" aria-label="Close region sonar scan" title="Close region sonar scan">×</button>
       </div>
       <div class="ssm-body">
         <div class="ssm-canvas-wrap">
           <canvas class="ssm-canvas"></canvas>
-          <div class="ssm-hint">WASD pan · Drag rotate · Scroll zoom · Select probe · Click map to place · Form on the bright purple ring (~3 km from a fresh signal)</div>
+          <div class="ssm-hint">20 km contact radius · WASD pan · Drag rotate · Scroll zoom · Select probe · Click map to place · Form on the bright purple ring (~3 km from a fresh signal)</div>
           <div class="ssm-legend">
             <div class="lg-a">◆ PURPLE = Anomalous Signal</div>
-            <div class="lg-p">◇ CYAN = Scan probes</div>
+            <div class="lg-p">◇ CYAN = Sonar probes</div>
             <div class="lg-y">▲ GREEN = Your ship</div>
           </div>
         </div>
         <div class="ssm-side">
-          <h3>Scan Probes (4)</h3>
+          <h3>Sonar Probes (4)</h3>
           <div class="ssm-probes"></div>
           <div class="ssm-actions">
-            <button type="button" class="primary ssm-deploy">Deploy / Reset Formation</button>
+            <button type="button" class="primary ssm-deploy">Deploy / Reset Sonar Formation</button>
           </div>
           <div class="ssm-sig">
             <h3>Signals</h3>
@@ -245,6 +249,10 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   /** @type {{ id: number, active: boolean, position: number[], mesh: THREE.Object3D }[]} */
   let probes = []
   let selectedProbe = 0
+  // Auto-deployed probes follow the player's current area between map opens;
+  // manually placed formations are deliberately left alone.
+  let autoFormation = true
+  let autoFormationAnchor = null
   let raf = 0
   let lastT = 0
   let orbitYaw = 0.55
@@ -259,6 +267,24 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   const panKeys = new Set()
   /** Fresh-signal ideal ring — same as idealProbeScanRadius(0). */
   const FRESH_PROBE_R = idealProbeScanRadius(0)
+
+  function distanceFromShip(position) {
+    const ship = gameState.player.ship.position
+    return Math.hypot((position[0] ?? 0) - ship[0], (position[2] ?? 0) - ship[2])
+  }
+
+  /** Keep scan navigation and manual probe placement inside the local chart. */
+  function clampToContactRadius(position) {
+    const ship = gameState.player.ship.position
+    const dx = position[0] - ship[0]
+    const dz = position[2] - ship[2]
+    const distance = Math.hypot(dx, dz)
+    if (distance <= SYSTEM_SCAN_CONTACT_RANGE) return position
+    const scale = SYSTEM_SCAN_CONTACT_RANGE / distance
+    position[0] = ship[0] + dx * scale
+    position[2] = ship[2] + dz * scale
+    return position
+  }
 
   function shipClass() {
     try {
@@ -340,8 +366,9 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
   function deployFormation() {
     ensureProbes()
     const ship = gameState.player.ship.position
-    // Tight ring around the boat — player then moves probes onto signal rings.
-    const baseR = 900
+    // Start close enough to be visibly beside the boat, not somewhere in the
+    // wider region view. The player moves this ring to a signal when ready.
+    const baseR = 300
     for (let i = 0; i < probes.length; i++) {
       const a = (i / probes.length) * Math.PI * 2
       const p = probes[i]
@@ -350,6 +377,8 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       p.mesh.visible = true
       p.mesh.position.set(p.position[0], 0, p.position[2])
     }
+    autoFormation = true
+    autoFormationAnchor = [ship[0], ship[2]]
     renderProbeList()
   }
 
@@ -358,6 +387,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       p.active = false
       p.mesh.visible = false
     }
+    autoFormationAnchor = null
     renderProbeList()
   }
 
@@ -412,16 +442,20 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     const ship = gameState.player.ship.position
     const y0 = 0
 
-    // Haven Reach centre marker (not a star — world origin)
-    const home = new THREE.Mesh(
-      new THREE.SphereGeometry(90, 16, 12),
-      new THREE.MeshBasicMaterial({ color: 0xffe8a0 })
-    )
-    home.position.set(0, y0, 0)
-    bodyGroup.add(home)
+    // Haven Reach centre marker (not a star — world origin), only while it
+    // lies within this local scan's 20 km radius.
+    if (distanceFromShip([0, 0, 0]) <= SYSTEM_SCAN_CONTACT_RANGE) {
+      const home = new THREE.Mesh(
+        new THREE.SphereGeometry(90, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xffe8a0 })
+      )
+      home.position.set(0, y0, 0)
+      bodyGroup.add(home)
+    }
 
     for (const b of system.bodies) {
       if (b.kind === 'warpGate') continue
+      if (distanceFromShip(b.position) > SYSTEM_SCAN_CONTACT_RANGE) continue
       let r = 70
       let color = 0x9ac0e8
       if (b.kind === 'island') {
@@ -494,8 +528,8 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     bodyGroup.add(shipPin)
 
     // Local sea grid (world-sized would be unreadable at boat scale)
-    const gridSize = Math.min(WORLD_RADIUS * 1.2, 60000)
-    gridHelper = new THREE.GridHelper(gridSize, 30, 0x4a80b0, 0x243858)
+    const gridSize = SYSTEM_SCAN_CONTACT_RANGE * 2
+    gridHelper = new THREE.GridHelper(gridSize, 20, 0x4a80b0, 0x243858)
     gridHelper.position.set(ship[0], y0 - 8, ship[2])
     if (Array.isArray(gridHelper.material)) {
       gridHelper.material.forEach((m) => {
@@ -509,6 +543,19 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       gridHelper.material.depthWrite = false
     }
     guideGroup.add(gridHelper)
+    const contactBoundary = new THREE.Mesh(
+      new THREE.RingGeometry(SYSTEM_SCAN_CONTACT_RANGE - 70, SYSTEM_SCAN_CONTACT_RANGE + 70, 96),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd080,
+        transparent: true,
+        opacity: 0.48,
+        side: THREE.DoubleSide,
+        depthWrite: false
+      })
+    )
+    contactBoundary.rotation.x = -Math.PI / 2
+    contactBoundary.position.set(ship[0], y0 - 6, ship[2])
+    guideGroup.add(contactBoundary)
 
     // Range rings around the ship (local distance cues)
     for (const [r, op] of [
@@ -544,8 +591,10 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     const probePos = probes.map((p) => ({ active: p.active, position: p.position }))
     const pulse = 0.5 + 0.5 * Math.sin(performance.now() * 0.004)
 
+    const ship = gameState.player.ship.position
     for (const a of ensureSystemAnomalies(system, gameState.galaxy)) {
       if (a.status === 'completed' || a.status === 'despawning') continue
+      if (Math.hypot(a.position[0] - ship[0], a.position[2] - ship[2]) > SYSTEM_SCAN_CONTACT_RANGE) continue
       const known = a.fullyScanned
       const live = computeProbeSignal(a, probePos, cls)
       const sig = Math.max(a.signal ?? 0, live)
@@ -704,8 +753,12 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
       active: p.active,
       position: p.position
     }))
+    const ship = gameState.player.ship.position
     const list = ensureSystemAnomalies(system, gameState.galaxy).filter(
-      (a) => a.status !== 'completed' && a.status !== 'despawning'
+      (a) =>
+        a.status !== 'completed' &&
+        a.status !== 'despawning' &&
+        Math.hypot(a.position[0] - ship[0], a.position[2] - ship[2]) <= SYSTEM_SCAN_CONTACT_RANGE
     )
     const rows = list.map((a) => {
       const live = computeProbeSignal(a, probePos, cls)
@@ -717,8 +770,8 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
           ? 'Anomalous Signal'
           : 'Unidentified'
       const distM = Math.hypot(
-        a.position[0] - gameState.player.ship.position[0],
-        a.position[2] - gameState.player.ship.position[2]
+        a.position[0] - ship[0],
+        a.position[2] - ship[2]
       )
       const distLabel =
         distM >= 10000 ? `${(distM / 1000).toFixed(1)}km` : `${Math.round(distM)}m`
@@ -733,7 +786,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     sigListEl.innerHTML = rows.length
       ? rows.join('') +
         `<div style="margin-top:8px;font-size:10px;opacity:0.65;line-height:1.4">Click a signal to center. Locked: double-click sets waypoint. Place probes on the bright purple ring (ideal ≈ ${(FRESH_PROBE_R / 1000).toFixed(1)} km for a fresh signal; shrinks as it locks).</div>`
-      : `<div style="opacity:0.5;font-size:11px">No signatures in this region.</div>`
+      : `<div style="opacity:0.5;font-size:11px">No signatures within 20 km.</div>`
     sigListEl.querySelectorAll('.ssm-sig-row[data-anomaly-id]').forEach((el) => {
       el.addEventListener('click', () => {
         const id = el.dataset.anomalyId
@@ -811,10 +864,11 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     p[2] += fwdZ * forward + rightZ * strafe
     // Placement plane is the sea surface.
     p[1] = 0
+    clampToContactRadius(p)
   }
 
   /**
-   * Center on the player and zoom to nearby water + any signals within ~20 km.
+   * Center on the player and zoom to the 20 km local sonar contact area.
    */
   function frameSystem() {
     const system = getSystem(gameState.galaxy, gameState.player.currentSystemId)
@@ -826,16 +880,16 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         if (!b?.position) continue
         if (b.kind === 'warpGate') continue
         const d = Math.hypot(b.position[0] - ship[0], b.position[2] - ship[2])
-        if (d < 20000 && d > maxD) maxD = d
+        if (d < SYSTEM_SCAN_CONTACT_RANGE && d > maxD) maxD = d
       }
       for (const a of ensureSystemAnomalies(system, gameState.galaxy)) {
         if (a.status === 'completed' || a.status === 'despawning') continue
         const d = Math.hypot(a.position[0] - ship[0], a.position[2] - ship[2])
-        if (d < 35000 && d > maxD) maxD = d
+        if (d < SYSTEM_SCAN_CONTACT_RANGE && d > maxD) maxD = d
       }
     }
     orbitPitch = 0.78
-    orbitDist = Math.max(7000, Math.min(42000, maxD * 1.35 + 3500))
+    orbitDist = Math.max(7000, Math.min(30000, maxD * 1.2 + 2800))
   }
 
   function placeSelectedProbeAt(world) {
@@ -843,9 +897,10 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     if (!p) return
     p.active = true
     // Always on the water plane
-    p.position = [world.x, 0, world.z]
+    p.position = clampToContactRadius([world.x, 0, world.z])
     p.mesh.visible = true
     p.mesh.position.set(world.x, 0, world.z)
+    autoFormation = false
     renderProbeList()
   }
 
@@ -943,7 +998,7 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     (e) => {
       e.preventDefault()
       orbitDist *= e.deltaY > 0 ? 1.12 : 1 / 1.12
-      orbitDist = Math.max(2500, Math.min(90000, orbitDist))
+      orbitDist = Math.max(2500, Math.min(30000, orbitDist))
     },
     { passive: false }
   )
@@ -975,7 +1030,11 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     floating.restore()
     root.classList.add('visible')
     ensureProbes()
-    if (!probes.some((p) => p.active)) deployFormation()
+    const ship = gameState.player.ship.position
+    const autoFormationIsStale =
+      autoFormation &&
+      (!autoFormationAnchor || Math.hypot(ship[0] - autoFormationAnchor[0], ship[2] - autoFormationAnchor[1]) > 2500)
+    if (!probes.some((p) => p.active) || autoFormationIsStale) deployFormation()
     rebuildBodies()
     frameSystem()
     renderProbeList()

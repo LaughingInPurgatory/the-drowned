@@ -109,6 +109,105 @@ const DEFAULT_LINES = [
   'Acknowledged. Proceeding as planned.'
 ]
 
+const PIRATE_COLLISION_LINES = [
+  'That was a hull of a greeting.',
+  'Watch it, or I’ll make you walk the plankton.',
+  'You’ve got some nerve ramming a pirate — and some barnacles.',
+  'That bump cost you a piece of eight knots.',
+  'Easy there, matey — this lane is under my buoy-risdiction.',
+  'One more hit and I’ll keel-haul your insurance premiums.',
+  'That was no small wake-up call.',
+  'You ram like a landlubber with a grudge.',
+  'Mind the paint — it’s the only honest thing on this ship.',
+  'I’ve seen gentler waves in a bathtub.',
+  'Was that a broadside or just broad driving?',
+  'Keep bumping me and I’ll call it piracy of personal space.',
+  'You nearly turned my ship into a stern lesson.',
+  'That scrape was a little too close for corsair comfort.',
+  'Steady on — you’re making my crew seasick by proxy.',
+  'You hit like a cannonball with stage fright.',
+  'That’s one way to make a splash in pirate territory.',
+  'Your steering has gone overboard, hasn’t it?',
+  'Next time send a warning shot, not a warning yacht.',
+  'Careful, captain — I charge extra for unsolicited boarding.'
+]
+
+const POLICE_COLLISION_LINES = [
+  'Collision noted. That was a buoy-law violation.',
+  'Ease off, captain. You’re in a no-ram zone.',
+  'That manoeuvre was a little too close for harbour work.',
+  'Mind your wake — we enforce personal buoy-ndaries.',
+  'You’ve been cited for reckless hull-gating.',
+  'Please keep your vessel in its proper lane of longitude.',
+  'That impact was out of line. Literally.',
+  'Careful: repeated bumping may lead to a stern warning.',
+  'This patrol prefers a civil port-to-port conversation.',
+  'Your navigation needs a course correction, captain.',
+  'That was an unauthorised exchange of hull information.',
+  'No harm done, but your seamanship is under review.',
+  'You cannot just dock and roll, captain.',
+  'Maintain separation. We do not run a bumper-boat service.',
+  'Another scrape and I’ll book you for assault and battery-powered travel.',
+  'That was a clear breach of the right of wave.',
+  'Watch the rudder. It’s not a warrant for contact.',
+  'You’re making this patrol feel a little boarded.',
+  'That was a poor showing of due course.',
+  'Consider this your first and buoy-official warning.'
+]
+
+const TRADER_COLLISION_LINES = [
+  'Careful! My margins are already thin enough to scrape.',
+  'That bump just added hull repair to the manifest.',
+  'Easy there — this cargo is not packed for impact.',
+  'You dent it, you buy it. That’s maritime retail.',
+  'That was a costly way to say hello.',
+  'Mind the hull — it’s carrying my entire quarterly forecast.',
+  'You’ve knocked my profit right into the drink.',
+  'Please don’t make my cargo hold a crash market.',
+  'Steady, captain — I’m transporting goods, not bump stocks.',
+  'That scrape was outside my operating budget.',
+  'You’re putting the dent in independent commerce.',
+  'My insurer will have a field day. A flooded field day.',
+  'That was a hostile takeover of my personal space.',
+  'I sell freight, not fender-benders.',
+  'Please steer clear; my ledger cannot absorb another hit.',
+  'That impact was not in the terms of trade.',
+  'You’re making waves in all the wrong markets.',
+  'Take it easy — my cargo has enough baggage already.',
+  'That was a bad deal for both our hulls.',
+  'You nearly turned this run into a loss at sea.'
+]
+
+const DROWNED_COLLISION_LINES = [
+  'Collision logged. You have breached the old line.',
+  'Maintain distance. Our hull remembers the depth charges.',
+  'Your contact is noted. Your course is not forgiven.',
+  'Stand off. This formation does not make room for amateurs.',
+  'That was an unscheduled joining of the fleet.',
+  'You struck a warship. Consider that a sinking feeling.',
+  'Clear the water. We are not taking on new wrecks.',
+  'Your hull touched ours. It will remember.',
+  'Maintain station, civilian. Preferably not inside ours.',
+  'That impact was not in the old navy’s standing orders.',
+  'You drift like a mine with poor discipline.',
+  'Contact report: one careless captain, still afloat.',
+  'Cease bumping. The flood already took enough.',
+  'You are too close to becoming part of the wreckage.',
+  'Your seamanship has gone under.',
+  'Do not test our hull. It has survived worse centuries.',
+  'That was a grave manoeuvre. Stay clear of the graveyard.',
+  'Formation integrity compromised by civilian enthusiasm.',
+  'Keep clear, or we will make this a deep-water lesson.',
+  'You have crossed our wake. Do not cross it again.'
+]
+
+function collisionLinesFor(npc) {
+  if (npc.isAlien || npc.faction === 'alien') return DROWNED_COLLISION_LINES
+  if (npc.faction === 'pirate') return PIRATE_COLLISION_LINES
+  if (npc.faction === 'police') return POLICE_COLLISION_LINES
+  return TRADER_COLLISION_LINES
+}
+
 function linesFor(npc, shipClass) {
   if (npc.isAlien || npc.faction === 'alien') return DROWNED_LINES
   if (npc.faction === 'pirate') return PIRATE_LINES
@@ -141,6 +240,16 @@ export function buildHailResponse(npc) {
   }
   const lines = linesFor(npc, shipClass)
   const line = pick(lines, seed)
+  const speaker =
+    npc.pilotName ||
+    (npc.isAlien || npc.faction === 'alien' ? 'Drowned Contact' : 'Unidentified Pilot')
+  return { speaker, line }
+}
+
+/** One-off, random flavour comms for a player–NPC hull collision. */
+export function buildCollisionResponse(npc, random = Math.random) {
+  const lines = collisionLinesFor(npc)
+  const line = lines[Math.floor(random() * lines.length)]
   const speaker =
     npc.pilotName ||
     (npc.isAlien || npc.faction === 'alien' ? 'Drowned Contact' : 'Unidentified Pilot')

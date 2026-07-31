@@ -147,6 +147,16 @@ test('overlapping ships are pushed apart without damage fields', () => {
   assert.equal(a.position[1], 1.5, 'Y is the sea’s — do not lift on impact')
 })
 
+test('ship collision callback reports an actual hull contact once', () => {
+  const a = { position: [0, 0, 0], velocity: [0, 0, 0] }
+  const b = { position: [2, 0, 0], velocity: [0, 0, 0] }
+  const contacts = []
+  resolveShipCollisions([{ ship: a, radius: 5 }, { ship: b, radius: 5 }], (first, second) => {
+    contacts.push([first.ship, second.ship])
+  })
+  assert.deepEqual(contacts, [[a, b]])
+})
+
 test('a slow scrape kills the closing way (ships stop into each other)', () => {
   const a = { position: [0, 0, 0], velocity: [4, 0, 0] } // closing under bounce threshold
   const b = { position: [8, 0, 0], velocity: [-4, 0, 0] }

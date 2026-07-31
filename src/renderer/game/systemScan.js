@@ -13,6 +13,8 @@ import { oreTierForField } from './mining.js'
 import { WORLD_RADIUS } from '../procgen/world.js'
 
 export const SYSTEM_SCAN_PROBE_COUNT = 4
+/** Local contacts shown by the Region Sonar Scan, centred on the player's boat. */
+export const SYSTEM_SCAN_CONTACT_RANGE = 20000
 /** Base seconds of “lock” progress needed at full strength (explorer reduces). */
 export const BASE_SCAN_LOCK_S = 14
 /** Site despawn after alien base destroyed. */
@@ -132,6 +134,7 @@ export function tickGalaxyAnomalies(galaxy, simTime) {
     // Full wipe — next ensureSystemAnomalies rolls presence + type anew.
     delete system.spatialAnomalies
     delete system.anomalyEpoch
+    delete system.anomalyDensityTag
     // ore_anomaly sites own a synthetic asteroidField body registered into
     // system.bodies (see ensureSystemAnomalies) — those don't live in
     // spatialAnomalies, so they need their own sweep on reshuffle.
@@ -151,6 +154,8 @@ const ANOMALY_MIN_SITE_SEP = 6000
 const ANOMALY_PLACE_ATTEMPTS = 64
 /** Migration stamp: re-place space-era / off-sea sites once. */
 const ANOMALY_SEA_MIGRATE_TAG = 'sea-v4'
+/** Density layout stamp: safely refreshes only untouched old sparse site sets. */
+const ANOMALY_DENSITY_TAG = 'sea-v5-dense'
 
 function bodyClearanceRadius(body) {
   if (!body) return 0
@@ -311,7 +316,7 @@ function migrateCrowdedHiddenAnomalies(system, epoch) {
 
 /**
  * Roll / ensure spatial anomalies for a system (idempotent within an epoch).
- * Full sea worlds always get 2–6 surface sites; sparse fixtures keep a 20%
+ * Full sea worlds always get 6–12 surface sites; sparse fixtures keep a 20%
  * presence roll for unit tests.
  *
  * @param {object} system
@@ -329,11 +334,21 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
     // Old saves: empty list on the full sea (20% space-era presence roll) or
     // off-map sites — re-seed once under the sea placer so Region Sonar has work.
     const fullWorld = (system.bodies?.length ?? 0) >= 20
+    const untouchedOldLayout =
+      fullWorld &&
+      system.anomalyDensityTag !== ANOMALY_DENSITY_TAG &&
+      system.spatialAnomalies.every(
+        (a) => a?.status === 'hidden' && !a.fullyScanned && (a.scanProgress ?? 0) <= 0
+      )
     if (
       fullWorld &&
-      system.spatialAnomalies.length === 0 &&
-      system.anomalySeaMigrated !== ANOMALY_SEA_MIGRATE_TAG
+      ((system.spatialAnomalies.length === 0 && system.anomalySeaMigrated !== ANOMALY_SEA_MIGRATE_TAG) || untouchedOldLayout)
     ) {
+      // An untouched legacy set has no player progress to preserve. Remove its
+      // synthetic ore fields too, then re-roll under the denser sea layout.
+      if (untouchedOldLayout && system.bodies?.some((b) => b.anomalySiteId)) {
+        system.bodies = system.bodies.filter((b) => !b.anomalySiteId)
+      }
       delete system.spatialAnomalies
       delete system.anomalyEpoch
       // Fall through to roll below.
@@ -356,13 +371,14 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
     return system.spatialAnomalies
   }
 
-  // Lower security rating → more sites. Full sea: always at least 2.
+  // Lower security rating → more sites. The sea is large enough to support a
+  // proper spread of sites; the scan UI deliberately shows only the local 10km.
   const lowSecurityBias = 1 - sec / 6
-  let count = fullWorld ? 2 : 1
-  if (rng() < 0.35 + lowSecurityBias * 0.45) count = fullWorld ? 3 : 2
-  if (rng() < 0.2 + lowSecurityBias * 0.35) count = fullWorld ? 4 : 3
-  if (rng() < 0.08 + lowSecurityBias * 0.25) count = fullWorld ? 5 : 4
-  count = Math.min(fullWorld ? 6 : 4, Math.max(fullWorld ? 2 : 1, count))
+  let count = fullWorld ? 6 : 1
+  if (rng() < 0.45 + lowSecurityBias * 0.4) count = fullWorld ? 8 : 2
+  if (rng() < 0.24 + lowSecurityBias * 0.38) count = fullWorld ? 10 : 3
+  if (rng() < 0.08 + lowSecurityBias * 0.28) count = fullWorld ? 12 : 4
+  count = Math.min(fullWorld ? 12 : 4, Math.max(fullWorld ? 6 : 1, count))
 
   const anomalies = []
   const occupied = []
@@ -461,6 +477,7 @@ export function ensureSystemAnomalies(system, epochOrGalaxy = 0) {
   system.anomalyEpoch = epoch
   system.anomalyOpenSpaceMigrated = epoch
   system.anomalySeaMigrated = ANOMALY_SEA_MIGRATE_TAG
+  system.anomalyDensityTag = ANOMALY_DENSITY_TAG
   return anomalies
 }
 

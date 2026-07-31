@@ -8,6 +8,7 @@ import {
   getBushProtos,
   getGrassProtos,
   getGrassMeshData,
+  getHeroTreeProtos,
   placePlantClone,
   isNatureReady
 } from './natureModels.js'
@@ -725,13 +726,16 @@ function propGeometries() {
 let _boulderGeos = null
 function boulderGeometries() {
   if (_boulderGeos) return _boulderGeos
-  const seed = mulberry32(0xb0a1d5)
   _boulderGeos = []
   for (let n = 0; n < 7; n++) {
     const detail = n % 3 === 0 ? 1 : 0
     const geo = new THREE.IcosahedronGeometry(1, detail)
     const pos = geo.attributes.position
     // Radial jitter + squash so they read as weathered rock, not gemstones.
+    // IcosahedronGeometry is non-indexed: a corner appears once per adjoining
+    // face. Its displacement must therefore be a function of its position,
+    // not a fresh random draw, or the shared-looking corners pull apart into
+    // the long triangular shards seen from the water.
     for (let i = 0; i < pos.count; i++) {
       let x = pos.getX(i)
       let y = pos.getY(i)
@@ -740,13 +744,17 @@ function boulderGeometries() {
       x /= len
       y /= len
       z /= len
+      const noise = (offset) => {
+        const value = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + n * 19.19 + offset) * 43758.5453
+        return value - Math.floor(value)
+      }
       const lobe =
         1 +
         Math.sin(x * 4.2 + n) * 0.12 +
         Math.cos(z * 5.1 + n * 1.7) * 0.1 +
-        (seed() - 0.5) * 0.22
-      const flat = 0.55 + seed() * 0.45
-      pos.setXYZ(i, x * lobe, y * lobe * flat, z * lobe * (0.85 + seed() * 0.25))
+        (noise(0) - 0.5) * 0.22
+      const flat = 0.55 + noise(1) * 0.45
+      pos.setXYZ(i, x * lobe, y * lobe * flat, z * lobe * (0.85 + noise(2) * 0.25))
     }
     pos.needsUpdate = true
     geo.computeVertexNormals()
@@ -981,8 +989,8 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
 
   let treeTarget = Math.floor((4 + cover * 28) * areaK)
   let bushTarget = Math.floor((10 + cover * 48) * areaK)
-  if (layout === 'copses') treeTarget = Math.floor(treeTarget * 1.55)
-  if (layout === 'forest') treeTarget = Math.floor(treeTarget * 2.4)
+  if (layout === 'copses') treeTarget = Math.floor(treeTarget * 1.85)
+  if (layout === 'forest') treeTarget = Math.floor(treeTarget * 3.1)
   if (landform === 'atoll') {
     treeTarget = Math.floor(treeTarget * 0.5)
     bushTarget = Math.floor(bushTarget * 0.75)
@@ -992,13 +1000,20 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
     bushTarget = Math.floor(bushTarget * 0.55)
   }
   // Forests need room for real clumps; hard caps used to flatten every island.
-  treeTarget = Math.min(layout === 'forest' ? 110 : layout === 'copses' ? 72 : 48, treeTarget)
-  bushTarget = Math.min(100, bushTarget)
+  treeTarget = Math.min(layout === 'forest' ? 160 : layout === 'copses' ? 94 : 54, treeTarget)
+  if (layout === 'forest') bushTarget = Math.floor(bushTarget * 1.55)
+  else if (layout === 'copses') bushTarget = Math.floor(bushTarget * 1.25)
+  bushTarget = Math.min(layout === 'forest' ? 150 : layout === 'copses' ? 118 : 100, bushTarget)
   const tryLimit = (n) => n * 6 + 10
 
   const treeProtos = getTreeProtos()
+  const heroTreeProtos = getHeroTreeProtos()
   const bushProtos = getBushProtos()
   const useNature = isNatureReady() && treeProtos.length > 0
+  const useHeroTrees = isNatureReady() && heroTreeProtos.length > 0 && !dry
+  const heroTreeLimit = layout === 'forest' ? 24 : layout === 'copses' ? 14 : 7
+  let heroTrees = 0
+  const woodlandPatches = []
 
   // Per-island growth character: some shores are scrub, some carry tall timber.
   const islandTreeBias = range(rng, 0.7, 1.45)
@@ -1023,11 +1038,15 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
 
     const baseH = rollTreeHeight()
     if (useNature) {
-      const proto = pick(rng, treeProtos)
+      // Detailed alpha-cut canopies carry the near shore silhouette; the
+      // lightweight pack fills the deeper woodland without a draw-call spike.
+      const hero = useHeroTrees && heroTrees < heroTreeLimit && rng() < 0.28
+      const proto = hero ? pick(rng, heroTreeProtos) : pick(rng, treeProtos)
       const targetH = baseH * sizeK * islandTreeBias * (dry ? 0.8 : 1)
       const scale = targetH / Math.max(0.2, proto.height)
       const y = seatPlantY(ground, targetH)
       group.add(placePlantClone(proto, x, y, z, scale, yaw, { dry }))
+      if (hero) heroTrees++
     } else {
       const geo = propGeometries()
       const mats = propMaterials()
@@ -1086,7 +1105,8 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
       if (!centre) continue
       // Copse radius in metres — small thicket vs small wood.
       const copseR =
-        layout === 'forest' ? range(rng, 18, 48) * Math.min(1.2, areaK) : range(rng, 10, 28) * Math.min(1.15, areaK)
+        layout === 'forest' ? range(rng, 22, 54) * Math.min(1.2, areaK) : range(rng, 12, 32) * Math.min(1.15, areaK)
+      woodlandPatches.push({ x: centre.x, z: centre.z, radius: copseR })
       const want = Math.min(perCopse + Math.floor(rng() * 4), treeTarget - trees)
       let placed = 0
       for (let a = 0; a < want * 8 && placed < want; a++) {
@@ -1106,10 +1126,27 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform) {
   // —— Bushes / plants / flowers (Quaternius foliage) ——
   let bushes = 0
   for (let attempt = 0; attempt < tryLimit(bushTarget) && bushes < bushTarget; attempt++) {
-    const spot = samplePlantSpot(rng, radius, height, heightAt, spotOpts({
-      rMin: 0.18,
-      rMax: 0.9
-    }))
+    let spot = null
+    // Forest floors should read as a layered habitat, not trees placed over a
+    // bare island. Most undergrowth belongs to the same woodland patches.
+    if (woodlandPatches.length && rng() < (layout === 'forest' ? 0.72 : 0.5)) {
+      const patch = pick(rng, woodlandPatches)
+      const angle = rng() * Math.PI * 2
+      const distance = patch.radius * Math.sqrt(rng()) * 1.18
+      const x = patch.x + Math.cos(angle) * distance
+      const z = patch.z + Math.sin(angle) * distance
+      const rLocal = Math.hypot(x, z) / Math.max(1, radius)
+      if (rLocal >= 0.14 && rLocal <= 0.9) {
+        const y = groundAtXZ(x, z, radius, height, heightAt, landform)
+        if (y >= propMinGround()) spot = { x, y, z }
+      }
+    }
+    if (!spot) {
+      spot = samplePlantSpot(rng, radius, height, heightAt, spotOpts({
+        rMin: 0.18,
+        rMax: 0.9
+      }))
+    }
     if (!spot) continue
     const yaw = rng() * Math.PI * 2
     if (useNature && bushProtos.length) {

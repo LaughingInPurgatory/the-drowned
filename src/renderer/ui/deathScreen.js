@@ -49,6 +49,8 @@ const STYLE = `
   /* Room under the pinned headline for killer/summary. */
   padding: 0 20px 6vh;
   box-sizing: border-box;
+  /* Prevent outside HUD stacking contexts from slipping between our layers. */
+  isolation: isolate;
 }
 /* Vignette sits under UI chrome so the headline + smoke stay clear of the blood rim. */
 #death-screen::before {
@@ -69,7 +71,7 @@ const STYLE = `
 /* Top stack: wordmark at the very top, details just under — open water below. */
 html #death-screen .panel-top,
 #death-screen .panel-top {
-  position: relative; z-index: 2; text-align: center; width: 100%;
+  position: relative; z-index: 10; text-align: center; width: 100%;
   max-width: min(92vw, 720px);
   margin: 2.5vh auto 0;
   pointer-events: none;
@@ -87,10 +89,11 @@ html #death-screen .panel-top,
   overflow: visible;
 }
 
-/* Headline + smoke above the vignette; killer/summary stay in normal panel flow. */
+/* This stack sits above all death UI. Smoke is directly below the live title. */
 #death-screen .death-title {
   position: relative;
-  z-index: 5;
+  z-index: 20;
+  isolation: isolate;
   width: 100%;
   margin: 0 0 1.1rem;
   padding: 0 8px;
@@ -114,7 +117,7 @@ html #death-screen .panel-top,
   height: 120vh;
   transform: translateX(-50%);
   pointer-events: none;
-  z-index: 0;
+  z-index: 1;
   overflow: visible;
   /* Fade only at the very bottom so nothing sits under the live type as a bar. */
   -webkit-mask-image: linear-gradient(to top, transparent 0%, #000 12%, #000 100%);
@@ -274,6 +277,8 @@ ${wreckedTypeCSS('#death-screen h1', { heavy: true })}
 #death-screen .killer,
 #death-screen .summary,
 #death-screen .pun {
+  position: relative;
+  z-index: 1;
   background: transparent !important;
   background-image: none !important;
   border: none !important;

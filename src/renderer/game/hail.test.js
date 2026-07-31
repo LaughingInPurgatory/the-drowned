@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildHailResponse } from './hail.js'
+import { buildCollisionResponse, buildHailResponse } from './hail.js'
 
 test('same NPC id always returns the same line (no slot-machine re-hailing)', () => {
   const npc = { id: 'pirate-42', faction: 'pirate', pilotName: 'Rax' }
@@ -35,4 +35,14 @@ test('unnamed non-alien NPC falls back to a generic speaker label', () => {
 
 test('an unknown/invalid shipClassId does not throw', () => {
   assert.doesNotThrow(() => buildHailResponse({ id: 'y', shipClassId: 'not-a-real-class' }))
+})
+
+test('every collision faction has twenty random, faction-specific puns', () => {
+  for (const faction of ['pirate', 'police', 'trader', 'alien']) {
+    const lines = new Set()
+    for (let index = 0; index < 20; index++) {
+      lines.add(buildCollisionResponse({ faction }, () => (index + 0.1) / 20).line)
+    }
+    assert.equal(lines.size, 20, `${faction} needs twenty distinct collision lines`)
+  }
 })

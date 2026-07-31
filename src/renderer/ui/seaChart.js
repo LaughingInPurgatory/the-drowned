@@ -26,7 +26,8 @@ const STYLE = `
 #sea-chart.open { display: block; }
 #sea-chart .sc-panel {
   position: fixed; display: flex; flex-direction: column; pointer-events: auto;
-  background: var(--ui-bg-solid); border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.45);
+  background: linear-gradient(135deg, rgba(var(--ui-bg-r),var(--ui-bg-g),var(--ui-bg-b),0.96), rgba(var(--ui-bg2-r),var(--ui-bg2-g),var(--ui-bg2-b),0.92));
+  border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.45);
   color: var(--ui-text); overflow: hidden;
 }
 ${floatingPanelElevationCss('#sea-chart .sc-panel')}
@@ -34,19 +35,22 @@ ${floatingPanelElevationCss('#sea-chart .sc-panel')}
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 14px; cursor: move; user-select: none;
   border-bottom: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.3);
+  background: repeating-linear-gradient(108deg, transparent 0 17px, rgba(255,230,200,0.025) 17px 18px, transparent 18px 41px);
 }
 #sea-chart .sc-title { font-size: 15px; letter-spacing: 2px; color: var(--ui-accent); }
 #sea-chart .sc-sub { font-size: 11px; opacity: 0.65; letter-spacing: 0.5px; }
 #sea-chart .sc-close {
-  background: transparent; border: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.5);
-  color: var(--ui-text); font-family: monospace; font-size: 12px; padding: 4px 12px; cursor: pointer;
+  display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  background: rgba(224,90,90,0.12); border: 1px solid rgba(224,90,90,0.5);
+  color: #ffb3b3; font-family: monospace; font-size: 18px; line-height: 1; cursor: pointer;
 }
-#sea-chart .sc-close:hover { background: rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.18); }
+#sea-chart .sc-close:hover { background: rgba(224,90,90,0.24); }
 #sea-chart .sc-body { flex: 1; display: flex; min-height: 0; }
 #sea-chart canvas { flex: 1; display: block; cursor: crosshair; min-width: 0; }
 #sea-chart .sc-side {
   width: 220px; border-left: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.3);
   padding: 10px 12px; overflow-y: auto; font-size: 11px; line-height: 1.5;
+  background: linear-gradient(180deg, rgba(0,0,0,0.2), rgba(var(--ui-bg2-r),var(--ui-bg2-g),var(--ui-bg2-b),0.35));
 }
 #sea-chart .sc-side h4 {
   margin: 0 0 6px 0; font-size: 11px; letter-spacing: 1.5px; color: var(--ui-accent); font-weight: normal;
@@ -96,9 +100,9 @@ export function createSeaChart(container, gameState, hooks = {}) {
       <div class="sc-header">
         <div>
           <div class="sc-title">SEA CHART</div>
-          <div class="sc-sub">Opens on you · drag to pan · scroll to zoom · click a mark for a waypoint</div>
+          <div class="sc-sub">North-up · opens on you · drag to pan · scroll to zoom · click a mark for a waypoint</div>
         </div>
-        <button class="sc-close">Close</button>
+        <button type="button" class="sc-close" aria-label="Close sea chart" title="Close sea chart">×</button>
       </div>
       <div class="sc-body">
         <canvas></canvas>
@@ -169,13 +173,15 @@ export function createSeaChart(container, gameState, hooks = {}) {
   function worldToScreen(x, z) {
     const rect = canvas.getBoundingClientRect()
     const k = scale()
-    return [rect.width / 2 + (x - centreX) * k, rect.height / 2 + (z - centreZ) * k]
+    // The sea's +Z axis is north: charts are conventional north-up, so +Z
+    // moves toward smaller canvas Y (the top edge).
+    return [rect.width / 2 + (x - centreX) * k, rect.height / 2 - (z - centreZ) * k]
   }
 
   function screenToWorld(px, py) {
     const rect = canvas.getBoundingClientRect()
     const k = scale()
-    return [centreX + (px - rect.width / 2) / k, centreZ + (py - rect.height / 2) / k]
+    return [centreX + (px - rect.width / 2) / k, centreZ - (py - rect.height / 2) / k]
   }
 
   function bodies() {
@@ -231,6 +237,19 @@ export function createSeaChart(container, gameState, hooks = {}) {
       ctx.stroke()
       ctx.setLineDash([])
     }
+
+    // Fixed world directions: this is a north-up navigation chart, unlike the
+    // heading-up radar below the helm.
+    ctx.save()
+    ctx.fillStyle = 'rgba(205,225,230,0.78)'
+    ctx.font = 'bold 11px monospace'
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('N', w * 0.5, 12)
+    ctx.fillText('S', w * 0.5, h - 12)
+    ctx.fillText('E', w - 12, h * 0.5)
+    ctx.fillText('W', 12, h * 0.5)
+    ctx.restore()
 
     const visited = new Set((gameState.visitedBodyIds ?? []).map(String))
     const world = getWorld(gameState.galaxy)
@@ -322,8 +341,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
     }
 
     // You — bright yellow mark with heading.
-    // Chart maps world +X → right, +Z → down; ship heading 0 is +Z. Local tip
-    // on +Y then rotate(-heading) aims the bow the right way on the plan.
+    // Chart maps world +X → right, +Z → up; ship heading 0 is +Z / north.
     {
       const p = gameState.player.ship.position
       const [x, y] = worldToScreen(p[0], p[2])
@@ -341,15 +359,15 @@ export function createSeaChart(container, gameState, hooks = {}) {
       ctx.fill()
       // Directional arrow (tip = bow / heading)
       ctx.translate(x, y)
-      ctx.rotate(-yaw)
+      ctx.rotate(yaw)
       ctx.fillStyle = '#ffe14a'
       ctx.strokeStyle = '#1a1200'
       ctx.lineWidth = 1.6
       ctx.beginPath()
-      ctx.moveTo(0, 11) // tip forward (+Z on chart when heading 0)
-      ctx.lineTo(7, -8)
-      ctx.lineTo(0, -4)
-      ctx.lineTo(-7, -8)
+      ctx.moveTo(0, -11) // tip forward (+Z / north when heading 0)
+      ctx.lineTo(7, 8)
+      ctx.lineTo(0, 4)
+      ctx.lineTo(-7, 8)
       ctx.closePath()
       ctx.fill()
       ctx.stroke()
@@ -463,7 +481,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
     drag.moved += Math.abs(dx) + Math.abs(dy)
     const k = scale()
     centreX -= dx / k
-    centreZ -= dy / k
+    centreZ += dy / k
     draw()
   })
   canvas.addEventListener('pointerup', (e) => {

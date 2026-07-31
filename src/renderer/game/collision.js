@@ -141,7 +141,7 @@ export const SHIP_SCRAPE_RESTITUTION = 0.05
  * Call once per frame after every hull has integrated its motion for that
  * step, so the player and all live NPCs see each other.
  */
-export function resolveShipCollisions(ships) {
+export function resolveShipCollisions(ships, onCollision = null) {
   if (!ships || ships.length < 2) return
 
   for (let i = 0; i < ships.length; i++) {
@@ -165,6 +165,8 @@ export function resolveShipCollisions(ships) {
       let dist = Math.hypot(dx, dz)
       const minDist = ra + rb
       if (dist >= minDist) continue
+
+      onCollision?.(A, B)
 
       // Contact normal: from B toward A (A is pushed along +n).
       let nx

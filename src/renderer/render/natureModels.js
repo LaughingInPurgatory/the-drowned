@@ -4,6 +4,8 @@
  * Primary: Quaternius Ultimate Nature Pack (CC0) — low-poly trees, bushes,
  * plants, grass. Source FBX is solid-colour Phong (Wood / Green / DarkGreen)
  * with no UVs; we bake PBR maps (grass foliage + bark trunks) via triplanar UVs.
+ * A textured CC0 broadleaf is retained separately for the closest canopy layer;
+ * its alpha-cut leaves and bark maps are intentionally kept intact.
  * Fallback: Kenney Nature Kit GLBs if Quaternius fails to load.
  * See public/models/nature/(quaternius|kenney)/LICENSE.txt
  */
@@ -15,6 +17,7 @@ import { getPlantTextures, retileUVsTriplanar } from './textures.js'
 
 const QUAT_BASE = 'models/nature/quaternius'
 const KENNEY_BASE = 'models/nature/kenney'
+const REALISTIC_BASE = 'models/nature/realistic'
 
 /**
  * Near-white-green tints so albedo maps show (dark × map = mud).
@@ -77,6 +80,8 @@ const KENNEY_GRASS = ['grass', 'grass_large', 'grass_leafs']
  * @type {Map<string, NatureProto>}
  */
 const cache = new Map()
+/** Detailed models used sparingly at the front of a woodland. */
+const heroTreeCache = new Map()
 /** @type {Map<string, { geometry: THREE.BufferGeometry, material: THREE.Material, height: number }>} */
 const grassMeshes = new Map()
 
@@ -276,6 +281,30 @@ function bakePlantRoot(source, { targetH = 2, dry = false, isGrass = false } = {
 }
 
 /**
+ * Keep an authored GLB's materials and alpha-cut foliage rather than replacing
+ * them with the generic plant material. It is only used for a small foreground
+ * share, where the extra geometry and texture detail are visible.
+ */
+function prepareHeroTree(source) {
+  source.updateMatrixWorld(true)
+  const box = new THREE.Box3().setFromObject(source)
+  const size = new THREE.Vector3()
+  box.getSize(size)
+  const height = Math.max(0.08, size.y)
+  const root = new THREE.Group()
+  source.position.x -= (box.min.x + box.max.x) * 0.5
+  source.position.y -= box.min.y
+  source.position.z -= (box.min.z + box.max.z) * 0.5
+  root.add(source)
+  root.traverse((obj) => {
+    if (!obj.isMesh) return
+    obj.castShadow = true
+    obj.receiveShadow = true
+  })
+  return { root, height, radius: Math.max(size.x, size.z) * 0.5 }
+}
+
+/**
  * Bake all meshes under root into one geometry + textured grass material for InstancedMesh.
  */
 function extractGrassMesh(root) {
@@ -406,11 +435,23 @@ async function loadPackKenney() {
   return cache.size > 0
 }
 
+async function loadHeroTrees() {
+  try {
+    const scene = await loadGltf(`${REALISTIC_BASE}/tree.glb`)
+    heroTreeCache.set('broadleaf', prepareHeroTree(scene))
+  } catch (e) {
+    // The normal vegetation pack remains a complete fallback if this optional
+    // foreground asset is unavailable.
+    console.warn('[nature] realistic tree fail', e)
+  }
+}
+
 export function preloadNatureModels() {
   if (loadPromise) return loadPromise
   loadPromise = (async () => {
     cache.clear()
     grassMeshes.clear()
+    heroTreeCache.clear()
     activePack = null
     let ok = await loadPackQuaternius()
     if (ok) {
@@ -421,13 +462,14 @@ export function preloadNatureModels() {
       ok = await loadPackKenney()
       activePack = ok ? 'kenney' : null
     }
+    await loadHeroTrees()
     ready = ok
     if (ready) {
       const trees = [...cache.keys()].filter((k) => k.startsWith('tree:')).length
       const bushes = [...cache.keys()].filter((k) => k.startsWith('bush:')).length
       const sample = getTreeProtos()[0]
       console.info(
-        `[nature] loaded pack=${activePack} trees=${trees} bushes=${bushes} grass=${grassMeshes.size}` +
+        `[nature] loaded pack=${activePack} trees=${trees} heroTrees=${heroTreeCache.size} bushes=${bushes} grass=${grassMeshes.size}` +
           (sample ? ` sampleH=${sample.height.toFixed(2)}` : '')
       )
     } else {
@@ -452,6 +494,10 @@ export function getTreeProtos() {
     if (k.startsWith('tree:')) out.push(v)
   }
   return out
+}
+
+export function getHeroTreeProtos() {
+  return [...heroTreeCache.values()]
 }
 
 export function getBushProtos() {

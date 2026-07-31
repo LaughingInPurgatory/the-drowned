@@ -1,0 +1,7 @@
+Seagull SFX (CC0 / public domain)
+
+  seagull_ambient_1.wav
+    Source: "Solo Seagull Sound Effects" by Rango Mango, OpenGameArt
+    https://opengameart.org/content/solo-seagull-sound-effects
+    License: Creative Commons 0 (CC0)
+    No attribution required; credit retained for provenance.

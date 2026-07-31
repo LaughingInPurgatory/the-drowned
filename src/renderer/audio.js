@@ -145,6 +145,10 @@ let sfxLoadPromise = null
 const SFX_FILES = [
   'engine_engage.ogg',
   'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
+  // CC0 OpenGameArt field recording; see public/audio/sfx/SEAGULL_CREDITS.txt
+  'seagull_ambient_1.wav',
+  // CC-BY 3.0 OpenGameArt sample; see public/audio/sfx/CHICKEN_SQUAWK_CREDITS.txt
+  'chicken_squawk.ogg',
   // Sounding (P) — CC0 Freesound samples; see public/audio/sfx/SONAR_CREDITS.txt
   'sonar_ping.ogg', 'sonar_return.ogg'
 ]
@@ -188,6 +192,24 @@ function playSample(name, { volume = 0.5, rate = 1, loop = false, fadeIn = 0, de
   // Store target volume — AudioParam.value is unreliable after ramps, and
   // stopSampleNodes needs a real peak to fade from (not the 0.0001 floor).
   return { source, gain, volume }
+}
+
+/** A nearby flock call — the flock renderer controls when this is audible. */
+export function playGullCall() {
+  ensureSfx()
+  return !!playSample('seagull_ambient_1.wav', {
+    volume: 0.11,
+    rate: 0.94 + Math.random() * 0.12
+  })
+}
+
+/** A sharp, chicken-like protest when a stray shot catches a gull. */
+export function playGullSquawk() {
+  ensureSfx()
+  return !!playSample('chicken_squawk.ogg', {
+    volume: 0.18,
+    rate: 0.92 + Math.random() * 0.16
+  })
 }
 
 function stopSampleNodes(nodes, fadeOut = 0.12) {
@@ -1753,4 +1775,3 @@ export function stopAmbientMusic() {
   ambientMusic = null
   fadeMusicVolume(el, 0, MUSIC_FADE_S, () => el.pause())
 }
-

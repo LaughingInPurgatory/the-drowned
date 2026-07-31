@@ -17,6 +17,7 @@ import { createSonarPulse } from './render/sonarPulse.js'
 import { createSprayOverlay } from './render/spray.js'
 import { createWeather } from './render/weather.js'
 import { createLensFlare } from './render/lensFlare.js'
+import { createGullFlock, tryHitGullFlock, updateGullFlock } from './render/seagullMesh.js'
 import {
   updateTurretAim,
   centreTurret,
@@ -193,7 +194,7 @@ import {
   hasDroneBays,
   DRONE_SHOT_SPEED_FALLBACK
 } from './game/drones.js'
-import { buildHailResponse } from './game/hail.js'
+import { buildCollisionResponse, buildHailResponse } from './game/hail.js'
 import { buildDroneMesh, updateDroneMesh, disposeDroneMesh } from './render/droneMesh.js'
 import { droneBayCount } from './data/drones.js'
 import * as audio from './audio.js'
@@ -382,6 +383,24 @@ const { scene, camera, renderer, render, updateEnvironment, setPostOverlay, ocea
 // Sonar rings — the boat sounds from where it is; there is nothing to launch.
 const sonarPulse = createSonarPulse()
 scene.add(sonarPulse.group)
+const gullFlock = createGullFlock()
+scene.add(gullFlock)
+const _gullShotStart = new THREE.Vector3()
+const _gullShotEnd = new THREE.Vector3()
+const _gullShotVelocity = new THREE.Vector3()
+
+function checkGullProjectileHits(dt) {
+  if (!gullFlock.visible) return
+  for (const projectile of gameState.projectiles) {
+    if (projectile.ownerId !== 'player') continue
+    _gullShotStart.fromArray(projectile.position)
+    _gullShotVelocity.fromArray(projectile.velocity)
+    _gullShotEnd.copy(_gullShotStart).addScaledVector(_gullShotVelocity, dt)
+    if (!tryHitGullFlock(gullFlock, _gullShotStart, _gullShotEnd, gameState.simTime)) continue
+    audio.playGullSquawk()
+    break
+  }
+}
 
 // Water on the lens. An artifact of the camera, so it is drawn over the formed
 // image rather than into the world (see render/scene.js setPostOverlay).
@@ -1324,6 +1343,7 @@ window.addEventListener('wheel', (e) => {
 }, { passive: false })
 
 let gameState = null
+let nextGullCallAt = 0
 let playerShipClass = null
 let playerMesh = null
 let playerWake = null
@@ -2721,6 +2741,7 @@ const menu = createMenu(appEl, {
 })
 
 function clearSession() {
+  gullFlock.visible = false
   try {
     setTextureReadyHook(null)
   } catch {
@@ -3156,6 +3177,7 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   clearSession()
   stopMenuBackground()
   gameState = newGameState
+  nextGullCallAt = gameState.simTime + 2
   ensureBlueprintMaps(gameState)
   // Offline craft completions from deserialize (wall-clock) — toast after HUD exists.
   const offlineCraftDone = gameState._craftingJustCompleted ?? []
@@ -3762,7 +3784,14 @@ function findNearestHudBody() {
     }
   }
 
-  return nearest
+  return nearest ? { body: nearest, surfaceDistance: nearestSurface } : null
+}
+
+function formatHudRange(distance) {
+  if (!Number.isFinite(distance)) return null
+  if (distance < 1000) return `${Math.max(0, Math.round(distance))} m`
+  if (distance < 10_000) return `${(distance / 1000).toFixed(1)} km`
+  return `${Math.round(distance / 1000)} km`
 }
 
 // Salvage (F) range from wreck origin (1 km).
@@ -4336,21 +4365,21 @@ function radarKindForBody(body, isWaypoint, isMission) {
 // Cap individual belt rocks painted on radar (nearest first).
 const RADAR_MAX_ASTEROID_ROCKS = 48
 
-// Scratch for ship-relative radar (heading-up: rotates with the ship).
+// Scratch for ship-relative radar positions (heading-up display).
 const _radarShipPos = new THREE.Vector3()
 const _radarRel = new THREE.Vector3()
 const _radarQuatInv = new THREE.Quaternion()
 
 /**
- * Heading-up radar: contacts in ship-local space so the view turns with the hull.
- * Ship +Z = forward (F), +Y = up, +X = right; negate x for on-screen right.
+ * Heading-up radar: contacts rotate with the ship while the compass labels
+ * show the world directions around that moving frame.
  * @param {boolean} [targeted] Tab-lock highlight on radar
  */
 function pushRadarContact(contacts, worldPos, kind, maxRange = RADAR_RANGE, targeted = false) {
   _radarRel.fromArray(worldPos).sub(_radarShipPos)
   if (_radarRel.length() > maxRange) return false
   _radarRel.applyQuaternion(_radarQuatInv)
-  contacts.push({ x: -_radarRel.x, y: _radarRel.y, z: _radarRel.z, kind, targeted: !!targeted })
+  contacts.push({ x: _radarRel.x, y: _radarRel.y, z: _radarRel.z, kind, targeted: !!targeted })
   return true
 }
 
@@ -6101,6 +6130,10 @@ function animate() {
     // Moored, so the boat still rides the swell and the harbour still lives
     // around it — but nothing can touch you and there is no helm to hold.
     snapToSea(gameState.player.ship, gameState.simTime)
+    if (updateGullFlock(gullFlock, gameState.player.ship.position, gameState.simTime) && gameState.simTime >= nextGullCallAt) {
+      audio.playGullCall()
+      nextGullCallAt = gameState.simTime + 7 + Math.random() * 8
+    }
     applySeaAttitude(gameState.player.ship, headingOf(gameState.player.ship), gameState.simTime)
     syncMeshToEntity(playerMesh, gameState.player.ship)
     for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
@@ -6122,6 +6155,10 @@ function animate() {
   // Probe flight runs in normal play (ship can still fly while it works).
   if (probeEffect) updateProbeEffect(dt)
   sonarPulse.update(dt, gameState.simTime)
+  if (updateGullFlock(gullFlock, gameState.player.ship.position, gameState.simTime) && gameState.simTime >= nextGullCallAt) {
+    audio.playGullCall()
+    nextGullCallAt = gameState.simTime + 7 + Math.random() * 8
+  }
   updateProbeScanFloat()
   updatePlayerDrones(dt)
 
@@ -6310,6 +6347,7 @@ function animate() {
     const shipBodies = [
       {
         ship: gameState.player.ship,
+        player: true,
         radius: shipRadius,
         mass: shipRadius * shipRadius
       }
@@ -6317,9 +6355,17 @@ function animate() {
     for (const npc of gameState.npcs) {
       if (npc.destroyed) continue
       const r = getShipCollisionRadius(getShipClass(npc.shipClassId))
-      shipBodies.push({ ship: npc, radius: r, mass: r * r })
+      shipBodies.push({ ship: npc, npc, radius: r, mass: r * r })
     }
-    resolveShipCollisions(shipBodies)
+    resolveShipCollisions(shipBodies, (a, b) => {
+      const npc = a.player ? b.npc : b.player ? a.npc : null
+      if (!npc || gameState.simTime < (npc.lastCollisionMessageAt ?? -Infinity) + 4) return
+      npc.lastCollisionMessageAt = gameState.simTime
+      const { speaker, line } = buildCollisionResponse(npc)
+      setHudToastText(factionToastEl, `${speaker}:\n"${line}"`)
+      showHudToast(factionToastEl)
+      factionToastUntil = gameState.simTime + FACTION_TOAST_DURATION_S
+    })
     // A bounce can shove someone into a mole — re-seat the player on solid.
     resolveBodyCollisions(gameState.player.ship, currentBodies, shipRadius, {
       isRockAlive: (fieldId, index) => isRockAlive(gameState, fieldId, index)
@@ -6327,6 +6373,7 @@ function animate() {
     snapToSea(gameState.player.ship, gameState.simTime)
   }
 
+  checkGullProjectileHits(dt)
   updateProjectiles(gameState, dt, onProjectileHit)
   updateCombatFlag(gameState, combatFrame)
   updateDamageVignette(dt)
@@ -6642,8 +6689,9 @@ function animate() {
     playerShipClass,
     speed,
     forwardSpeed,
-    nearestHudBody?.name ?? 'Open Water',
+    nearestHudBody?.body.name ?? 'Open Water',
     null,
+    formatHudRange(nearestHudBody?.surfaceDistance),
     getSystemSecurity(hudSystem),
     activeWp?.name ?? null
   )
@@ -6674,7 +6722,7 @@ function animate() {
       })
     }
   }
-  hud.updateRadar(computeRadarContacts(), RADAR_RANGE, gameState.simTime)
+  hud.updateRadar(computeRadarContacts(), RADAR_RANGE, gameState.simTime, headingOf(gameState.player.ship))
 
   // F priority: wreck → nodule → dock. Each also requires the object to be
   // Tab-locked — otherwise the prompt would promise an F action that the

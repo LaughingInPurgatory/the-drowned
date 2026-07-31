@@ -287,6 +287,9 @@ export function createScene(container) {
     ou.uCrestColor.value.copy(day.seaCrest)
     ou.uSkyColor.value.copy(day.horizon)
     ou.uZenithColor.value.copy(day.zenith)
+    ou.uCloudColor.value.copy(su.uCloudColor.value)
+    ou.uCloudLit.value.copy(su.uCloudLit.value)
+    ou.uCloudCover.value = cloudCover
     if (storm > 0.05) {
       ou.uDeepColor.value.multiplyScalar(1 - 0.15 * storm)
       ou.uCrestColor.value.multiplyScalar(1 - 0.1 * storm)

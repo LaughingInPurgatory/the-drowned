@@ -1,8 +1,8 @@
 import * as THREE from 'three'
 import { mulberry32, range } from '../procgen/prng.js'
-import { getSurfaceTextures } from './textures.js'
 import { oreTierForField } from '../game/mining.js'
-import { MINED_ORE_GOOD_IDS } from '../data/goods.js'
+import { getShipClass } from '../data/shipClasses.js'
+import { buildShipMesh } from './shipMesh.js'
 
 function hashString(str) {
   let h = 0
@@ -124,105 +124,65 @@ function tintForOreTier(oreId, rockIndex, fieldId) {
   return base
 }
 
-// Cheap multi-octave noise on the unit sphere for lumpy rock surfaces.
-function rockNoise(nx, ny, nz, o) {
-  let n = 0
-  let amp = 1
-  let freq = 1
-  let norm = 0
-  for (let i = 0; i < 3; i++) {
-    n +=
-      amp *
-      Math.sin(nx * (2.9 + i) * freq + o[0]) *
-      Math.cos(ny * (3.4 + i) * freq + o[1]) *
-      Math.sin(nz * (2.6 + i) * freq + o[2])
-    norm += amp
-    amp *= 0.55
-    freq *= 2.05
-  }
-  return n / norm
+const WRECK_CLASS_IDS = ['light_runner', 'bravia_mk2', 'hold_runner', 'gun_barge']
+
+/** Turn a normal ship mesh into an inert, corroded casualty. */
+function weatherShipIntoWreck(ship, tint) {
+  // A wreck keeps the useful hull/superstructure silhouette but no weapon or
+  // navigation-light clutter. This is visual-only; salvage collision remains
+  // the pre-existing rock layout below.
+  ship.remove(ship.userData.turret?.yawGroup)
+  for (const lamp of ship.userData.runningLights?.meshes ?? []) lamp.visible = false
+
+  const rust = new THREE.Color(tint).lerp(new THREE.Color(0x38261d), 0.58)
+  ship.traverse((part) => {
+    if (!part.isMesh) return
+    if (part.material?.isMeshBasicMaterial) {
+      part.visible = false
+      return
+    }
+    const materials = Array.isArray(part.material) ? part.material : [part.material]
+    for (const material of materials) {
+      if (!material?.color) continue
+      material.color.lerp(rust, 0.7)
+      material.roughness = Math.max(material.roughness ?? 0, 0.92)
+      material.metalness = Math.min(material.metalness ?? 0.5, 0.42)
+      if (material.emissive) material.emissive.set(0)
+    }
+    part.castShadow = true
+    part.receiveShadow = true
+  })
 }
 
 /**
- * One sunken hull, half out of the water.
- *
- * A wreck field is a convoy or a harbour that went down together, so what
- * breaks the surface is plate and frame — a bow standing on end, a rolled hull
- * with its bilge up, a superstructure with the deck gone. Built from boxes
- * because that is what a broken ship is: flat panels at angles they were never
- * meant to be at.
+ * A stranded vessel in one of three readable failure states: listing, rolled,
+ * or bow-down. Reusing the production hull builder keeps the silhouettes
+ * consistent with ships the player encounters elsewhere in the world.
  */
-function buildWreckHulk(rng, size, material, plateMaterial) {
-  const hulk = new THREE.Group()
-  const form = Math.floor(rng() * 3)
+function buildWreckShip(rng, size, tint) {
+  const ship = buildShipMesh(getShipClass(WRECK_CLASS_IDS[Math.floor(rng() * WRECK_CLASS_IDS.length)]), { lite: true })
+  weatherShipIntoWreck(ship, tint)
 
-  if (form === 0) {
-    // A bow section standing up out of the water, stem to the sky.
-    const len = size * range(rng, 1.6, 2.6)
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(size * 0.85, len, size * 0.7), material)
-    hull.position.y = len * 0.18
-    hull.rotation.set(range(rng, 0.9, 1.3), rng() * Math.PI, range(rng, -0.25, 0.25))
-    hulk.add(hull)
-    // Torn plate peeling off the break.
-    for (let i = 0; i < 3; i++) {
-      const plate = new THREE.Mesh(
-        new THREE.BoxGeometry(size * range(rng, 0.3, 0.7), size * 0.06, size * range(rng, 0.3, 0.8)),
-        plateMaterial
-      )
-      plate.position.set(
-        range(rng, -size * 0.5, size * 0.5),
-        len * range(rng, 0.3, 0.7),
-        range(rng, -size * 0.5, size * 0.5)
-      )
-      plate.rotation.set(rng() * 1.4, rng() * Math.PI, rng() * 1.4)
-      hulk.add(plate)
-    }
-  } else if (form === 1) {
-    // Rolled over, bilge and keel up, awash along her length.
-    const len = size * range(rng, 2.2, 3.4)
-    const hull = new THREE.Mesh(new THREE.BoxGeometry(size * 0.95, size * 0.6, len), material)
-    hull.position.y = -size * 0.1
-    hull.rotation.set(range(rng, -0.35, 0.35), rng() * Math.PI, range(rng, 2.5, 3.6))
-    hulk.add(hull)
-    // The bilge keel standing proud of the water like a fin.
-    const keel = new THREE.Mesh(
-      new THREE.BoxGeometry(size * 0.1, size * 0.5, len * 0.7),
-      plateMaterial
-    )
-    keel.position.set(0, size * 0.32, 0)
-    keel.rotation.copy(hull.rotation)
-    hulk.add(keel)
+  const box = new THREE.Box3().setFromObject(ship)
+  const nativeLength = Math.max(1, box.max.z - box.min.z)
+  const desiredLength = size * range(rng, 2.1, 3.35)
+  ship.scale.setScalar(desiredLength / nativeLength)
+
+  const state = Math.floor(rng() * 3)
+  if (state === 0) {
+    // Rolled hull: keel and underside are left above the waves.
+    ship.position.y = -size * 0.32
+    ship.rotation.set(range(rng, -0.18, 0.18), 0, Math.PI + range(rng, -0.25, 0.25))
+  } else if (state === 1) {
+    // A ship settling onto one side, bridge and mast still visible.
+    ship.position.y = -size * 0.2
+    ship.rotation.set(range(rng, -0.15, 0.15), 0, range(rng, 0.45, 0.95) * (rng() < 0.5 ? -1 : 1))
   } else {
-    // A superstructure block — deck-house, funnel stub, mast still standing.
-    const w = size * range(rng, 0.7, 1.0)
-    const house = new THREE.Mesh(new THREE.BoxGeometry(w, size * 0.7, w * 1.2), material)
-    house.position.y = size * 0.1
-    house.rotation.set(range(rng, -0.3, 0.3), rng() * Math.PI, range(rng, -0.4, 0.4))
-    hulk.add(house)
-    const funnel = new THREE.Mesh(
-      new THREE.CylinderGeometry(size * 0.16, size * 0.19, size * 0.55, 8),
-      plateMaterial
-    )
-    funnel.position.set(range(rng, -w * 0.2, w * 0.2), size * 0.55, 0)
-    funnel.rotation.z = range(rng, -0.5, 0.5)
-    hulk.add(funnel)
-    if (rng() < 0.7) {
-      const mast = new THREE.Mesh(
-        new THREE.CylinderGeometry(size * 0.03, size * 0.04, size * 1.5, 5),
-        plateMaterial
-      )
-      mast.position.set(range(rng, -w * 0.3, w * 0.3), size * 0.85, range(rng, -w * 0.3, w * 0.3))
-      mast.rotation.set(range(rng, -0.6, 0.6), 0, range(rng, -0.6, 0.6))
-      hulk.add(mast)
-    }
+    // Bow-down sinking: just enough of the stern and deckhouse remains.
+    ship.position.y = -size * 0.42
+    ship.rotation.set(range(rng, 0.42, 0.72), 0, range(rng, -0.2, 0.2))
   }
-
-  hulk.traverse((o) => {
-    if (!o.isMesh) return
-    o.castShadow = true
-    o.receiveShadow = true
-  })
-  return hulk
+  return ship
 }
 
 /**
@@ -230,32 +190,15 @@ function buildWreckHulk(rng, size, material, plateMaterial) {
  */
 export function buildAsteroidFieldMesh(body) {
   const oreId = body.oreOverride ?? oreTierForField(body)
-  const maps = getSurfaceTextures('rocky') ?? {}
   const group = new THREE.Group()
 
   getAsteroidRocks(body).forEach((rock, i) => {
-    // Per-hulk material so the salvage grade tints it; maps are shared GPU
-    // textures. Rusted plate, not stone — high roughness, real metalness.
+    // Per-wreck rust variation tracks the salvage grade without changing the
+    // resource/collision data that the game layer uses for this field.
     const tint = tintForOreTier(oreId, i, body.id)
-    const material = new THREE.MeshStandardMaterial({
-      color: tint,
-      roughness: 0.88,
-      metalness: 0.45,
-      flatShading: true,
-      ...maps
-    })
-    // Only set once we actually have a normal map — three warns on undefined.
-    if (maps.normalMap) material.normalScale = new THREE.Vector2(1.1, 1.1)
-    const plateMaterial = new THREE.MeshStandardMaterial({
-      color: new THREE.Color(tint).multiplyScalar(0.72),
-      roughness: 0.92,
-      metalness: 0.5,
-      flatShading: true
-    })
-
     const rng = mulberry32(hashString(`${body.id}:hulk:${i}`))
     const s = rock.scale ?? [1, rock.scaleY ?? 1, 1]
-    const hulk = buildWreckHulk(rng, rock.radius * Math.max(s[0], s[1], s[2]), material, plateMaterial)
+    const hulk = buildWreckShip(rng, rock.radius * Math.max(s[0], s[1], s[2]), tint)
     hulk.position.set(...rock.position)
     // Sit them on the waterline rather than wherever the scatter put them —
     // a wreck field is what broke the surface, not what is on the bottom.

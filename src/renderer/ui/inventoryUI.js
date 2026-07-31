@@ -119,8 +119,9 @@ ${floatingPanelElevationCss('#inventory-ui .panel')}
 #inventory-ui td { text-align: left; padding: 5px 8px; border-bottom: 1px solid rgba(42,58,85,0.5); }
 #inventory-ui td:not(:first-child) { white-space: nowrap; }
 #inventory-ui button.close {
+  display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
   background: rgba(224,90,90,0.12); border: 1px solid rgba(224,90,90,0.5); color: #ffb3b3;
-  padding: 7px 16px; cursor: pointer; font-family: monospace; letter-spacing: 1px;
+  cursor: pointer; font-family: monospace; font-size: 18px; line-height: 1;
   transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 #inventory-ui button.close:hover { background: rgba(224,90,90,0.22); box-shadow: 0 2px 6px rgba(0,0,0,0.65); }
@@ -228,7 +229,7 @@ export function createInventoryUI(container, gameState, hooks = {}) {
           <span class="credits-display"></span>
           <span class="parts-badge none">Parts: 0</span>
           <button type="button" class="repair-btn" disabled>Repair</button>
-          <button type="button" class="close">Close</button>
+          <button type="button" class="close" aria-label="Close inventory" title="Close inventory">×</button>
         </div>
       </div>
       <div class="tabs">

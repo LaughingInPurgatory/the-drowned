@@ -173,7 +173,8 @@ ${floatingResizeHandleCss('#character-ui .float-resize')}
 #character-ui .hint { font-size: 11px; opacity: 0.55; letter-spacing: 0.5px; }
 #character-ui button.close {
   background: rgba(224,90,90,0.12); border: 1px solid rgba(224,90,90,0.5); color: #ffb3b3;
-  padding: 7px 16px; cursor: pointer; font-family: monospace; letter-spacing: 1px;
+  display: grid; place-items: center; width: 26px; height: 26px; padding: 0;
+  cursor: pointer; font-family: monospace; font-size: 18px; line-height: 1;
 }
 #character-ui button.close:hover { background: rgba(224,90,90,0.22); box-shadow: 0 2px 6px rgba(0,0,0,0.65); }
 #character-ui input[type=file] { display: none; }
@@ -268,7 +269,7 @@ export function createCharacterUI(container, gameState) {
       <div class="char-header">
         <h2>Character</h2>
         <div class="char-header-right">
-          <button type="button" class="close">Close</button>
+          <button type="button" class="close" aria-label="Close character sheet" title="Close character sheet">×</button>
         </div>
       </div>
       <div class="char-body">
@@ -322,7 +323,7 @@ export function createCharacterUI(container, gameState) {
           </div>
         </div>
         <div class="footer">
-          <span class="hint">Kill pirates to rebuild standing · Close button or F1 to close · Drag header to move</span>
+          <span class="hint">Kill pirates to rebuild standing · × or F1 to close · Drag header to move</span>
         </div>
       </div>
       <div class="float-resize" title="Resize" aria-label="Resize character panel"></div>

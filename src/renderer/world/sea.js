@@ -16,24 +16,34 @@ export const SEA_LEVEL = 0
  * last — the mix is what stops the surface reading as one repeating sine.
  */
 export const SEA_WAVES = [
-  { amp: 1.05, len: 310, speed: 15, dir: [1.0, 0.22] },
-  { amp: 0.72, len: 210, speed: 13, dir: [-0.62, 0.78] },
-  { amp: 0.55, len: 165, speed: 11.5, dir: [0.72, -0.7] },
-  { amp: 0.38, len: 118, speed: 9.5, dir: [0.18, 0.98] },
-  { amp: 0.30, len: 82, speed: 8.5, dir: [-0.35, 0.94] },
-  { amp: 0.22, len: 54, speed: 7.2, dir: [-0.88, -0.47] },
-  { amp: 0.16, len: 36, speed: 6.2, dir: [0.55, 0.84] },
-  { amp: 0.11, len: 22, speed: 5.2, dir: [0.93, -0.37] }
+  { amp: 1.05, len: 310, speed: 15, dir: [1.0, 0.22], sharp: 0.30 },
+  { amp: 0.72, len: 210, speed: 13, dir: [-0.62, 0.78], sharp: 0.28 },
+  { amp: 0.55, len: 165, speed: 11.5, dir: [0.72, -0.7], sharp: 0.26 },
+  { amp: 0.38, len: 118, speed: 9.5, dir: [0.18, 0.98], sharp: 0.24 },
+  { amp: 0.30, len: 82, speed: 8.5, dir: [-0.35, 0.94], sharp: 0.20 },
+  { amp: 0.22, len: 54, speed: 7.2, dir: [-0.88, -0.47], sharp: 0.18 },
+  { amp: 0.16, len: 36, speed: 6.2, dir: [0.55, 0.84], sharp: 0.15 },
+  { amp: 0.11, len: 22, speed: 5.2, dir: [0.93, -0.37], sharp: 0.12 }
 ]
 
 /** Tallest possible crest — used for camera/cull margins, not per-frame maths. */
 export const SEA_MAX_AMPLITUDE = SEA_WAVES.reduce((sum, w) => sum + w.amp, 0)
 
 // Precomputed per wave: unit direction, angular wavenumber k, and phase rate.
-const COMPILED = SEA_WAVES.map(({ amp, len, speed, dir }) => {
+const COMPILED = SEA_WAVES.flatMap(({ amp, len, speed, dir, sharp = 0 }) => {
   const mag = Math.hypot(dir[0], dir[1]) || 1
   const k = (Math.PI * 2) / len
-  return { amp, k, dx: dir[0] / mag, dz: dir[1] / mag, phaseRate: speed * k }
+  // A restrained second harmonic makes crests stand up and troughs broaden,
+  // avoiding the endless perfect sine rolls that read as a simulation. The
+  // normalization keeps the total possible height inside SEA_MAX_AMPLITUDE.
+  const baseAmp = amp / (1 + sharp * 0.5)
+  const common = { dx: dir[0] / mag, dz: dir[1] / mag }
+  return [
+    { amp: baseAmp, k, phaseRate: speed * k, ...common },
+    ...(sharp > 0
+      ? [{ amp: baseAmp * sharp * 0.5, k: k * 2, phaseRate: speed * k * 2, ...common }]
+      : [])
+  ]
 })
 
 /** Surface height at a world XZ position and time. */

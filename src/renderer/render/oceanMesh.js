@@ -98,6 +98,9 @@ uniform vec3 uDeepColor;
 uniform vec3 uCrestColor;
 uniform vec3 uSkyColor;
 uniform vec3 uZenithColor;
+uniform vec3 uCloudColor;
+uniform vec3 uCloudLit;
+uniform float uCloudCover;
 uniform vec3 uFoamColor;
 uniform vec3 uAlgaeColor;
 // Player searchlight — custom ocean has no MeshStandard lighting path, so the
@@ -157,6 +160,18 @@ vec3 noised(vec2 p) {
     + u.x * u.y * (ga - gb - gc + gd)
     + du * (u.yx * (va - vb - vc + vd) + vec2(vb, vc) - va);
   return vec3(v, g);
+}
+
+// A small cloud field for the reflected ray. It uses the same softened plane
+// projection and drift as the sky dome, so the sea reflects broken cloud forms
+// rather than a single uninterrupted blue/grey gradient.
+float reflectedCloud(vec3 ray, float t) {
+  if (ray.y <= 0.001) return 0.0;
+  vec2 plane = ray.xz / (ray.y + 0.30);
+  vec2 p = plane * 1.6 + vec2(t * 0.006, t * 0.0032);
+  float n = 0.5 + 0.5 * noised(p).x;
+  float n2 = 0.5 + 0.5 * noised(p * 0.42 + vec2(t * 0.0022, -t * 0.0014)).x;
+  return smoothstep(uCloudCover, uCloudCover + 0.20, mix(n, n2, 0.4));
 }
 
 /**
@@ -319,6 +334,9 @@ void main() {
   // way a reflective one does. Same curve the sky dome uses, so the two agree.
   vec3 R = reflect(-V, N);
   vec3 skyRefl = mix(uSkyColor, uZenithColor, pow(max(R.y, 0.0), 0.45));
+  float reflectedCloudCover = reflectedCloud(R, uTime);
+  vec3 reflectedCloudColor = mix(uCloudColor, uCloudLit, 0.38);
+  skyRefl = mix(skyRefl, reflectedCloudColor, reflectedCloudCover * 0.76);
   // Cool + darken the reflection so the body colour still reads as water.
   skyRefl = mix(skyRefl, skyRefl * vec3(0.78, 0.90, 1.02), 0.38);
   skyRefl *= 0.82;
@@ -388,7 +406,11 @@ void main() {
   // Whitecaps only on steeper crests — no object-tied shoreline "surf foam"
   // (that path was more trouble than it was worth).
   float steepness = 1.0 - seaNormal(vWorldPos.xz, uTime).y;
-  float foamMask = smoothstep(0.11, 0.26, steepness);
+  // 1 - normal.y is quadratic for shallow slopes. The old 0.11 threshold
+  // needed near-vertical water and left this path effectively unreachable for
+  // the shared open-sea wave field; these values start foam on its real sharp
+  // intersections without turning every ripple into a white sheet.
+  float foamMask = smoothstep(0.008, 0.028, steepness);
   float breakup = noised(vWorldPos.xz * 0.55 + vec2(uTime * 0.22, uTime * -0.16)).x;
   breakup += noised(vWorldPos.xz * 1.9 - vec2(uTime * 0.4)).x * 0.5;
   // Algae holds the surface together, so a slick foams far less than clear
@@ -474,6 +496,9 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
         uCrestColor: { value: new THREE.Color(0x1a6a7a) },
         uSkyColor: { value: new THREE.Color(skyColor ?? 0x8a9499) },
         uZenithColor: { value: new THREE.Color(0x3a6e96) },
+        uCloudColor: { value: new THREE.Color(0x9a94a0) },
+        uCloudLit: { value: new THREE.Color(0xffe0c0) },
+        uCloudCover: { value: 0.52 },
         uFoamColor: { value: new THREE.Color(0xd8e6ec) },
         // Base tint for blooms — texture supplies olive / brown variety.
         uAlgaeColor: { value: new THREE.Color(0x3a5c38) },

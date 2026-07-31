@@ -46,6 +46,20 @@ function roundedBox(w, h, d, radius = 0.12, segments = 2) {
   return new RoundedBoxGeometry(w, h, d, segments, Math.max(0.02, r))
 }
 
+/** Structural member between local points — used for timber frames and crane trusses. */
+function addBeamBetween(group, material, from, to, radius = 0.14) {
+  const a = new THREE.Vector3(...from)
+  const b = new THREE.Vector3(...to)
+  const delta = b.clone().sub(a)
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, delta.length(), 6), material)
+  beam.position.copy(a).add(b).multiplyScalar(0.5)
+  beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize())
+  beam.castShadow = true
+  beam.receiveShadow = true
+  group.add(beam)
+  return beam
+}
+
 /**
  * Textured PBR material with soft triplanar sampling so edges don't seam.
  * @param {string} role station texture role
@@ -118,7 +132,9 @@ function materials(rng, weathered) {
     wall: texturedMat(
       'panel',
       {
-        color: new THREE.Color(0x918a7e).lerp(rust, weathered * 0.38),
+        // Plates are intentionally light enough to survive the dark albedo map;
+        // the prior mid-grey multiplied into near-black silhouettes at distance.
+        color: new THREE.Color(0xc8b79e).lerp(rust, weathered * 0.32),
         roughness: 0.86,
         metalness: 0.22,
         normalScale: new THREE.Vector2(1.2, 1.2)
@@ -265,36 +281,47 @@ function addJetty(group, mats, rng, { x, z, w, l, rot = 0 }) {
   return jetty
 }
 
-/** A shed / warehouse with a pitched roof, sitting on the deck. */
+/** A weathered gabled warehouse, with loading doors and exposed timber framing. */
 function addShed(group, mats, rng, { x, z, w, d, h, rot = 0, lit = true }) {
   const shed = new THREE.Group()
   shed.position.set(x, DECK_HEIGHT + 0.35, z)
   shed.rotation.y = rot
-
-  const body = new THREE.Mesh(roundedBox(w, h, d, Math.min(0.2, w * 0.04), 2), mats.wall)
-  body.position.y = h / 2
+  const roofH = Math.max(1.2, h * 0.32)
+  const wallShape = new THREE.Shape()
+  wallShape.moveTo(-w / 2, 0)
+  wallShape.lineTo(w / 2, 0)
+  wallShape.lineTo(w / 2, h)
+  wallShape.lineTo(0, h + roofH)
+  wallShape.lineTo(-w / 2, h)
+  wallShape.lineTo(-w / 2, 0)
+  const wallGeo = new THREE.ExtrudeGeometry(wallShape, { depth: d, bevelEnabled: true, bevelSegments: 1, bevelSize: Math.min(0.12, w * 0.025), bevelThickness: 0.08 })
+  wallGeo.translate(0, 0, -d / 2)
+  const body = new THREE.Mesh(wallGeo, mats.wall)
   body.castShadow = true
   body.receiveShadow = true
   shed.add(body)
 
-  // Pitched roof, as two slabs — corrugated sheet over a ridge.
-  const pitch = h * 0.28
   for (const sx of [-1, 1]) {
-    const slope = new THREE.Mesh(
-      roundedBox(w * 0.56, 0.22, d * 1.06, 0.05, 1),
-      mats.plate
-    )
-    slope.position.set(sx * w * 0.25, h + pitch * 0.5, 0)
-    slope.rotation.z = sx * -Math.atan2(pitch, w * 0.5)
+    const slope = new THREE.Mesh(roundedBox(w * 0.56, 0.22, d * 1.06, 0.05, 1), mats.plate)
+    slope.position.set(sx * w * 0.25, h + roofH * 0.5, 0)
+    slope.rotation.z = sx * -Math.atan2(roofH, w * 0.5)
     slope.castShadow = true
     slope.receiveShadow = true
     shed.add(slope)
   }
+  const ridge = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, d * 1.1, 8), mats.rust)
+  ridge.rotation.x = Math.PI / 2
+  ridge.position.y = h + roofH
+  shed.add(ridge)
 
-  // Roller door on the long face, and windows if anyone still works here.
-  const door = new THREE.Mesh(roundedBox(w * 0.4, h * 0.6, 0.18, 0.04, 1), mats.accent)
-  door.position.set(0, h * 0.3, d / 2 + 0.05)
+  const doorW = w * 0.36
+  const doorH = h * 0.58
+  const door = new THREE.Mesh(roundedBox(doorW, doorH, 0.16, 0.03, 1), mats.accent)
+  door.position.set(0, doorH / 2, d / 2 + 0.08)
   shed.add(door)
+  addBeamBetween(shed, mats.beam, [-doorW * 0.56, 0, d / 2 + 0.16], [-doorW * 0.56, h, d / 2 + 0.16], 0.11)
+  addBeamBetween(shed, mats.beam, [doorW * 0.56, 0, d / 2 + 0.16], [doorW * 0.56, h, d / 2 + 0.16], 0.11)
+  addBeamBetween(shed, mats.beam, [-w * 0.48, h, d / 2 + 0.16], [w * 0.48, h, d / 2 + 0.16], 0.11)
   if (lit) {
     const winCount = intRange(rng, 2, 4)
     for (let i = 0; i < winCount; i++) {
@@ -303,6 +330,17 @@ function addShed(group, mats, rng, { x, z, w, d, h, rot = 0, lit = true }) {
       shed.add(win)
     }
   }
+  const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, h * 0.32, 8), mats.beam)
+  vent.position.set(w * range(rng, -0.22, 0.22), h + roofH + h * 0.16, -d * 0.18)
+  shed.add(vent)
+  const cap = new THREE.Mesh(new THREE.ConeGeometry(0.36, 0.24, 8), mats.rust)
+  cap.position.copy(vent.position)
+  cap.position.y += h * 0.17
+  shed.add(cap)
+  const awning = new THREE.Mesh(roundedBox(doorW * 1.2, 0.13, d * 0.16, 0.03, 1), mats.plate)
+  awning.position.set(0, h * 0.74, d * 0.58)
+  awning.rotation.x = -0.16
+  shed.add(awning)
   group.add(shed)
   return shed
 }
@@ -335,18 +373,25 @@ function addCrane(group, mats, rng, { x, z, h, reach }) {
   crane.position.set(x, DECK_HEIGHT, z)
   crane.rotation.y = rng() * Math.PI * 2
 
+  const half = 2.6
   for (const sx of [-1, 1]) {
-    for (const sz of [-1, 1]) {
-      const leg = new THREE.Mesh(roundedBox(0.7, h, 0.7, 0.08, 1), mats.beam)
-      leg.position.set(sx * 3, h / 2, sz * 3)
-      leg.castShadow = true
-      crane.add(leg)
+    for (const sz of [-1, 1]) addBeamBetween(crane, mats.beam, [sx * half, 0, sz * half], [sx * half, h, sz * half], 0.24)
+  }
+  // Cross-braced portal: open lattice rather than a single solid black block.
+  for (const sx of [-1, 1]) {
+    addBeamBetween(crane, mats.beam, [sx * half, 0.3, -half], [sx * half, h * 0.72, half], 0.14)
+    addBeamBetween(crane, mats.beam, [sx * half, 0.3, half], [sx * half, h * 0.72, -half], 0.14)
+  }
+  for (const sx of [-1, 1]) {
+    const railX = sx * 0.54
+    addBeamBetween(crane, mats.accent, [railX, h, -reach * 0.28], [railX, h, reach * 0.72], 0.18)
+    addBeamBetween(crane, mats.beam, [railX, h + 0.78, -reach * 0.18], [railX, h + 0.78, reach * 0.68], 0.13)
+    for (let i = 0; i < 5; i++) {
+      const a = -reach * 0.18 + i * reach * 0.17
+      addBeamBetween(crane, mats.beam, [railX, h, a], [railX, h + 0.78, a + reach * 0.17], 0.1)
+      addBeamBetween(crane, mats.beam, [railX, h + 0.78, a], [railX, h, a + reach * 0.17], 0.1)
     }
   }
-  const jib = new THREE.Mesh(roundedBox(1.0, 0.9, reach, 0.08, 1), mats.accent)
-  jib.position.set(0, h, reach * 0.28)
-  jib.castShadow = true
-  crane.add(jib)
   const counterweight = new THREE.Mesh(roundedBox(2.2, 1.6, 2.4, 0.1, 1), mats.rust)
   counterweight.position.set(0, h, -reach * 0.22)
   crane.add(counterweight)
@@ -358,6 +403,34 @@ function addCrane(group, mats, rng, { x, z, h, reach }) {
   hook.position.set(0, h - h * 0.55, reach * 0.42)
   crane.add(hook)
   group.add(crane)
+}
+
+/** Octagonal harbour-control tower, visible from sea without reading as a monolith. */
+function addHarbourTower(group, mats, { x, z, h, radius }) {
+  const tower = new THREE.Group()
+  tower.position.set(x, DECK_HEIGHT, z)
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(radius * 0.72, radius, h, 8), mats.wall)
+  shaft.position.y = h / 2
+  shaft.castShadow = true
+  shaft.receiveShadow = true
+  tower.add(shaft)
+  const balcony = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.3, radius * 1.3, 0.22, 8), mats.beam)
+  balcony.position.y = h * 0.86
+  tower.add(balcony)
+  const cab = new THREE.Mesh(new THREE.CylinderGeometry(radius * 1.04, radius * 1.04, h * 0.2, 8), mats.glass)
+  cab.position.y = h * 0.96
+  tower.add(cab)
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(radius * 1.28, h * 0.16, 8), mats.plate)
+  roof.position.y = h * 1.14
+  tower.add(roof)
+  const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, h * 0.38, 6), mats.beam)
+  antenna.position.y = h * 1.3
+  tower.add(antenna)
+  const beacon = new THREE.Mesh(new THREE.SphereGeometry(radius * 0.16, 8, 6), mats.lamp)
+  beacon.position.y = h * 1.5
+  beacon.userData.beacon = true
+  tower.add(beacon)
+  group.add(tower)
 }
 
 /**
@@ -515,30 +588,12 @@ export function buildHarbourMesh(body) {
   // Harbourmaster's tower — the tallest thing here, and how you spot a port
   // from open water before anything else resolves.
   if (isPort) {
-    const towerH = size * range(rng, 0.4, 0.62)
-    const tw = size * 0.16
-    const tower = new THREE.Mesh(roundedBox(tw, towerH, tw, tw * 0.08, 2), mats.wall)
-    tower.position.set(quayW * 0.3, DECK_HEIGHT + towerH / 2, -quayL * 0.34)
-    tower.castShadow = true
-    tower.receiveShadow = true
-    group.add(tower)
-    const cab = new THREE.Mesh(
-      roundedBox(size * 0.22, size * 0.11, size * 0.22, 0.06, 1),
-      mats.glass
-    )
-    cab.position.set(quayW * 0.3, DECK_HEIGHT + towerH + size * 0.05, -quayL * 0.34)
-    group.add(cab)
-    const cap = new THREE.Mesh(
-      roundedBox(size * 0.26, size * 0.02, size * 0.26, 0.03, 1),
-      mats.plate
-    )
-    cap.position.set(quayW * 0.3, DECK_HEIGHT + towerH + size * 0.11, -quayL * 0.34)
-    group.add(cap)
-    // Rotating beacon on the roof.
-    const beacon = new THREE.Mesh(new THREE.SphereGeometry(size * 0.022, 8, 6), mats.lamp)
-    beacon.position.set(quayW * 0.3, DECK_HEIGHT + towerH + size * 0.14, -quayL * 0.34)
-    beacon.userData.beacon = true
-    group.add(beacon)
+    addHarbourTower(group, mats, {
+      x: quayW * 0.3,
+      z: -quayL * 0.34,
+      h: size * range(rng, 0.42, 0.56),
+      radius: size * 0.09
+    })
   }
 
   // —— Waterfront plant ——————————————————————————————————————————————
