@@ -26,6 +26,9 @@ export const WEAPONS = [
   // `tracer` drives the projectile look (render/projectileMesh.js): a lit
   // tracer round, a dull solid slug, or a tumbling lump of rock.
   { id: 'pulse_laser', name: 'Deck Gun', category: 'laser', damage: 8, speed: 420, cooldownS: 0.42, ttl: 1.6, price: 0, color: '#ffd9a0', tracer: 'shell', report: 'heavy' },
+  // Handheld sidearm — same round, report, cadence, and damage as the free
+  // ship gun, kept separate so future on-foot weapons have their own ids.
+  { id: 'fixo_pistol', name: 'Fixo Pistol', category: 'laser', damage: 8, speed: 420, cooldownS: 0.42, ttl: 1.6, price: 0, color: '#ffd9a0', tracer: 'shell', report: 'heavy', handheld: true },
   { id: 'rapid_laser', name: 'Autocannon', category: 'laser', damage: 5, speed: 480, cooldownS: 0.12, ttl: 1.3, price: 4200, color: '#ffc266', tracer: 'tracer', report: 'rapid' },
   { id: 'burst_laser', name: 'Chain Gun', category: 'laser', damage: 7, speed: 500, cooldownS: 0.09, ttl: 1.2, price: 7800, color: '#ffe0a0', tracer: 'tracer', report: 'rapid' },
   { id: 'beam_laser', name: 'Rivet Gun', category: 'laser', damage: 16, speed: 380, cooldownS: 0.5, ttl: 1.5, price: 13500, color: '#c9b48a', tracer: 'slug', report: 'heavy' },
@@ -73,16 +76,16 @@ export function isAlienWeapon(weaponOrId) {
 
 /** Shop / market lists — never includes alien tech. */
 export function weaponsForCategory(category) {
-  return WEAPONS.filter((w) => w.category === category && !w.alien)
+  return WEAPONS.filter((w) => w.category === category && !w.alien && !w.handheld)
 }
 
 /** All weapons of a mount type including alien (equip / salvage). */
 export function allWeaponsForCategory(category) {
-  return WEAPONS.filter((w) => w.category === category)
+  return WEAPONS.filter((w) => w.category === category && !w.handheld)
 }
 
 export function purchasableWeapons() {
-  return WEAPONS.filter((w) => !w.alien && w.price > 0)
+  return WEAPONS.filter((w) => !w.alien && !w.handheld && w.price > 0)
 }
 
 // Every hardpoint starts mounted with its category's free base weapon —

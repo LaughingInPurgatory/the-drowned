@@ -119,7 +119,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
             <div><i style="background:#7fe0a0"></i> Waypoint</div>
             <div><i style="background:#ffe14a; box-shadow:0 0 6px #ffe14a; border-radius:2px"></i> You (heading)</div>
           </div>
-          <div class="sc-hint">Faint marks are places you have not been to yet.<br/>Double-click the chart to recentre on your boat.</div>
+          <div class="sc-hint">Faint marks are places you have not been to yet.<br/>Double-click the chart to recentre on you.</div>
         </div>
       </div>
       <div class="sc-resize"></div>
@@ -188,8 +188,20 @@ export function createSeaChart(container, gameState, hooks = {}) {
     return getWorld(gameState.galaxy)?.bodies ?? []
   }
 
+  function playerPosition() {
+    return gameState.player?.onFoot?.active
+      ? gameState.player.onFoot.position
+      : gameState.player?.ship?.position
+  }
+
+  function playerHeading() {
+    return gameState.player?.onFoot?.active
+      ? gameState.player.onFoot.heading
+      : gameState.player?.ship?.heading
+  }
+
   function centreOnPlayer() {
-    const p = gameState.player?.ship?.position
+    const p = playerPosition()
     if (!p) return
     centreX = Number(p[0]) || 0
     centreZ = Number(p[2]) || 0
@@ -343,9 +355,9 @@ export function createSeaChart(container, gameState, hooks = {}) {
     // You — bright yellow mark with heading.
     // Chart maps world +X → right, +Z → up; ship heading 0 is +Z / north.
     {
-      const p = gameState.player.ship.position
+      const p = playerPosition()
       const [x, y] = worldToScreen(p[0], p[2])
-      const heading = Number(gameState.player.ship.heading)
+      const heading = Number(playerHeading())
       const yaw = Number.isFinite(heading) ? heading : 0
       ctx.save()
       // Soft glow under the arrow
@@ -428,7 +440,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
       selBody.innerHTML = 'Nothing selected.'
       return
     }
-    const p = gameState.player.ship.position
+    const p = playerPosition()
     const dist = Math.hypot(body.position[0] - p[0], body.position[2] - p[2])
     const seen = (gameState.visitedBodyIds ?? []).map(String).includes(String(body.id))
     const isWaypoint = gameState.player.waypointBodyId === body.id

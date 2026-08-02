@@ -68,6 +68,18 @@ test('spawnNpcWithClass clears the body it was asked to spawn inside', () => {
   assert.equal(npc.position[1], 0, 'a spawned boat starts afloat')
 })
 
+test('spawned NPCs always receive a readable pilot name', () => {
+  const npc = spawnNpcWithClass(mulberry32(9), {
+    shipClassId: 'raider_mk1',
+    position: [0, 0, 0],
+    faction: 'alien',
+    species: { id: 'faction-1', name: 'Krova', leader: 'Mira Vale' }
+  })
+  assert.equal(npc.pilotName, 'Mira Vale')
+  assert.equal(typeof npc.pilotName, 'string')
+  assert.doesNotMatch(npc.pilotName, /\[object Object\]/)
+})
+
 test('wreck fields are not solid, so nothing is pushed out of one', () => {
   const field = { kind: 'wreckField', id: 'wf1', position: [0, 0, 0], radius: 300 }
   assert.equal(positionOverlapsBodies([0, 0, 0], [field]), false)

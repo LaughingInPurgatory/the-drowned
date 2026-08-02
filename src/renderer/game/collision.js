@@ -2,17 +2,16 @@ import * as THREE from 'three'
 import { getAsteroidRocks } from '../render/asteroidFieldMesh.js'
 import { islandShorelineToward, islandMaxShoreline } from '../render/islandMesh.js'
 
-// Harbour approach shell. Sized to the mesh it guards: render/harbourMesh.js
-// builds a port ~50 local units across, which main.js STATION_SCALE brings to
-// ~145 world units, so this leaves a boat room to come alongside without
-// letting it drive through the quay.
-const PORT_COLLISION_RADIUS = 120
-const OUTPOST_COLLISION_RADIUS = 40
+// Tight sailing shells follow the actual deck footprints after main.js halves
+// the old visual scale. Keep a little room around the quay so ships can nose
+// alongside and still pass through the gaps between a harbour and its mole.
+const PORT_COLLISION_RADIUS = 28
+const OUTPOST_COLLISION_RADIUS = 12
 
 // Exterior hang / undock shells — must clear *visual* bulk, not just the tight
 // collision sphere, so leaving a berth never drops you inside the jetty.
-export const PORT_EXTERIOR_RADIUS = 190
-export const OUTPOST_EXTERIOR_RADIUS = 75
+export const PORT_EXTERIOR_RADIUS = 48
+export const OUTPOST_EXTERIOR_RADIUS = 18
 
 /**
  * Shell used for targeting, spawn clearance, docking range, etc.
@@ -116,6 +115,18 @@ function resolveAsteroidFieldCollisions(shipState, shipPos, body, shipRadius, is
       fieldPos[2] + rock.position[2]
     )
     pushOutOfSphere(shipPos, shipState, center, rockCollisionRadius(rock), shipRadius)
+  }
+}
+
+/** Individual harbour mole rocks are solid; the gaps between them remain open. */
+function resolveBreakwaterCollisions(shipState, shipPos, body, shipRadius) {
+  const rocks = body?.breakwaterRocks
+  if (!Array.isArray(rocks)) return
+  for (const rock of rocks) {
+    if (!Number.isFinite(Number(rock?.x)) || !Number.isFinite(Number(rock?.z))) continue
+    const center = new THREE.Vector3(Number(rock.x), 0, Number(rock.z))
+    const radius = Math.max(0.25, Number(rock.radius) || 0)
+    pushOutOfSphere(shipPos, shipState, center, radius, shipRadius)
   }
 }
 
@@ -224,12 +235,16 @@ export function resolveShipCollisions(ships, onCollision = null) {
 export function resolveBodyCollisions(shipState, bodies, shipRadius, options = {}) {
   const shipPos = new THREE.Vector3().fromArray(shipState.position)
   const isRockAlive = options.isRockAlive
+  const shorelineShipRadius = Number.isFinite(Number(options.shorelineShipRadius))
+    ? Math.max(0.5, Number(options.shorelineShipRadius))
+    : shipRadius
 
   for (const body of bodies) {
     if (body.kind === 'wreckField') {
       resolveAsteroidFieldCollisions(shipState, shipPos, body, shipRadius, isRockAlive)
       continue
     }
+    if (body.kind === 'port') resolveBreakwaterCollisions(shipState, shipPos, body, shipRadius)
 
     // Islands ground on their real coastline, traced from the same height field
     // the mesh is built from (render/islandMesh.js). That is what lets a boat
@@ -241,7 +256,7 @@ export function resolveBodyCollisions(shipState, bodies, shipRadius, options = {
       // the land reaches, and this runs for every body every frame.
       const dx = shipPos.x - body.position[0]
       const dz = shipPos.z - body.position[2]
-      const reach = islandMaxShoreline(body) + shipRadius
+      const reach = islandMaxShoreline(body) + shorelineShipRadius
       if (dx * dx + dz * dz >= reach * reach) continue
       bodyRadius = islandShorelineToward(body, shipPos.x, shipPos.z)
     } else {
@@ -250,6 +265,12 @@ export function resolveBodyCollisions(shipState, bodies, shipRadius, options = {
     if (bodyRadius == null) continue
 
     const bodyPos = new THREE.Vector3(...body.position)
-    pushOutOfSphere(shipPos, shipState, bodyPos, bodyRadius, shipRadius)
+    pushOutOfSphere(
+      shipPos,
+      shipState,
+      bodyPos,
+      bodyRadius,
+      body.kind === 'island' ? shorelineShipRadius : shipRadius
+    )
   }
 }

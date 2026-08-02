@@ -129,8 +129,19 @@ function collisionRadiusFallback(body) {
 
 export function spawnNpcWithClass(rng, { shipClassId, position, faction = 'pirate', species = null, bodies = null }) {
   const shipClass = SHIP_CLASSES.find((c) => c.id === shipClassId)
+  // `galaxy.species` stores records, not strings. Older callers passed one of
+  // those records through as `species`, which left pilotName as an object and
+  // eventually rendered as "[object Object]" on the death screen.
+  const speciesPilot =
+    typeof species === 'string' && species.trim()
+      ? species.trim()
+      : species && typeof species === 'object'
+        ? [species.leader, species.name].find((value) => typeof value === 'string' && value.trim())
+        : null
   const pilotName =
-    faction === 'police' ? `Patrol ${100 + Math.floor(rng() * 900)}` : species ?? generateHumanName(rng)
+    faction === 'police'
+      ? `Patrol ${100 + Math.floor(rng() * 900)}`
+      : speciesPilot || generateHumanName(rng)
   const clearPos = clearPositionOfBodies(position, bodies ?? [])
   clearPos[1] = 0 // afloat; the sea sets the actual height each frame
   // Combat drones are player-only — NPCs never get a drones array, even when

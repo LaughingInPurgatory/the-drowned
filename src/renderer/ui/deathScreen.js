@@ -302,6 +302,10 @@ ${wreckedTypeCSS('#death-screen h1', { heavy: true })}
   margin-bottom: 0; line-height: 1.7; opacity: 0;
   text-shadow: ${TEXT_SHADOW};
 }
+#death-screen .summary .cause {
+  color: #ffb08c;
+  letter-spacing: 0.3px;
+}
 #death-screen.reveal .summary { animation: fadeUp 0.6s ease-out 0.4s forwards; }
 #death-screen .killer .k-line {
   color: #f0d0d0;
@@ -436,8 +440,32 @@ const DEATH_PUNS = [
   'May your salvage be meagre and your legend slightly exaggerated.'
 ]
 
-function pickPun() {
-  return DEATH_PUNS[Math.floor(Math.random() * DEATH_PUNS.length)]
+export const ACIDIC_SEA_DEATH_PUNS = [
+  'That water had a mean pH.',
+  'You went from wading to fading.',
+  'The sea was salty. The chemistry was worse.',
+  'The coast was clear. The acidity was not.',
+  'You found the ocean’s most corrosive current.',
+  'The tide turned terminal.',
+  'Your last shore leave was dissolved.',
+  'The deep was shallow on mercy.',
+  'You made a splash. The sea made a point.',
+  'The water was fine. The pH was not.',
+  'A bad day to be made of meat.',
+  'You got a saltwater discharge.',
+  'Your expedition reached a highly reactive conclusion.',
+  'No amount of Barter Units could buy that pH.',
+  'The sea took your hull’s protection personally.',
+  'You were sunk by a solution.',
+  'The ocean gave you a corrosive welcome.',
+  'You have been returned to the water cycle — slightly pickled.',
+  'The shoreline was only waist-deep. The consequences were not.',
+  'You and the sea had an irreversible reaction.'
+]
+
+export function pickDeathPun(cause = null) {
+  const pool = shouldShowDeathContact(cause) ? DEATH_PUNS : ACIDIC_SEA_DEATH_PUNS
+  return pool[Math.floor(Math.random() * pool.length)]
 }
 
 /**
@@ -455,6 +483,16 @@ export function formatFaction(faction) {
   if (!faction) return null
   const f = String(faction)
   return FACTION_LABEL[f] ?? f.charAt(0).toUpperCase() + f.slice(1)
+}
+
+export function formatDeathCause(cause) {
+  if (!cause) return null
+  if (cause === 'Killed by acidic seawater') return 'Acidic seawater exposure'
+  return String(cause)
+}
+
+export function shouldShowDeathContact(cause) {
+  return cause !== 'Killed by acidic seawater' && cause !== 'Acidic seawater exposure'
 }
 
 export function createDeathScreen(container, onReturnToMenu) {
@@ -510,13 +548,17 @@ export function createDeathScreen(container, onReturnToMenu) {
       killerName = null,
       killerShip = null,
       killerFaction = null,
-      killerMethod = null
+      killerMethod = null,
+      cause = null
     }) {
-      const name = escapeHtml(characterName || 'Captain')
       const pilot = killerPilot || killerName
 
       const killerEl = root.querySelector('.killer')
-      if (pilot || killerShip) {
+      if (!shouldShowDeathContact(cause)) {
+        killerEl.classList.remove('unknown')
+        killerEl.innerHTML = ''
+        killerEl.style.display = 'none'
+      } else if (pilot || killerShip) {
         const method =
           killerMethod === 'ram'
             ? 'Finished you with a ramming run'
@@ -539,13 +581,14 @@ export function createDeathScreen(container, onReturnToMenu) {
         killerEl.style.display = 'block'
       }
 
+      const deathCause = formatDeathCause(cause)
       root.querySelector('.summary').innerHTML = `
         Final Barter Units: ${Math.floor(credits || 0)} BU<br/>
         Reputation earned: ${reputation ?? 0}<br/>
-        ${name} is gone. Load your last save.
+        ${deathCause ? `<span class="cause">Cause of death: ${escapeHtml(deathCause)}</span>` : ''}
       `
 
-      root.querySelector('.pun').textContent = pickPun()
+      root.querySelector('.pun').textContent = pickDeathPun(cause)
 
       root.style.display = 'flex'
       root.style.pointerEvents = 'none' /* only .return re-enables */

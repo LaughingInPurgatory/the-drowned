@@ -467,6 +467,9 @@ function addBreakwater(group, mats, rng, radius) {
   const segs = Math.max(18, Math.round(arc * 22))
   const seaweedMatrices = []
   const seaweedDummy = new THREE.Object3D()
+  // Render-local rock centres are copied into world-space collision data by
+  // main.js after the harbour's scale and seaward rotation are applied.
+  group.userData.breakwaterRocks = []
   // One subdivision plus a per-vertex wobble. A bare icosahedron has twenty
   // identical faces and reads as a cut gem; this gives the lumpy, weathered
   // silhouette of tipped stone for a handful more triangles. Built once and
@@ -520,11 +523,17 @@ function addBreakwater(group, mats, rng, radius) {
         crest - sy,
         Math.sin(a) * r + range(rng, -s, s) * 0.4
       )
-      block.scale.set(s, sy, s * range(rng, 0.8, 1.25))
+      const horizontalScale = s * range(rng, 0.8, 1.25)
+      block.scale.set(s, sy, horizontalScale)
       block.rotation.set(rng() * Math.PI, rng() * Math.PI, rng() * Math.PI)
       block.castShadow = true
       block.receiveShadow = true
       group.add(block)
+      group.userData.breakwaterRocks.push({
+        x: block.position.x,
+        z: block.position.z,
+        radius: Math.max(s, horizontalScale) * 0.95
+      })
 
       // Seaweed takes hold on the sheltered, damp sides of the mole. Keep it
       // as one instanced draw after placement so a little coastal life does
@@ -626,6 +635,12 @@ export function buildHarbourMesh(body) {
   // —— Main quay ——————————————————————————————————————————————————
   const quayW = size * range(rng, 0.5, 0.75)
   const quayL = size * range(rng, 0.75, 1.0)
+  // Ambient pedestrians use the main quay as a small, deterministic walking
+  // loop. Keep this metadata on the harbour so their feet follow its scale and
+  // surface orientation without adding a second navigation system.
+  group.userData.npcDeck = isPort
+    ? { width: quayW, length: quayL, y: DECK_HEIGHT + 0.38 }
+    : null
   addJetty(group, mats, rng, { x: 0, z: 0, w: quayW, l: quayL })
 
   // Finger jetties off the quay for boats to lie alongside.

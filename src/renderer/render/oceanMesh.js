@@ -519,6 +519,9 @@ export function createOcean({ sunDirection, skyColor, fogColor }) {
     ]),
     vertexShader: VERTEX,
     fragmentShader: FRAGMENT,
+    // Only the daylight-facing surface is rendered. On-foot movement is
+    // shoreline-limited, so there is no underwater ceiling to draw.
+    side: THREE.FrontSide,
     fog: true
   })
   if (fogColor) material.uniforms.fogColor.value = new THREE.Color().copy(fogColor)

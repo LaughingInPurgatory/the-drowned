@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Drowned — Player Avatar Prototype</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      html, body { margin: 0; min-height: 100%; background: #0b1419; color: #e9e4d4; }
+      body { display: grid; place-items: center; overflow: hidden; }
+      #frame { position: relative; width: min(100vw, 1200px); height: min(100vh, 720px); }
+      canvas { display: block; width: 100%; height: 100%; }
+      .caption { position: absolute; left: 28px; top: 24px; letter-spacing: .08em; text-transform: uppercase; text-shadow: 0 2px 8px #000; }
+      .caption strong { display: block; font-size: 18px; color: #f2c96b; }
+      .caption span { display: block; margin-top: 7px; font-size: 12px; opacity: .8; }
+      .note { position: absolute; right: 24px; bottom: 20px; font-size: 11px; opacity: .72; text-align: right; }
+    </style>
+  </head>
+  <body>
+    <div id="frame">
+      <div class="caption"><strong>On-foot survivor // prototype</strong><span>1.8 unit human beside an 18 unit ship reference</span></div>
+      <div class="note">maritime jacket · utility trousers · deck boots · pack<br />procedural preview — not wired into gameplay</div>
+    </div>
+    <script type="module">
+      import * as THREE from 'three'
+      import { buildPlayerAvatarMesh } from './render/playerAvatarMesh.js'
+
+      const frame = document.querySelector('#frame')
+      const scene = new THREE.Scene()
+      scene.background = new THREE.Color(0x17252b)
+      scene.fog = new THREE.Fog(0x17252b, 22, 48)
+      const camera = new THREE.PerspectiveCamera(34, 1, 0.1, 100)
+      camera.position.set(13.5, 5.8, 21.5)
+      camera.lookAt(1.0, 1.15, 0.2)
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true })
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+      renderer.outputColorSpace = THREE.SRGBColorSpace
+      renderer.shadowMap.enabled = true
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap
+      frame.append(renderer.domElement)
+
+      scene.add(new THREE.HemisphereLight(0xb6d0dc, 0x1a1712, 2.1))
+      const key = new THREE.DirectionalLight(0xffe5b3, 3.2)
+      key.position.set(-7, 11, 8)
+      key.castShadow = true
+      key.shadow.mapSize.set(2048, 2048)
+      scene.add(key)
+      const rim = new THREE.DirectionalLight(0x77a9bd, 1.5)
+      rim.position.set(8, 5, -10)
+      scene.add(rim)
+
+      const floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(60, 60),
+        new THREE.MeshStandardMaterial({ color: 0x3b453d, roughness: 1 })
+      )
+      floor.rotation.x = -Math.PI / 2
+      floor.receiveShadow = true
+      scene.add(floor)
+
+      const avatar = buildPlayerAvatarMesh()
+      avatar.position.set(-7.0, 0, 2.35)
+      avatar.traverse((child) => { if (child.isMesh) child.castShadow = true })
+      scene.add(avatar)
+
+      const boat = new THREE.Group()
+      boat.position.set(3.6, 0, -0.4)
+      const hull = new THREE.Mesh(
+        new THREE.BoxGeometry(18, 1.45, 3.35),
+        new THREE.MeshStandardMaterial({ color: 0x26383c, roughness: 0.76, metalness: 0.25 })
+      )
+      hull.position.y = 0.9
+      hull.castShadow = true
+      boat.add(hull)
+      const deck = new THREE.Mesh(
+        new THREE.BoxGeometry(16.5, 0.22, 3.0),
+        new THREE.MeshStandardMaterial({ color: 0x7e6447, roughness: 0.9 })
+      )
+      deck.position.y = 1.72
+      deck.castShadow = true
+      boat.add(deck)
+      const cabin = new THREE.Mesh(
+        new THREE.BoxGeometry(3.2, 1.35, 2.35),
+        new THREE.MeshStandardMaterial({ color: 0x5c6868, roughness: 0.72, metalness: 0.15 })
+      )
+      cabin.position.set(2.8, 2.45, 0)
+      cabin.castShadow = true
+      boat.add(cabin)
+      const mast = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.09, 0.12, 4.5, 8),
+        new THREE.MeshStandardMaterial({ color: 0x282828, roughness: 0.78, metalness: 0.35 })
+      )
+      mast.position.set(-1.2, 3.7, 0)
+      mast.castShadow = true
+      boat.add(mast)
+      scene.add(boat)
+
+      const marker = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.025, 0.025, 1.8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xf2c96b })
+      )
+      marker.position.set(-6.15, 0.9, 2.37)
+      scene.add(marker)
+
+      if (new URLSearchParams(window.location.search).has('close')) {
+        boat.visible = false
+        marker.visible = false
+        camera.position.set(-3.8, 3.0, 8.3)
+        camera.lookAt(-7.0, 1.0, 2.35)
+        document.querySelector('.caption strong').textContent = 'On-foot survivor // close-up'
+        document.querySelector('.caption span').textContent = 'weatherproof clothing and practical salvage gear'
+        document.querySelector('.note').textContent = 'prototype silhouette study — not wired into gameplay'
+      }
+
+      function resize() {
+        const width = frame.clientWidth
+        const height = frame.clientHeight
+        camera.aspect = width / height
+        camera.updateProjectionMatrix()
+        renderer.setSize(width, height, false)
+      }
+      window.addEventListener('resize', resize)
+      resize()
+
+      function render(time) {
+        const t = time * 0.00012
+        boat.rotation.y = Math.sin(t) * 0.018
+        renderer.render(scene, camera)
+        requestAnimationFrame(render)
+      }
+      requestAnimationFrame(render)
+    </script>
+  </body>
+</html>

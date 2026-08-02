@@ -216,16 +216,29 @@ let sfxLoadPromise = null
 const SFX_FILES = [
   'engine_engage.ogg',
   'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
+  // Short CC0 metallic impact; see public/audio/sfx/SHIP_COLLISION_CREDITS.txt
+  'ship_collision_clank.mp3',
   // CC0 OpenGameArt field recording; see public/audio/sfx/SEAGULL_CREDITS.txt
   'seagull_ambient_1.wav',
   // Sounding (P) — CC0 Freesound samples; see public/audio/sfx/SONAR_CREDITS.txt
   'sonar_ping.ogg', 'sonar_return.ogg'
 ]
 
+// Fantozzi's CC0 pack gives the island two useful footstep families: the
+// softer Sand takes grass, soil and leaf cover; Stone covers rock, shingle,
+// concrete and ruined harbour ground. Keep the files as individual one-shots
+// so each step can alternate feet and vary without a looping Foley bed.
+const FOOTSTEP_FILES = [
+  'footsteps/Fantozzi-SandL1.ogg', 'footsteps/Fantozzi-SandL2.ogg', 'footsteps/Fantozzi-SandL3.ogg',
+  'footsteps/Fantozzi-SandR1.ogg', 'footsteps/Fantozzi-SandR2.ogg', 'footsteps/Fantozzi-SandR3.ogg',
+  'footsteps/Fantozzi-StoneL1.ogg', 'footsteps/Fantozzi-StoneL2.ogg', 'footsteps/Fantozzi-StoneL3.ogg',
+  'footsteps/Fantozzi-StoneR1.ogg', 'footsteps/Fantozzi-StoneR2.ogg', 'footsteps/Fantozzi-StoneR3.ogg'
+]
+
 function ensureSfx() {
   if (sfxLoadPromise) return sfxLoadPromise
   const audio = getContext()
-  sfxLoadPromise = Promise.all(SFX_FILES.map(async (name) => {
+  sfxLoadPromise = Promise.all([...SFX_FILES, ...FOOTSTEP_FILES].map(async (name) => {
     try {
       const res = await fetch(`audio/sfx/${name}`)
       if (!res.ok) throw new Error(res.statusText)
@@ -240,7 +253,16 @@ function ensureSfx() {
 }
 
 // One-shot or looping sample. Returns { source, gain, volume } or null if not loaded.
-function playSample(name, { volume = 0.5, rate = 1, loop = false, fadeIn = 0, delay = 0, duration = 0 } = {}) {
+function playSample(name, {
+  volume = 0.5,
+  rate = 1,
+  loop = false,
+  fadeIn = 0,
+  delay = 0,
+  duration = 0,
+  lowpassHz = 0,
+  lowpassQ = 0.6
+} = {}) {
   const buf = sfxBuffers.get(name)
   if (!buf) return null
   const audio = getContext()
@@ -256,7 +278,19 @@ function playSample(name, { volume = 0.5, rate = 1, loop = false, fadeIn = 0, de
   } else {
     gain.gain.setValueAtTime(volume, audio.currentTime)
   }
-  source.connect(gain).connect(getMasterDestination())
+  source.connect(gain)
+  if (lowpassHz > 0) {
+    const lowpass = audio.createBiquadFilter()
+    lowpass.type = 'lowpass'
+    lowpass.frequency.value = lowpassHz
+    lowpass.Q.value = lowpassQ
+    gain.connect(lowpass).connect(getMasterDestination())
+    source.addEventListener('ended', () => {
+      try { lowpass.disconnect() } catch { /* already disconnected */ }
+    }, { once: true })
+  } else {
+    gain.connect(getMasterDestination())
+  }
   source.start(now)
   if (duration > 0 && !loop) source.stop(now + duration)
   // Store target volume — AudioParam.value is unreliable after ramps, and
@@ -298,6 +332,38 @@ export function playGullSquawk() {
   tone({ type: 'triangle', freq: 2450, freqEnd: 980, duration: 0.15, peak: 0.3, delay: 0.12 })
   noiseBurst({ duration: 0.045, filterFreq: 3600, peak: 0.12, drive: 1.1, delay: 0.02 })
   return true
+}
+
+const FOOTSTEP_FAMILIES = {
+  grass: ['SandL1', 'SandL2', 'SandL3', 'SandR1', 'SandR2', 'SandR3'],
+  sand: ['SandL1', 'SandL2', 'SandL3', 'SandR1', 'SandR2', 'SandR3'],
+  stone: ['StoneL1', 'StoneL2', 'StoneL3', 'StoneR1', 'StoneR2', 'StoneR3'],
+  wood: ['StoneL1', 'StoneL2', 'StoneL3', 'StoneR1', 'StoneR2', 'StoneR3']
+}
+
+/** Play a close, unattenuated player footstep using the current terrain family. */
+export function playFootstep(surface = 'grass', { running = false, side = 'L' } = {}) {
+  ensureSfx()
+  const family = FOOTSTEP_FAMILIES[surface] ?? FOOTSTEP_FAMILIES.grass
+  const wantedSide = side === 'R' ? 'R' : 'L'
+  const choices = family.filter((name) => name.includes(wantedSide))
+  const stem = choices[Math.floor(Math.random() * choices.length)] ?? family[0]
+  const familyName = stem.startsWith('Sand') ? 'Sand' : 'Stone'
+  const file = `footsteps/Fantozzi-${familyName}${stem.slice(familyName.length)}.ogg`
+  if (playSample(file, {
+    volume: running ? 0.32 : 0.25,
+    rate: (running ? 1.04 : 0.98) + Math.random() * 0.08
+  })) return true
+
+  // Audio decoding is lazy; a small fallback keeps the first step audible
+  // while the real CC0 clip finishes decoding after the first key press.
+  noiseBurst({
+    duration: running ? 0.075 : 0.06,
+    filterFreq: surface === 'stone' || surface === 'wood' ? 1800 : 1050,
+    peak: running ? 0.16 : 0.12,
+    drive: surface === 'stone' ? 1.4 : 0.7
+  })
+  return false
 }
 
 function stopSampleNodes(nodes, fadeOut = 0.12) {
@@ -445,6 +511,8 @@ const WEAPON_SYNTH_FALLBACK = {
     tone({ type: 'sine', freq: 62, freqEnd: 28, duration: 0.5, peak: 0.5, delay: 0.26 })
     tone({ type: 'square', freq: 140, freqEnd: 48, duration: 0.2, peak: 0.2, delay: 0.27 })
   },
+  // The Fixo Pistol deliberately shares the basic Deck Gun report.
+  fixo_pistol: () => WEAPON_SYNTH_FALLBACK.pulse_laser(),
 
   // --- Launchers ---
   // Harpoon gun: the charge, then line running off the drum behind it.
@@ -497,8 +565,95 @@ export function playWeaponFire(weaponId) {
 }
 
 export function playHit() {
-  noiseBurst({ duration: 0.18, filterFreq: 1200, peak: 0.28, drive: 1.5 })
-  tone({ type: 'square', freq: 220, freqEnd: 90, duration: 0.1, peak: 0.14 })
+  ensureSfx()
+  const impactTone = [150, 175, 205, 240, 285, 330][Math.floor(Math.random() * 6)]
+  const impactRate = 0.7 + Math.random() * 0.2
+  const lowpassHz = 1050 + Math.random() * 750
+
+  if (playSample('ship_collision_clank.mp3', {
+    volume: 0.48 + Math.random() * 0.12,
+    rate: impactRate,
+    lowpassHz,
+    lowpassQ: 0.55
+  })) {
+    // The recording supplies the metal; this shifting low body makes rapid
+    // laser hits land as individual impacts instead of one repeated clank.
+    tone({
+      type: 'sine',
+      freq: impactTone * 0.55,
+      freqEnd: impactTone * 0.28,
+      duration: 0.16,
+      peak: 0.06
+    })
+    return
+  }
+
+  // Matching fallback while the sample is decoding or unavailable.
+  noiseBurst({ duration: 0.05, filterFreq: lowpassHz * 0.7, peak: 0.12, drive: 1.3 })
+  tone({ type: 'triangle', freq: impactTone * 1.45, freqEnd: impactTone * 0.72, duration: 0.18, peak: 0.17 })
+  tone({ type: 'sine', freq: impactTone * 0.5, freqEnd: impactTone * 0.25, duration: 0.16, peak: 0.08 })
+}
+
+/** A short, low impact on dirt, timber, or masonry from the Fixo Pistol. */
+export function playFixoImpact() {
+  playDullImpact()
+}
+
+/** A short, low impact on terrain or harbour structures from a ship round. */
+export function playTerrainImpact() {
+  playDullImpact()
+}
+
+function playDullImpact() {
+  ensureSfx()
+  noiseBurst({ duration: 0.045, filterFreq: 620, peak: 0.2, drive: 1.2 })
+  tone({ type: 'sine', freq: 92, freqEnd: 48, duration: 0.16, peak: 0.22 })
+}
+
+/** A soft, low splash/blob when a ship round punches into open water. */
+export function playWaterImpact() {
+  ensureSfx()
+  noiseBurst({ duration: 0.12, filterFreq: 720, peak: 0.13, drive: 1.1 })
+  noiseBurst({ duration: 0.32, filterFreq: 300, peak: 0.09, drive: 1.2, delay: 0.025 })
+  tone({ type: 'sine', freq: 150, freqEnd: 62, duration: 0.2, peak: 0.1 })
+}
+
+/** Heavy, low explosive impact for a missile striking a solid target. */
+export function playMissileImpact() {
+  ensureSfx()
+  noiseBurst({ duration: 0.1, filterFreq: 1250, peak: 0.34, drive: 2.8 })
+  tone({ type: 'triangle', freq: 92, freqEnd: 26, duration: 0.72, peak: 0.42 })
+  noiseBurst({ duration: 1.05, filterFreq: 190, peak: 0.36, drive: 3.4, delay: 0.04 })
+  tone({ type: 'sine', freq: 48, freqEnd: 16, duration: 1.0, peak: 0.28, delay: 0.08 })
+}
+
+let lastShipCollisionAtMs = -Infinity
+
+/** Short, weighty hull impact. Rate-limited so resting against another ship does not loop. */
+export function playShipCollision() {
+  ensureSfx()
+  const nowMs = globalThis.performance?.now?.() ?? Date.now()
+  if (nowMs - lastShipCollisionAtMs < 220) return false
+  lastShipCollisionAtMs = nowMs
+
+  if (playSample('ship_collision_clank.mp3', {
+    volume: 0.78,
+    // Slow the recording down and remove its bright edge: this should feel
+    // like a heavy hull meeting another hull, not a dropped piece of pipe.
+    rate: 0.78 + Math.random() * 0.08,
+    lowpassHz: 1350,
+    lowpassQ: 0.55
+  })) {
+    // A quiet sub/body layer gives the softened recording some physical weight.
+    tone({ type: 'sine', freq: 92, freqEnd: 48, duration: 0.2, peak: 0.1 })
+    return true
+  }
+
+  // Keep collisions audible while the sample is still decoding, or if it fails to load.
+  noiseBurst({ duration: 0.06, filterFreq: 900, peak: 0.18, drive: 1.6 })
+  tone({ type: 'triangle', freq: 240, freqEnd: 120, duration: 0.22, peak: 0.2 })
+  tone({ type: 'sine', freq: 85, freqEnd: 46, duration: 0.2, peak: 0.11 })
+  return true
 }
 
 // Chunkier, multi-layer boom: a sharp high-passed crack for the initial

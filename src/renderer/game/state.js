@@ -5,6 +5,7 @@ import { seedMissionsForGalaxy } from '../data/missionTemplates.js'
 import { defaultLoadoutFor } from '../data/weapons.js'
 import { defaultAccessoriesFor } from '../data/accessories.js'
 import { emptySkills } from '../data/skills.js'
+import { normalizeAvatarSelection } from '../render/playerAvatarVariants.js'
 
 export function createGameState({
   characterName,
@@ -12,6 +13,7 @@ export function createGameState({
   shipClassId,
   seed,
   portraitDataUrl = null,
+  avatar = null,
   /** Passed through to generateWorld (tests use a compact world). */
   galaxyOpts = undefined,
   /** Override only for tests; production always uses CANONICAL_WORLD_SEED. */
@@ -60,6 +62,26 @@ export function createGameState({
       lawStanding: 10,
       // Optional base64 data-URL of player portrait (Create Captain / Character upload).
       portraitDataUrl: portraitDataUrl || null,
+      avatar: normalizeAvatarSelection(avatar),
+      onFoot: {
+        active: false,
+        bodyId: null,
+        position: [0, 0, 0],
+        velocity: [0, 0, 0],
+        heading: 0,
+        pitch: 0,
+        walkPhase: 0,
+        jumping: false,
+        verticalVelocity: 0,
+        jumpTime: 0,
+        jumpGroundY: null,
+        grounded: true,
+        flashlightOn: false,
+        health: 100,
+        stamina: 100,
+        runLocked: false,
+        running: false
+      },
       // Player-only skills 0–20 (data/skills.js) — raised via skillbooks.
       skills: emptySkills(),
       ship: {

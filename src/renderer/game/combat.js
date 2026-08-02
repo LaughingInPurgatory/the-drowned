@@ -207,6 +207,7 @@ const _fireQuat = new THREE.Quaternion()
 const _firePos = new THREE.Vector3()
 const _fireFwd = new THREE.Vector3()
 const _fireMuzzle = new THREE.Vector3()
+export const FIXO_PISTOL_WEAPON_ID = 'fixo_pistol'
 
 /**
  * @param {string|null} weaponTypeFilter 'laser' | 'missile' | null (all)
@@ -398,6 +399,39 @@ export function fireProjectile(
   }
 }
 
+/** Fire the player's handheld Fixo Pistol while on foot. */
+export function fireOnFootProjectile(gameState, onFoot, origin, direction, onFire) {
+  if (!gameState?.projectiles || !onFoot || !Array.isArray(origin) || !Array.isArray(direction)) return false
+  const weapon = getWeapon(FIXO_PISTOL_WEAPON_ID)
+  const now = Number(gameState.simTime) || 0
+  if (now < (Number(onFoot.fixoPistolReadyAt) || -Infinity)) return false
+
+  _fireMuzzle.fromArray(origin)
+  _projDir.fromArray(direction)
+  if (_projDir.lengthSq() < 1e-8) return false
+  _projDir.normalize()
+  _projQuat.setFromUnitVectors(_localForward, _projDir)
+  onFoot.fixoPistolReadyAt = now + weapon.cooldownS
+  gameState.projectiles.push({
+    id: `proj-${projectileCounter++}`,
+    ownerId: 'player',
+    onFoot: true,
+    weaponType: 'laser',
+    weaponId: weapon.id,
+    position: [_fireMuzzle.x, _fireMuzzle.y, _fireMuzzle.z],
+    quaternion: [_projQuat.x, _projQuat.y, _projQuat.z, _projQuat.w],
+    velocity: [_projDir.x * weapon.speed, _projDir.y * weapon.speed, _projDir.z * weapon.speed],
+    damage: weapon.damage,
+    ttl: weapon.ttl
+  })
+  try {
+    onFire?.(weapon.id, 'laser')
+  } catch (err) {
+    console.error('on-foot fire callback failed:', err)
+  }
+  return true
+}
+
 /**
  * Horizontal bump radius for a hull.
  *
@@ -405,7 +439,7 @@ export function fireProjectile(
  * them. Use midships half-beam (plus a short length factor) so side-swipes match
  * the visible beam while bow-on contacts still register.
  */
-export function getShipCollisionRadius(shipClass) {
+function hullRadiusParts(shipClass) {
   const hull = shipClass?.hull
   const length = Math.max(6, Number(hull?.length) || 16)
   const widths = hull?.stationWidths
@@ -417,9 +451,22 @@ export function getShipCollisionRadius(shipClass) {
     }
   }
   if (halfBeam < 0.4) halfBeam = length * 0.07
-  // Slightly past the plating so strakes still touch; never larger than ~0.32 LOA.
+  return { length, halfBeam }
+}
+
+export function getShipCollisionRadius(shipClass) {
+  const { length, halfBeam } = hullRadiusParts(shipClass)
+  // Combat and hull-to-hull hit envelopes stay slightly generous so enlarged
+  // ships do not visually overlap before a collision or projectile hit.
   const r = halfBeam * 1.25 + length * 0.1
   return Math.max(2.4, Math.min(length * 0.32, r))
+}
+
+/** Tighter island shell so the visible hull can lie right against a beach. */
+export function getShorelineCollisionRadius(shipClass) {
+  const { length, halfBeam } = hullRadiusParts(shipClass)
+  const r = halfBeam * 1.05 + length * 0.04
+  return Math.max(2.4, Math.min(length * 0.3, r))
 }
 
 // Scratch vectors — closestDistanceToSegment used to clone 3–4 Vector3s per
@@ -456,7 +503,7 @@ const WRECK_HIT_RADIUS = 22
 // ~few laser hits / one missile to scrap a wreck instead of looting.
 const WRECK_DEFAULT_HULL = 90
 
-export function updateProjectiles(gameState, dt, onHit) {
+export function updateProjectiles(gameState, dt, onHit, onWorldImpact) {
   const alive = []
   // Only the player can salvage wrecks, and only if galaxy/currentSystemId are present
   // (test fixtures often omit them — no field check happens in that case).
@@ -659,6 +706,30 @@ export function updateProjectiles(gameState, dt, onHit) {
       }
     }
 
+    if (!hit && typeof onWorldImpact === 'function') {
+      const impact = onWorldImpact({
+        projectile: proj,
+        from: _projPrev.toArray(),
+        to: _projNext.toArray()
+      })
+      if (impact) {
+        const impactPosition = Array.isArray(impact)
+          ? impact
+          : Array.isArray(impact.position) ? impact.position : proj.position.slice()
+        onHit?.({
+          position: impactPosition,
+          weaponType: proj.weaponType,
+          weaponId: proj.weaponId,
+          onFootImpact: !!proj.onFoot,
+          worldImpact: true,
+          waterImpact: !!impact.waterImpact,
+          silentImpact: !!proj.gullHit,
+          ownerId: proj.ownerId
+        })
+        hit = true
+      }
+    }
+
     if (!hit) alive.push(proj)
   }
   gameState.projectiles = alive
@@ -724,6 +795,7 @@ export function prepareCombatFrame(gameState) {
     // Moored alongside: nobody starts anything with a boat tied up under a
     // harbour's guns, and nothing can reach it if they try.
     playerMoored: !!gameState.player.dockedBodyId,
+    playerOnFoot: !!gameState.player.onFoot?.active,
     truce,
     policeSos: policeHostileToPlayer(gameState, system),
     civSos: civiliansHostileToPlayer(gameState, system),
@@ -743,7 +815,7 @@ function opponentsFor(npc, gameState, frame = null) {
   const ctx = frame ?? prepareCombatFrame(gameState)
   // A moored boat is not a target. Without this, raiders queue up off the quay
   // and open fire on something that cannot answer or leave.
-  if (ctx.playerMoored) return []
+  if (ctx.playerMoored || ctx.playerOnFoot) return []
   const playerPos = ctx.playerPos
   const engaged = !!ctx.engagedMap[npc.id]
 
@@ -791,6 +863,12 @@ function opponentsFor(npc, gameState, frame = null) {
 
 export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame = null) {
   if (npc.destroyed) return
+  if (gameState.player?.onFoot?.active) {
+    // The boat is a protected placeholder while the captain is ashore.
+    npc.aiState = npc.aiState === 'attack' || npc.aiState === 'ram' ? 'patrol' : npc.aiState
+    npc.velocity = [0, 0, 0]
+    return
+  }
   const npcShipClass = getShipClass(npc.shipClassId)
 
   const npcPos = new THREE.Vector3().fromArray(npc.position)

@@ -6,9 +6,29 @@ import {
   getShipAimPoint,
   getReticleAimPoint,
   syncChaseCamera,
+  syncOnFootCamera,
   resetChaseCameraState,
   orientCameraToward
 } from './sceneSync.js'
+
+test('on-foot camera sits at first-person eye height at world avatar scale', () => {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 2e6)
+  syncOnFootCamera(camera, { position: [0, 0, 0], heading: 0, pitch: 0 }, { forceSnap: true })
+  assert.ok(Math.abs(camera.position.z) < 1e-6, 'first-person camera should not trail the avatar')
+  assert.ok(Math.abs(camera.position.x) < 1e-6, 'first-person camera should not sit over a shoulder')
+  assert.ok(camera.position.y > 1.5 && camera.position.y < 1.65, 'camera should sit near the human avatar eye height')
+})
+
+test('on-foot camera never eases below the current terrain surface', () => {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.1, 2e6)
+  camera.position.set(0, -20, 0)
+  syncOnFootCamera(
+    camera,
+    { position: [0, 0, 0], heading: 0, pitch: 0 },
+    { floorY: 4, dt: 1 / 60 }
+  )
+  assert.ok(camera.position.y >= 4.12, 'camera must remain above the terrain')
+})
 
 test('getReticleAimPoint matches ship boresight when chase cam is synced', () => {
   const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.5, 2e6)
@@ -31,6 +51,19 @@ test('getReticleAimPoint matches ship boresight when chase cam is synced', () =>
   const ndc = reticle.clone().project(camera)
   assert.ok(Math.abs(ndc.x) < 1e-5, 'reticle aim projects to screen center X')
   assert.ok(Math.abs(ndc.y) < 1e-5, 'reticle aim projects to screen center Y')
+})
+
+test('chase camera clears the stern of an enlarged saved hull', () => {
+  const camera = new THREE.PerspectiveCamera(60, 16 / 9, 0.5, 2e6)
+  const ship = {
+    position: [0, 0, 0],
+    quaternion: [0, 0, 0, 1],
+    _renderHullLength: 51
+  }
+  resetChaseCameraState()
+  syncChaseCamera(camera, ship, { forceSnap: true })
+  assert.ok(camera.position.z < -55, 'large hull camera should leave visible water behind the stern')
+  assert.ok(camera.position.y > 15, 'large hull camera should retain a useful view down onto the wake')
 })
 
 test('getReticleAimPoint does not clobber shared temps across calls', () => {

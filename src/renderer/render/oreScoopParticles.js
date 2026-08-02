@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { waveHeight } from '../world/sea.js'
 
 // Rock fragments that stream from a hit asteroid toward the ship when the
 // ore hold scoops yield. Small 3D blocks (not soft point sprites).
@@ -26,6 +27,7 @@ function makeFragmentMesh() {
     metalness: 0.04 + Math.random() * 0.08,
     flatShading: true,
     transparent: true,
+    fog: false,
     opacity: 1
   })
   // Slight amber ore flecks on some chunks.
@@ -40,12 +42,15 @@ function makeFragmentMesh() {
   const sz = 0.55 + Math.random() * 1.1
   mesh.userData.baseScale = new THREE.Vector3(sx, sy, sz)
   mesh.scale.copy(mesh.userData.baseScale).multiplyScalar(1.6)
+  mesh.renderOrder = 30
+  mesh.material.depthWrite = false
   return mesh
 }
 
 export function createOreScoopEffects() {
   const group = new THREE.Group()
   group.frustumCulled = false
+  group.renderOrder = 30
 
   /** @type {{
    *   alive: boolean,
@@ -108,35 +113,54 @@ export function createOreScoopEffects() {
         s.mesh.visible = true
       }
     },
-    update(dt, shipWorldPos) {
+    update(dt, shipWorldPos, simTime = 0) {
+      const targetX = Number(shipWorldPos?.x ?? shipWorldPos?.[0]) || 0
+      const targetZ = Number(shipWorldPos?.z ?? shipWorldPos?.[2]) || 0
+      const targetWaterY = waveHeight(targetX, targetZ, simTime)
       for (let i = 0; i < POOL; i++) {
         const s = slots[i]
         if (!s.alive) {
           if (s.mesh.visible) s.mesh.visible = false
           continue
         }
+        _toShip.copy(shipWorldPos)
+        const travelDistance = Math.hypot(
+          _toShip.x - s.start.x,
+          _toShip.z - s.start.z
+        )
+        // Salvage can be collected from up to 1 km away. Give a distant pull
+        // enough time to remain a readable trail instead of blinking out at
+        // the source before the debris reaches the hold.
+        s.life = Math.max(s.life, 0.55 + travelDistance / 360)
         s.t += dt / s.life
         const u = Math.min(1, s.t)
         // Ease: drift outward early, then pull hard into the ship.
         const ease = u * u * (3 - 2 * u)
         const pull = ease * ease
         const drift = (1 - ease) * (1 + u * 0.35)
-        _toShip.copy(shipWorldPos)
+        // Keep the debris above the visible waterline. Wreck positions are
+        // often authored at sea level, so interpolating their raw Y toward the
+        // ship would otherwise put most fragments behind the ocean depth pass.
+        const sourceWaterY = waveHeight(s.start.x, s.start.z, simTime)
+        const sourceY = Math.max(s.start.y, sourceWaterY + 1.35)
+        const targetY = Math.max(_toShip.y, targetWaterY + 1.35)
         _pos.set(
           s.start.x * (1 - pull) + _toShip.x * pull + s.jitter.x * drift,
-          s.start.y * (1 - pull) + _toShip.y * pull + s.jitter.y * drift,
+          sourceY * (1 - pull) + targetY * pull + s.jitter.y * drift * 0.45,
           s.start.z * (1 - pull) + _toShip.z * pull + s.jitter.z * drift
         )
         s.mesh.position.copy(_pos)
         s.mesh.rotation.x += s.spin.x * dt
         s.mesh.rotation.y += s.spin.y * dt
         s.mesh.rotation.z += s.spin.z * dt
-        // Shrink as they reach the hold.
-        const shrink = 1 - pull * 0.75
+        // Keep fragments readable all the way to the hold; dissolve only in
+        // the final instant instead of making the last stretch look cut off.
+        const shrink = 1 - pull * 0.35
         const base = s.mesh.userData.baseScale
         const size = (1.4 + (1 - u) * 1.2) * shrink
         s.mesh.scale.set(base.x * size, base.y * size, base.z * size)
-        s.mesh.material.opacity = Math.min(1, 1.15 - pull * 0.95)
+        const terminalFade = u > 0.985 ? Math.max(0, (1 - u) / 0.015) : 1
+        s.mesh.material.opacity = terminalFade * Math.min(1, 1.05 - pull * 0.12)
         if (u >= 1) {
           s.alive = false
           s.mesh.visible = false

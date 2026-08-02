@@ -180,6 +180,9 @@ function isDarkFoliage(src, meshName = '') {
 function applyPlantMaterials(root, { dry = false, forceFoliage = false } = {}) {
   root.traverse((obj) => {
     if (!obj.isMesh && !obj.isSkinnedMesh) return
+    // Grass is deliberately receive-only. Thousands of thin blades add a
+    // disproportionate amount of work to the shadow pass and make a noisy
+    // stippled shadow, while trees and larger foliage still cast properly.
     obj.castShadow = !forceFoliage
     obj.receiveShadow = true
     const list = Array.isArray(obj.material) ? obj.material : [obj.material]
@@ -240,7 +243,7 @@ function bakePlantRoot(source, { targetH = 2, dry = false, isGrass = false } = {
   }
 
   if (!wrapper.children.length) {
-    return { root: wrapper, height: targetH, radius: targetH * 0.3 }
+    return { root: wrapper, height: targetH, radius: targetH * 0.3, isGrass }
   }
 
   // Normalize height to targetH, ground min.y = 0, centre XZ.
@@ -276,7 +279,8 @@ function bakePlantRoot(source, { targetH = 2, dry = false, isGrass = false } = {
   return {
     root: wrapper,
     height: Math.max(0.08, size2.y),
-    radius: Math.max(size2.x, size2.z) * 0.5
+    radius: Math.max(size2.x, size2.z) * 0.5,
+    isGrass
   }
 }
 
@@ -545,9 +549,10 @@ export function placePlantClone(proto, x, y, z, scale, yaw, opts = {}) {
       }
     })
   }
+  const noShadow = opts.noShadow ?? proto?.isGrass === true
   obj.traverse((c) => {
     if (c.isMesh) {
-      c.castShadow = !opts.noShadow
+      c.castShadow = !noShadow
       c.receiveShadow = true
     }
   })

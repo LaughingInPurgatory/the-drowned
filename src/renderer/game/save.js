@@ -7,9 +7,10 @@ import { ensureBlueprintMaps, updateCraftingJobs } from './crafting.js'
 import { applyOfflineTime, reanchorGameClock } from './gameClock.js'
 import { ensureDrones } from './drones.js'
 import { ensureLawStanding } from './security.js'
-import { getWorld } from '../procgen/world.js'
+import { getWorld, normalizeCoastalPortPositions } from '../procgen/world.js'
 import { tickGalaxyAnomalies } from './systemScan.js'
 import { ensureSkills } from './skills.js'
+import { normalizeAvatarSelection, randomAvatarSelection } from '../render/playerAvatarVariants.js'
 
 /** Remap qty map keys through a resolver, merging collisions. */
 function remapCountMap(map, resolveKey) {
@@ -132,11 +133,12 @@ export function serializeGameState(gameState) {
   if (gameState.simClockOriginMs != null) {
     gameState.simTime = Math.max(0, (nowMs - gameState.simClockOriginMs) / 1000)
   }
+  const { onFoot, ...savedPlayer } = gameState.player
   return {
     version: gameState.version,
     seed: gameState.seed,
     createdAt: gameState.createdAt,
-    player: gameState.player,
+    player: savedPlayer,
     galaxy: gameState.galaxy,
     economyOverrides: gameState.economyOverrides,
     marketStock: gameState.marketStock ?? {},
@@ -172,6 +174,27 @@ export function deserializeGameState(data) {
     probeCounts: data.probeCounts ?? {},
     craftingJobs: data.craftingJobs ?? [],
     marketStock: data.marketStock ?? {}
+  }
+  if (gameState.player?.avatar) gameState.player.avatar = normalizeAvatarSelection(gameState.player.avatar)
+  else if (gameState.player) gameState.player.avatar = randomAvatarSelection()
+  if (gameState.player) {
+    gameState.player.onFoot = {
+      active: false,
+      bodyId: null,
+      position: [0, 0, 0],
+      velocity: [0, 0, 0],
+      heading: 0,
+      pitch: 0,
+      walkPhase: 0,
+      jumping: false,
+      verticalVelocity: 0,
+      jumpTime: 0,
+      flashlightOn: false,
+      health: 100,
+      stamina: 100,
+      runLocked: false,
+      running: false
+    }
   }
   // miningHold falls back to {} for saves written before mining existed.
   gameState.player.ship.miningHold ??= {}
@@ -227,6 +250,9 @@ export function deserializeGameState(data) {
     }
   }
   const world = getWorld(gameState.galaxy)
+  // Older saves placed harbours well offshore. Keep their stored world usable
+  // after the shoreline layout change; floating outposts are untouched.
+  normalizeCoastalPortPositions(world, gameState.player)
   // One sea — both ids always name it, whatever a save happened to store.
   gameState.player.currentSystemId = world?.id ?? gameState.player.currentSystemId
   gameState.player.startingSystemId = world?.id ?? gameState.player.startingSystemId

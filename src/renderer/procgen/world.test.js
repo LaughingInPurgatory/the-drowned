@@ -106,7 +106,7 @@ test('ports sit snug to their island shoreline', () => {
         port.position[2] - host.position[2]
       )
       const gap = distance - shore
-      assert.ok(gap >= 60 && gap <= 140, `${port.name} sits ${gap.toFixed(0)} m off ${host.name}`)
+      assert.ok(gap >= 18 && gap <= 36, `${port.name} sits ${gap.toFixed(0)} m off ${host.name}`)
     }
   }
 })

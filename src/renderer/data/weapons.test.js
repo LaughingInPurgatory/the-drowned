@@ -20,6 +20,17 @@ test('base weapons are free and match their category', () => {
   assert.equal(getWeapon(BASE_WEAPON_ID.missile).category, 'missile')
 })
 
+test('Fixo Pistol mirrors the basic ship gun but stays out of ship catalogues', () => {
+  const fixo = getWeapon('fixo_pistol')
+  const deckGun = getWeapon(BASE_WEAPON_ID.laser)
+  assert.equal(fixo.handheld, true)
+  assert.deepEqual(
+    [fixo.damage, fixo.speed, fixo.cooldownS, fixo.ttl, fixo.tracer, fixo.report],
+    [deckGun.damage, deckGun.speed, deckGun.cooldownS, deckGun.ttl, deckGun.tracer, deckGun.report]
+  )
+  assert.equal(weaponsForCategory('laser').some((weapon) => weapon.id === fixo.id), false)
+})
+
 test('weaponsForCategory only returns matching weapons', () => {
   for (const w of weaponsForCategory('missile')) assert.equal(w.category, 'missile')
   assert.ok(weaponsForCategory('laser').length > 1)

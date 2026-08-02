@@ -84,6 +84,9 @@ const LANDFORM_HEIGHT = {
   // Tip of a drowned mountain — height often exceeds radius.
   spire: [1.35, 2.45]
 }
+// Haven is the player's first landfall; keep its silhouette broad and
+// climbable rather than letting the home island dominate the horizon.
+const HAVEN_HEIGHT_SCALE = 0.65
 /** Chance a substantial island is a mountain spire (not a common pick). */
 const SPIRE_CHANCE = 0.048
 
@@ -355,10 +358,11 @@ const SHORE_STEPS = 48
 const GROUNDING_HEIGHT = Math.max(0.35, SEA_MAX_AMPLITUDE * 0.12)
 
 /**
- * Extra metres of water kept clear outside the traced waterline.
- * Keel/draft + a short beach the hull should not sit on top of.
+ * Small water buffer kept clear outside the traced waterline. The hull
+ * collision radius supplies the real physical clearance around the visible
+ * land, while this small buffer prevents visual z-fighting at the waterline.
  */
-export const SHORE_KEEP_OUT = 14
+export const SHORE_KEEP_OUT = 0.25
 
 /**
  * The island's shape, built once and cached on the body.
@@ -398,7 +402,8 @@ export function getIslandProfile(body) {
   }
   const radius = Math.max(60, body.radius ?? 400)
   const heightBand = LANDFORM_HEIGHT[landform] ?? LANDFORM_HEIGHT.dome
-  const height = radius * range(rng, heightBand[0], heightBand[1])
+  const heightScale = body?.name === 'Haven Reach' ? HAVEN_HEIGHT_SCALE : 1
+  const height = radius * range(rng, heightBand[0], heightBand[1]) * heightScale
   const baseHeight = makeHeightField(rng, landform)
   const greenTerrain = archetype === 'scrub' || archetype === 'drowned'
   const reliefSeed = hashString(`${body?.id ?? 'island'}:rolling-ground`) * 0.001
@@ -1015,13 +1020,9 @@ function propMinGround() {
   return SEA_MAX_AMPLITUDE * 1.15 + 1.2
 }
 
-/**
- * Mesh-matching ground Y at normalised radius r / bearing theta.
- * Mirrors the coast-bank drop in buildIslandMesh so plants don't sit on the
- * pre-bank height field while the rendered surface has already plunged.
- */
-function meshGroundY(r, theta, height, heightAt, landform = 'dome') {
-  const rr = Math.min(1, Math.max(0, r))
+/** Height of one rendered land vertex, including the final coastal bank. */
+function meshVertexGroundY(t, theta, height, heightAt, landform = 'dome') {
+  const rr = Math.min(1, Math.max(0, t))
   const coastBankFrom = landform === 'spire' ? 0.9 : COAST_BANK_FROM
   let y = heightAt(rr, theta) * height
   if (rr > coastBankFrom && rr < 1) {
@@ -1035,6 +1036,66 @@ function meshGroundY(r, theta, height, heightAt, landform = 'dome') {
   return y
 }
 
+function triangleHeightAt(px, pz, a, b, c, ya, yb, yc) {
+  const denominator = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z)
+  if (Math.abs(denominator) < 1e-8) return null
+  const wa = ((b.z - c.z) * (px - c.x) + (c.x - b.x) * (pz - c.z)) / denominator
+  const wb = ((c.z - a.z) * (px - c.x) + (a.x - c.x) * (pz - c.z)) / denominator
+  const wc = 1 - wa - wb
+  if (wa < -1e-5 || wb < -1e-5 || wc < -1e-5) return null
+  return wa * ya + wb * yb + wc * yc
+}
+
+/**
+ * Ground Y at normalised radius r / bearing theta, sampled from the same
+ * radial/angular triangles emitted by buildIslandMesh. Props used to sample
+ * the smooth field before this would hover over convex faces by several metres.
+ */
+function meshGroundY(r, theta, height, heightAt, landform = 'dome') {
+  const rr = Math.min(1, Math.max(0, r))
+  const tau = Math.PI * 2
+  const bearing = ((theta % tau) + tau) % tau
+
+  const segmentF = bearing / tau * SEGMENTS
+  const segment = Math.min(SEGMENTS - 1, Math.floor(segmentF))
+  const segmentK = segmentF - segment
+  const a0 = segment / SEGMENTS * tau
+  const a1 = (segment + 1) / SEGMENTS * tau
+  // The rendered rings are regular polygons, not circles. Their chord edges
+  // sit slightly inside the analytic radius, so choose the ring from the
+  // polygon edge crossed by this bearing or props can sample the wrong face.
+  const sectorHalf = Math.PI / SEGMENTS
+  const sectorMid = (segment + 0.5) / SEGMENTS * tau
+  const chordScale = Math.cos(sectorHalf) / Math.cos(bearing - sectorMid)
+  const ringT = (index) => 1 - Math.pow(1 - index / RINGS, 1.65)
+  const ringRadius = (index) => ringT(index) * chordScale
+  if (rr >= ringRadius(RINGS)) return COAST_FOOT_Y
+  let ring = 0
+  while (ring < RINGS - 1 && rr > ringRadius(ring + 1)) ring++
+  const innerRadius = ringRadius(ring)
+  const outerRadius = ringRadius(ring + 1)
+  const ringK = (rr - innerRadius) / Math.max(1e-8, outerRadius - innerRadius)
+  const t0 = ringT(ring)
+  const t1 = ringT(ring + 1)
+  const p = { x: rr * Math.cos(bearing), z: rr * Math.sin(bearing) }
+  const inner0 = { x: t0 * Math.cos(a0), z: t0 * Math.sin(a0) }
+  const inner1 = { x: t0 * Math.cos(a1), z: t0 * Math.sin(a1) }
+  const outer0 = { x: t1 * Math.cos(a0), z: t1 * Math.sin(a0) }
+  const outer1 = { x: t1 * Math.cos(a1), z: t1 * Math.sin(a1) }
+  const yInner0 = meshVertexGroundY(t0, a0, height, heightAt, landform)
+  const yInner1 = meshVertexGroundY(t0, a1, height, heightAt, landform)
+  const yOuter0 = meshVertexGroundY(t1, a0, height, heightAt, landform)
+  const yOuter1 = meshVertexGroundY(t1, a1, height, heightAt, landform)
+
+  // Match the two indexed triangles: (inner0, inner1, outer0) then
+  // (inner1, outer1, outer0). The radial fallback only covers the degenerate
+  // centre fan, where all inner vertices share the same XZ position.
+  return triangleHeightAt(p.x, p.z, inner0, inner1, outer0, yInner0, yInner1, yOuter0)
+    ?? triangleHeightAt(p.x, p.z, inner1, outer1, outer0, yInner1, yOuter1, yOuter0)
+    ?? yInner0 + (yOuter0 - yInner0) * ringK +
+      (yInner1 - yInner0 + (yOuter1 - yOuter0 - yInner1 + yInner0) * ringK) * segmentK
+}
+
 /** Ground Y from island-local XZ (same field the mesh samples). */
 function groundAtXZ(x, z, radius, height, heightAt, landform = 'dome') {
   const r = Math.hypot(x, z) / Math.max(1, radius)
@@ -1044,12 +1105,42 @@ function groundAtXZ(x, z, radius, height, heightAt, landform = 'dome') {
 }
 
 /**
+ * World-space terrain sample including the short submerged shelf around an
+ * island. On-foot movement uses this to wade below the waterline without
+ * making the whole ocean a walkable surface.
+ */
+export function islandTerrainYAt(body, x, z) {
+  const profile = getIslandProfile(body)
+  const localX = Number(x) - Number(body.position?.[0] ?? 0)
+  const localZ = Number(z) - Number(body.position?.[2] ?? 0)
+  const r = Math.hypot(localX, localZ) / Math.max(1, profile.radius)
+  const shelfReach = profile.landform === 'spire' ? SHELF_REACH * 0.55 : SHELF_REACH
+  if (r > 1 + shelfReach) return null
+  return Number(body.position?.[1] ?? 0) + groundAtXZ(
+    localX,
+    localZ,
+    profile.radius,
+    profile.height,
+    profile.heightAt,
+    profile.landform
+  )
+}
+
+/** World-space ground sample for on-foot movement and placeable alignment. */
+export function islandGroundYAt(body, x, z) {
+  const y = islandTerrainYAt(body, x, z)
+  return y != null && y > GROUNDING_HEIGHT ? y : null
+}
+
+/**
  * Bury plant roots slightly so continuous height samples seat into the
  * triangulated mesh (domes are convex — chords sit below the curve, so
  * un-sunk plants float above the faces).
  */
 function seatPlantY(groundY, plantHeight) {
-  return groundY - Math.max(0.45, plantHeight * 0.04)
+  // The analytic field is sampled between rendered triangle vertices. A deeper
+  // root seat keeps grass and small props from hovering on convex faces.
+  return groundY - Math.max(0.7, plantHeight * 0.08)
 }
 
 /**
@@ -1169,6 +1260,10 @@ function propSizeScale(radius) {
 function buildVegetation(rng, radius, height, heightAt, archetype, landform, isHome = false) {
   const group = new THREE.Group()
   group.name = 'vegetation'
+  // Horizontal trunk colliders are deliberately kept as cheap data rather
+  // than mesh physics. On-foot movement can use these to stop at tree bases
+  // without making every leaf or grass blade part of the collision scene.
+  group.userData.treeColliders = []
   const cover = rollVegetationCover(rng, archetype, landform)
   if (cover <= 0) return group
 
@@ -1225,6 +1320,10 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
   const heroTreeLimit = layout === 'forest' ? 24 : layout === 'copses' ? 14 : 7
   let heroTrees = 0
   const woodlandPatches = []
+  const treePoints = []
+  // Keep trunks readable as individual trees instead of letting a successful
+  // random run stack several models on the same few square metres.
+  const treeSpacing = Math.max(4.5, Math.min(18, radius * 0.012))
 
   // Per-island growth character: some shores are scrub, some carry tall timber.
   const islandTreeBias = range(rng, 0.7, 1.45)
@@ -1238,6 +1337,7 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
   }
 
   const placeTreeAt = (x, z, yaw) => {
+    if (treePoints.some((point) => Math.hypot(point.x - x, point.z - z) < treeSpacing)) return false
     const ground = groundAtXZ(x, z, radius, height, heightAt, landform)
     if (ground < propMinGround()) return false
     const rLocal = Math.hypot(x, z) / Math.max(1, radius)
@@ -1257,6 +1357,11 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
       const scale = targetH / Math.max(0.2, proto.height)
       const y = seatPlantY(ground, targetH)
       group.add(placePlantClone(proto, x, y, z, scale, yaw, { dry }))
+      group.userData.treeColliders.push({
+        x,
+        z,
+        radius: Math.max(0.9, Math.min(3.1, targetH * 0.09))
+      })
       if (hero) heroTrees++
     } else {
       const geo = propGeometries()
@@ -1276,7 +1381,13 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
       canopy.scale.set(cs, cs * 1.1, cs)
       canopy.castShadow = true
       group.add(canopy)
+      group.userData.treeColliders.push({
+        x,
+        z,
+        radius: Math.max(0.9, Math.min(3.1, scale * 1.55))
+      })
     }
+    treePoints.push({ x, z })
     return true
   }
 
@@ -1302,21 +1413,30 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
     let copseCount =
       layout === 'forest'
         ? 2 + Math.floor(rng() * 3) + (cover > 0.7 ? 1 : 0)
-        : 1 + Math.floor(rng() * 2)
+        : 2 + Math.floor(rng() * 2)
     copseCount = Math.min(6, copseCount)
     const perCopse = Math.max(4, Math.ceil(clumpTreeBudget / copseCount))
     for (let c = 0; c < copseCount && trees < treeTarget; c++) {
+      // Choose the footprint before the centre so candidate patches can be
+      // rejected when they overlap an earlier one.
+      const copseR =
+        layout === 'forest'
+          ? range(rng, 22, 54) * Math.min(1.2, areaK)
+          : range(rng, 12, 32) * Math.min(1.15, areaK)
       let centre = null
       for (let t = 0; t < 28 && !centre; t++) {
-        centre = samplePlantSpot(rng, radius, height, heightAt, spotOpts({
+        const candidate = samplePlantSpot(rng, radius, height, heightAt, spotOpts({
           rMin: 0.16,
           rMax: rTreeMax * 0.95
         }))
+        if (!candidate) continue
+        const overlapsPatch = woodlandPatches.some((patch) =>
+          Math.hypot(patch.x - candidate.x, patch.z - candidate.z) <
+          patch.radius + copseR + Math.max(8, radius * 0.06)
+        )
+        if (!overlapsPatch) centre = candidate
       }
       if (!centre) continue
-      // Copse radius in metres — small thicket vs small wood.
-      const copseR =
-        layout === 'forest' ? range(rng, 22, 54) * Math.min(1.2, areaK) : range(rng, 12, 32) * Math.min(1.15, areaK)
       woodlandPatches.push({ x: centre.x, z: centre.z, radius: copseR })
       const want = Math.min(perCopse + Math.floor(rng() * 4), treeTarget - trees)
       let placed = 0
@@ -1426,10 +1546,17 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
         if (!dummy.length) continue
         const inst = new THREE.InstancedMesh(gd.geometry, gd.material, dummy.length)
         inst.instanceMatrix.setUsage(THREE.StaticDrawUsage)
+        // Grass is receive-only: individual blades are too small to produce
+        // useful silhouettes, but they still benefit from tree/structure
+        // shadows landing across the ground cover.
         inst.castShadow = false
         inst.receiveShadow = true
         for (let i = 0; i < dummy.length; i++) inst.setMatrixAt(i, dummy[i])
         inst.instanceMatrix.needsUpdate = true
+        // Instance transforms are authored after construction; refresh the
+        // aggregate bounds so both the main and shadow cameras see the real
+        // grass patch rather than the source geometry at the origin.
+        inst.computeBoundingSphere()
         inst.name = 'shoreGrass'
         group.add(inst)
       }
@@ -1504,7 +1631,10 @@ function buildRuins(rng, radius, height, heightAt, archetype, landform, isHome =
     if (drowned) return rng() < 0.5 ? mats.ruinBrick : mats.ruin
     return rng() < 0.4 ? mats.ruinBrick : mats.ruin
   }
-  const sizeK = propSizeScale(radius)
+  // Ruins are meant to read as substantial remnants from offshore and on
+  // foot, so keep their existing island-scale variation but double the model
+  // dimensions consistently across walls, towers, rubble, and rebar.
+  const sizeK = propSizeScale(radius) * 2
 
   // A few settlement clusters, not freckles across the whole island.
   let hamlets = 1 + Math.floor(cover * 4.5)

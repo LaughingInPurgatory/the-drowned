@@ -1237,7 +1237,7 @@ for (const c of SHIP_CLASSES) {
 }
 
 /**
- * Deepen every hull.
+ * Enlarge every hull for the sea game.
  *
  * The sections were drawn shallow — a legacy of hulls that only ever had to
  * look right in a vacuum, where there is no waterline to sit against. On the
@@ -1252,18 +1252,21 @@ for (const c of SHIP_CLASSES) {
  * height alone would drown every boat.
  *
  * One scale here beats redrawing the station bands of a hundred hulls, and it
- * catches the hand-authored classes as well as the generated ones.
+ * catches the hand-authored classes as well as the generated ones. Length and
+ * depth are 1.5× their current in-game size; beam is 2× current size so the
+ * boats read as substantial vessels beside the harbours.
  *
  * ponytail: single global multiplier. Split per role if planing hulls and
  * loaded freighters need different draught than their authored ratio gives.
  */
-const HULL_DEPTH_SCALE = 2
+const HULL_LENGTH_SCALE = 1.5
+const HULL_DEPTH_SCALE = 3
 /**
  * Space-era hulls were pencil-thin (L/B often 7–9). Deck houses, masts and
- * bulwarks were authored against that beam and hang off the rail. A modest
- * widen gives a working deck without turning freighters into barges.
+ * bulwarks were authored against that beam and hang off the rail. Doubling
+ * the current beam gives a working deck without redrawing every class.
  */
-const HULL_BEAM_SCALE = 1.24
+const HULL_BEAM_SCALE = 2.48
 /**
  * Least fraction of a section's half-depth that must sit above the waterline
  * amidships. Hand-crafted classes were centred on y = 0 (half submerged); this
@@ -1292,6 +1295,8 @@ const ROCKER_AFT = 0.28
 for (const c of SHIP_CLASSES) {
   const hull = c?.hull
   if (!hull?.stationHeights?.length) continue
+
+  hull.length = Math.max(1, Number(hull.length) || 20) * HULL_LENGTH_SCALE
 
   if (hull.stationWidths?.length) {
     hull.stationWidths = hull.stationWidths.map((w) => w * HULL_BEAM_SCALE)
@@ -1350,6 +1355,18 @@ for (const c of SHIP_CLASSES) {
   }
   hull.stationHeights = heights
   hull.stationOffsetsY = offsetsY
+
+  // Hardpoints are authored in the old hull space. Keep visible mounts and
+  // their firing origins on the enlarged hull instead of leaving them buried
+  // near the old centreline.
+  for (const hardpoint of c.hardpoints ?? []) {
+    if (!Array.isArray(hardpoint?.position) || hardpoint.position.length < 3) continue
+    hardpoint.position = [
+      (Number(hardpoint.position[0]) || 0) * 2,
+      (Number(hardpoint.position[1]) || 0) * 1.5,
+      (Number(hardpoint.position[2]) || 0) * HULL_LENGTH_SCALE
+    ]
+  }
 }
 
 /**

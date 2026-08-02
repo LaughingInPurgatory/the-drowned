@@ -33,10 +33,10 @@ const STYLE = `
   background: repeating-linear-gradient(0deg, rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb),0.025) 0px, rgba(var(--ui-gr),var(--ui-gg),var(--ui-gb),0.025) 1px, transparent 1px, transparent 4px);
 }
 
-/* Ship status + velocity — top center (floating prompts stack just below). */
+/* Ship status + velocity — bottom center (floating prompts stack just above). */
 #hud .status-panel {
-  position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
-  bottom: auto; right: auto;
+  position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+  top: auto; right: auto;
   width: 280px;
   padding: 12px 18px 10px 20px;
   z-index: 8;
@@ -107,10 +107,10 @@ const STYLE = `
 }
 
 #hud .bar {
-  position: relative; width: 100%; height: 9px;
+  display: block; position: relative; width: 100%; height: 9px;
   background: #0c1424; border: 1px solid #2a3a55; overflow: hidden;
 }
-#hud .bar .fill { position: relative; height: 100%; transition: width 0.15s linear; }
+#hud .bar .fill { display: block; position: relative; height: 100%; transition: width 0.15s linear; }
 /* Segment tick lines over every bar — the classic sci-fi cell-battery read
    instead of one smooth fill. Sits above the fill, so cells appear/disappear
    as the fill crosses each tick. */
@@ -156,6 +156,11 @@ const STYLE = `
 #hud.docked #radar {
   display: none !important;
 }
+#hud.on-foot .status-panel,
+#hud.on-foot .target-panel,
+#hud.on-foot #radar {
+  display: none !important;
+}
 #hud.docked .system-label {
   cursor: default;
   pointer-events: none;
@@ -168,7 +173,6 @@ const STYLE = `
 #hud.docked .system-label .sys-tag { letter-spacing: 2px; }
 #hud.docked .system-label .nearest-body.visible { display: block; }
 #hud.docked .system-label .nearest-body .nb-tag { content: none; }
-#hud.docked .system-label .sys-scan-hint { display: none; }
 #hud .system-label .sys-tag {
   display: block; font-size: 9px; letter-spacing: 3px; text-transform: uppercase;
   color: var(--ui-accent); opacity: 0.7;
@@ -215,6 +219,40 @@ const STYLE = `
   margin-right: 6px;
 }
 #hud .system-label .nearest-body .nb-name { color: var(--ui-bright); }
+#hud .on-foot-vitals {
+  display: none; flex-direction: column; gap: 7px; margin-top: 7px; padding-top: 6px;
+  border-top: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.28);
+}
+#hud.on-foot .on-foot-vitals { display: flex; }
+#hud .on-foot-vitals .health-meter,
+#hud .on-foot-vitals .stamina-meter {
+  display: block; flex: none; width: 100%; min-width: 0; margin-top: 0;
+}
+#hud .on-foot-vitals .bar {
+  height: 10px;
+}
+#hud .health-meter .bar {
+  border-color: rgba(255,150,130,0.58);
+  box-shadow: inset 0 0 6px rgba(0,0,0,0.7), 0 0 5px rgba(220,90,70,0.16);
+}
+#hud .health-meter .health-label {
+  display: flex; justify-content: space-between; font-size: 9px;
+  letter-spacing: 1.2px; color: #ffb6a2; margin-bottom: 2px;
+  text-transform: uppercase; text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+}
+#hud .health-meter .bar { border-color: rgba(255,150,130,0.58); }
+#hud .health-meter .fill { box-shadow: 0 0 7px rgba(255,110,90,0.4); }
+#hud .stamina-meter .bar {
+  height: 10px; border-color: rgba(207,227,255,0.58);
+  box-shadow: inset 0 0 6px rgba(0,0,0,0.7), 0 0 5px rgba(115,190,210,0.14);
+}
+#hud .stamina-meter .stamina-label {
+  display: flex; justify-content: space-between; font-size: 9px;
+  letter-spacing: 1.2px; color: #ffe0a1; margin-bottom: 2px;
+  text-transform: uppercase; text-shadow: 0 1px 2px rgba(0,0,0,0.9);
+}
+#hud .stamina-meter .bar { border-color: rgba(255,224,161,0.58); box-shadow: inset 0 0 6px rgba(0,0,0,0.7), 0 0 5px rgba(210,170,90,0.14); }
+#hud .stamina-meter .fill { box-shadow: 0 0 7px rgba(110,220,130,0.4); }
 #hud .system-label .waypoint-line {
   display: none; margin-top: 5px; font-size: 11px; letter-spacing: 0.8px;
   color: #ffe14a; opacity: 0.95;
@@ -228,14 +266,6 @@ const STYLE = `
 }
 #hud .system-label .waypoint-line .wp-name { color: #fff6a8; }
 #hud.docked .system-label .waypoint-line { display: none !important; }
-#hud .system-label .sys-scan-hint {
-  display: block; margin-top: 7px; padding-top: 6px;
-  border-top: 1px solid rgba(var(--ui-ar),var(--ui-ag),var(--ui-ab),0.28);
-  font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase;
-  color: #c9e8ff; opacity: 0.9;
-  text-shadow: 0 1px 2px rgba(0,0,0,0.9), 0 2px 4px rgba(0,0,0,0.7);
-}
-#hud .system-label:hover .sys-scan-hint { color: var(--ui-bright); opacity: 1; }
 
 /* Tab-target readout — top right, left of system overview. */
 #hud .target-panel {
@@ -289,7 +319,7 @@ const STYLE = `
 /* Radar stays visually transparent outside its projected grid. The worn patina
    is painted by updateRadar and clipped to that grid, not this canvas box. */
 #radar {
-  position: fixed; left: 50%; bottom: 0; top: auto; transform: translateX(-50%);
+  position: fixed; left: 50%; top: 0; bottom: auto; transform: translateX(-50%);
   width: 420px; height: 160px;
   margin: 0; padding: 0;
   font-family: monospace; color: var(--ui-text); user-select: none;
@@ -322,12 +352,21 @@ export function createHud(container) {
   hud.id = 'hud'
   hud.innerHTML = `
     <div class="scanlines"></div>
-    <div class="system-label" role="button" tabindex="0" title="Sounding (B)" aria-label="Sounding">
+    <div class="system-label" role="button" tabindex="0" title="Region Sonar Scan" aria-label="Region Sonar Scan">
       <span class="sys-name">—</span>
       <span class="location-distance"></span>
       <span class="nearest-body"><span class="nb-name"></span></span>
+      <span class="on-foot-vitals">
+        <span class="health-meter" aria-live="polite">
+          <span class="health-label"><span>Health</span><span class="health-value">100%</span></span>
+          <span class="bar"><span class="fill" style="width:100%"></span></span>
+        </span>
+        <span class="stamina-meter" aria-live="polite">
+          <span class="stamina-label"><span>Stamina</span><span class="stamina-value">100%</span></span>
+          <span class="bar"><span class="fill" style="width:100%"></span></span>
+        </span>
+      </span>
       <span class="waypoint-line"><span class="wp-tag">Waypoint:</span><span class="wp-name"></span></span>
-      <span class="sys-scan-hint">Sounding (B)</span>
     </div>
     <div class="target-panel" aria-live="polite">
       <div class="tp-tag">Target</div>
@@ -418,6 +457,10 @@ export function createHud(container) {
   const locationDistanceEl = hud.querySelector('.system-label .location-distance')
   const nearestBodyEl = hud.querySelector('.system-label .nearest-body')
   const nearestBodyNameEl = hud.querySelector('.system-label .nearest-body .nb-name')
+  const healthFill = hud.querySelector('.system-label .health-meter .fill')
+  const healthValueEl = hud.querySelector('.system-label .health-value')
+  const staminaFill = hud.querySelector('.system-label .stamina-meter .fill')
+  const staminaValueEl = hud.querySelector('.system-label .stamina-value')
   const waypointLineEl = hud.querySelector('.system-label .waypoint-line')
   const waypointNameEl = hud.querySelector('.system-label .waypoint-line .wp-name')
   const targetPanel = hud.querySelector('.target-panel')
@@ -431,6 +474,14 @@ export function createHud(container) {
 
   function pct(value, max) {
     return Math.max(0, Math.min(100, (value / max) * 100))
+  }
+
+  function meterGradient(value, fullColor) {
+    const amount = Math.max(0, Math.min(1, Number(value) / 100))
+    const emptyColor = [255, 224, 102]
+    const color = fullColor.map((channel, index) => Math.round(emptyColor[index] + (channel - emptyColor[index]) * amount))
+    const edge = color.map((channel) => Math.max(0, Math.round(channel * 0.68)))
+    return `linear-gradient(90deg, rgb(${edge.join(',')}), rgb(${color.join(',')}))`
   }
 
   function barRow(label, value, max, kind) {
@@ -617,6 +668,27 @@ export function createHud(container) {
         parts.push(barRow('Salvage', info.oreLeft ?? 0, info.oreMax, 'ore'))
       }
       targetBarsEl.innerHTML = parts.join('')
+    },
+    updateHealth(value) {
+      const health = Math.max(0, Math.min(100, Number(value) || 0))
+      if (healthFill) {
+        healthFill.style.width = `${health}%`
+        healthFill.style.background = meterGradient(health, [214, 54, 54])
+        healthFill.classList.toggle('low', health <= 25)
+      }
+      if (healthValueEl) healthValueEl.textContent = `${health.toFixed(0)}%`
+    },
+    updateStamina(value) {
+      const stamina = Math.max(0, Math.min(100, Number(value) || 0))
+      if (staminaFill) {
+        staminaFill.style.width = `${stamina}%`
+        staminaFill.style.background = meterGradient(stamina, [54, 196, 92])
+        staminaFill.classList.toggle('low', stamina <= 25)
+      }
+      if (staminaValueEl) staminaValueEl.textContent = `${stamina.toFixed(0)}%`
+    },
+    setOnFoot(active) {
+      hud.classList.toggle('on-foot', !!active)
     },
     /**
      * @param {null|Array<{ id?: string, name: string }|string>} hops remaining systems (dest last)

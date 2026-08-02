@@ -1,10 +1,15 @@
 import * as THREE from 'three'
 import { headingOf } from '../game/flight.js'
 import { waveHeight } from '../world/sea.js'
+import { PLAYER_AVATAR_HEIGHT } from './playerAvatarMesh.js'
 
 // Default chase seat: astern and above the boat (local +Z forward).
 // Elevated so the hull sits low in frame and the reticle is clear above it.
-const CHASE_OFFSET = new THREE.Vector3(0, 14, -38)
+const CHASE_OFFSET = new THREE.Vector3(0, 14, -44)
+// Keep the camera outside the stern even for the enlarged freighters. The
+// value is render-only and is supplied by main.js from the active hull class.
+const CHASE_AFT_CLEARANCE = 30
+const CHASE_HEIGHT_HULL_FACTOR = 0.16
 // How fast the seat height chases the waterline. Low enough to smooth the
 // swell, high enough that cresting a wave is still felt.
 const SEAT_HEAVE_SMOOTHING = 2.4
@@ -42,6 +47,14 @@ const _camX = new THREE.Vector3()
 const _camY = new THREE.Vector3()
 const _camMat = new THREE.Matrix4()
 const _altUp = new THREE.Vector3()
+const _onFootTarget = new THREE.Vector3()
+const _onFootForward = new THREE.Vector3()
+const _onFootDesired = new THREE.Vector3()
+
+// Keep the camera at the same authored human scale as the visible harbour NPCs
+// and the player avatar. The eye sits just below the top of the head.
+const ON_FOOT_CAMERA_EYE_HEIGHT = PLAYER_AVATAR_HEIGHT * 0.88
+const ON_FOOT_CAMERA_FLOOR_CLEARANCE = 0.12
 
 export function syncMeshToEntity(mesh, entityState) {
   mesh.position.fromArray(entityState.position)
@@ -82,6 +95,42 @@ export function getChaseZoom() {
 
 export function resetChaseZoom() {
   chaseZoom = 1
+}
+
+/** First-person camera for the on-foot survivor at world human scale. */
+export function syncOnFootCamera(
+  camera,
+  onFootState,
+  { forceSnap = false, dt = 1 / 60, floorY = null } = {}
+) {
+  if (!camera || !onFootState?.position) return
+  const heading = Number(onFootState.heading) || 0
+  const pitch = THREE.MathUtils.clamp(Number(onFootState.pitch) || 0, -0.72, 0.72)
+  _onFootDesired.fromArray(onFootState.position)
+  _onFootDesired.y += ON_FOOT_CAMERA_EYE_HEIGHT
+  if (Number.isFinite(Number(floorY))) {
+    _onFootDesired.y = Math.max(
+      _onFootDesired.y,
+      Number(floorY) + ON_FOOT_CAMERA_FLOOR_CLEARANCE
+    )
+  }
+  // First-person movement must not lag behind its look target. The previous
+  // lerp made a lateral step briefly look like the camera was yawing around
+  // the player instead of moving in a straight line.
+  camera.position.copy(_onFootDesired)
+  if (Number.isFinite(Number(floorY))) {
+    camera.position.y = Math.max(
+      camera.position.y,
+      Number(floorY) + ON_FOOT_CAMERA_FLOOR_CLEARANCE
+    )
+  }
+
+  _onFootForward.set(Math.sin(heading), 0, Math.cos(heading))
+  _onFootTarget.copy(_onFootDesired)
+  _onFootTarget.y += Math.sin(pitch)
+  _onFootTarget.addScaledVector(_onFootForward, Math.cos(pitch))
+  orientCameraToward(camera, _onFootTarget, _worldUp)
+  camera.updateMatrixWorld(true)
 }
 
 /**
@@ -213,7 +262,11 @@ export function syncChaseCamera(camera, shipState, { cruising = false, forceSnap
   const seat = chaseZoom
 
   // Ship-local seat, then turret orbit, then world orientation.
-  _offset.copy(CHASE_OFFSET).multiplyScalar(seat)
+  _offset.copy(CHASE_OFFSET)
+  const renderHullLength = Math.max(0, Number(shipState._renderHullLength) || 0)
+  _offset.z = -Math.max(Math.abs(CHASE_OFFSET.z), renderHullLength * 0.56 + CHASE_AFT_CLEARANCE)
+  _offset.y = Math.max(CHASE_OFFSET.y, 8 + renderHullLength * CHASE_HEIGHT_HULL_FACTOR)
+  _offset.multiplyScalar(seat)
   // Combat: seat orbits with the turret so the crosshair stays centered as the
   // gunner lays left/right (and a little with elevation).
   const turretYaw = Number.isFinite(shipState.turretYaw) ? shipState.turretYaw : 0

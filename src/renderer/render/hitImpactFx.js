@@ -4,15 +4,17 @@ import * as THREE from 'three'
 // missiles flash a compact detonation.
 
 const SPARK_COUNT_LASER = 10
-const SPARK_COUNT_MISSILE = 14
+const SPARK_COUNT_MISSILE = 20
 const SMOKE_PUFFS = 5
-const LASER_LIFE = 0.38
-const MISSILE_LIFE = 0.55
+const LASER_LIFE = 2.8
+const MISSILE_LIFE = 0.8
+const MISSILE_EFFECT_SCALE = 1.8
 
 /**
  * @param {THREE.Vector3|number[]} position
  * @param {'laser'|'missile'} [kind='laser']
  * @param {string|number} [tint] optional weapon color
+ * @param {{scale?: number}} [options]
  */
 /** Shared static geometries — first combat hit should not allocate mid-frame. */
 let _warmed = false
@@ -66,17 +68,18 @@ export function preloadHitImpactFx(renderer, scene, camera) {
   _warmed = true
 }
 
-export function spawnHitImpact(position, kind = 'laser', tint = null) {
+export function spawnHitImpact(position, kind = 'laser', tint = null, { scale = 1 } = {}) {
   ensureSharedHitGeo()
   const origin = position.isVector3
     ? position.clone()
     : new THREE.Vector3().fromArray(position)
 
   const group = new THREE.Group()
+  const isMissile = kind === 'missile'
   group.position.copy(origin)
+  group.scale.setScalar(Math.max(0.01, Number(scale) || 1) * (isMissile ? MISSILE_EFFECT_SCALE : 1))
   group.frustumCulled = false
 
-  const isMissile = kind === 'missile'
   const life = isMissile ? MISSILE_LIFE : LASER_LIFE
   const sparkN = isMissile ? SPARK_COUNT_MISSILE : SPARK_COUNT_LASER
 
@@ -151,9 +154,27 @@ export function spawnHitImpact(position, kind = 'laser', tint = null) {
   }
 
   let smoke = null
+  let burst = null
   let blast = null
 
   if (!isMissile) {
+    // A brief expanding core makes small laser impacts readable before the
+    // sparks and dust drift away. It stays compact so handheld hits do not
+    // become a flash in the camera.
+    const flash = new THREE.Mesh(
+      _shared.blastSphere,
+      new THREE.MeshBasicMaterial({
+        color: sparkColor,
+        transparent: true,
+        opacity: 0.72,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false
+      })
+    )
+    flash.scale.setScalar(0.06)
+    group.add(flash)
+    burst = { flash }
+
     // Soft grey dust / smoke puffs for laser hits.
     smoke = []
     for (let i = 0; i < SMOKE_PUFFS; i++) {
@@ -172,7 +193,7 @@ export function spawnHitImpact(position, kind = 'laser', tint = null) {
         Math.random() - 0.5
       ).normalize()
       mesh.position.copy(dir).multiplyScalar(0.3 + Math.random() * 0.5)
-      mesh.scale.setScalar(0.35 + Math.random() * 0.4)
+      mesh.scale.setScalar(0.12 + Math.random() * 0.08)
       smoke.push({
         mesh,
         vel: dir.multiplyScalar(1.5 + Math.random() * 2.5),
@@ -193,7 +214,7 @@ export function spawnHitImpact(position, kind = 'laser', tint = null) {
         depthWrite: false
       })
     )
-    flash.scale.setScalar(0.6)
+    flash.scale.setScalar(0.75)
     group.add(flash)
 
     const ring = new THREE.Mesh(
@@ -207,7 +228,7 @@ export function spawnHitImpact(position, kind = 'laser', tint = null) {
         side: THREE.DoubleSide
       })
     )
-    ring.scale.setScalar(0.5)
+    ring.scale.setScalar(0.65)
     group.add(ring)
 
     const embers = []
@@ -250,6 +271,7 @@ export function spawnHitImpact(position, kind = 'laser', tint = null) {
     sparkMat,
     flecks,
     smoke,
+    burst,
     blast
   }
 }
@@ -267,8 +289,11 @@ export function updateHitImpact(fx, dt) {
     fx.sparkVel[i].multiplyScalar(Math.exp(-4 * dt))
   }
   fx.sparkGeo.attributes.position.needsUpdate = true
-  fx.sparkMat.opacity = t
-  fx.sparkMat.size = (fx.kind === 'missile' ? 1.4 : 1.0) * (0.5 + t * 0.6)
+  const sparkFade = fx.kind === 'missile'
+    ? t
+    : Math.min(t, Math.max(0, 1 - age / 0.45))
+  fx.sparkMat.opacity = sparkFade
+  fx.sparkMat.size = (fx.kind === 'missile' ? 1.4 : 1.0) * (0.5 + sparkFade * 0.6)
 
   for (const f of fx.flecks) {
     f.mesh.position.addScaledVector(f.vel, dt)
@@ -276,8 +301,11 @@ export function updateHitImpact(fx, dt) {
     f.mesh.rotation.x += f.spin.x * dt
     f.mesh.rotation.y += f.spin.y * dt
     f.mesh.rotation.z += f.spin.z * dt
-    f.mesh.material.opacity = t
-    f.mesh.scale.setScalar(0.4 + t * 0.7)
+    const fleckFade = fx.kind === 'missile'
+      ? t
+      : Math.min(t, Math.max(0, 1 - age / 0.8))
+    f.mesh.material.opacity = fleckFade
+    f.mesh.scale.setScalar(0.4 + fleckFade * 0.7)
   }
 
   if (fx.smoke) {
@@ -285,17 +313,25 @@ export function updateHitImpact(fx, dt) {
       s.mesh.position.addScaledVector(s.vel, dt)
       s.vel.multiplyScalar(Math.exp(-1.2 * dt))
       s.vel.y += 0.8 * dt // slight rise
-      const sc = 0.4 + age * s.grow
+      const sc = 0.12 + age * s.grow
       s.mesh.scale.setScalar(sc)
-      s.mesh.material.opacity = s.baseOp * t * t
+      const smokeBirth = Math.min(1, age / 0.16)
+      s.mesh.material.opacity = s.baseOp * smokeBirth * t * t
     }
+  }
+
+  if (fx.burst) {
+    const { flash } = fx.burst
+    const burstProgress = Math.min(1, age / 0.4)
+    flash.scale.setScalar(0.06 + burstProgress * 0.5)
+    flash.material.opacity = 0.72 * Math.max(0, 1 - age / 0.4)
   }
 
   if (fx.blast) {
     const { flash, ring, embers } = fx.blast
-    flash.scale.setScalar(0.6 + age * 4.5)
+    flash.scale.setScalar(0.75 + age * 6.5)
     flash.material.opacity = 0.9 * t * t
-    ring.scale.setScalar(0.5 + age * 7)
+    ring.scale.setScalar(0.65 + age * 10)
     ring.material.opacity = 0.55 * t
     for (const e of embers) {
       e.mesh.position.addScaledVector(e.vel, dt)

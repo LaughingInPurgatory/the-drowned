@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import * as THREE from 'three'
-import { buildIslandMesh, getIslandProfile, landformForBody } from './islandMesh.js'
+import { buildIslandMesh, getIslandProfile, islandTerrainYAt, landformForBody } from './islandMesh.js'
 import { generateWorld, getWorld } from '../procgen/world.js'
 import { SEA_MAX_AMPLITUDE } from '../world/sea.js'
 
@@ -57,6 +57,36 @@ test('every island runs a shelf below the waterline', () => {
       min < -SEA_MAX_AMPLITUDE,
       `${body.name} bottoms out at ${min.toFixed(1)}, not clear of the swell`
     )
+  }
+})
+
+test('terrain sampler matches the rendered island faces', () => {
+  // Vegetation and on-foot grounding must use the actual faceted surface. A
+  // smooth polar sample can be several metres above a convex triangle near
+  // the coast, which is exactly how floating grass slipped through.
+  const body = islands(1)[0]
+  const mesh = buildIslandMesh(body)
+  const terrain = new THREE.Mesh(mesh.geometry)
+  terrain.position.fromArray(body.position)
+  terrain.updateMatrixWorld(true)
+  const ray = new THREE.Raycaster()
+  const origin = new THREE.Vector3()
+  const down = new THREE.Vector3(0, -1, 0)
+  const profile = getIslandProfile(body)
+  for (const r of [0.18, 0.44, 0.73, 0.9, 0.96]) {
+    for (const theta of [0.17, 1.31, 2.83, 4.29, 5.67]) {
+      const x = body.position[0] + Math.cos(theta) * profile.radius * r
+      const z = body.position[2] + Math.sin(theta) * profile.radius * r
+      origin.set(x, body.position[1] + 10000, z)
+      ray.set(origin, down)
+      const hit = ray.intersectObject(terrain, false)[0]
+      assert.ok(hit, `no terrain face at r=${r}, theta=${theta}`)
+      const sampled = islandTerrainYAt(body, x, z)
+      assert.ok(
+        Math.abs(sampled - hit.point.y) < 0.02,
+        `terrain sample drifted ${(sampled - hit.point.y).toFixed(3)} m at r=${r}, theta=${theta}`
+      )
+    }
   }
 })
 
@@ -140,6 +170,11 @@ test('every island mesh can carry vegetation and ruins — not only the home roc
     const ruins = mesh.getObjectByName('ruins')
     assert.ok(veg, `${body.name} missing vegetation group`)
     assert.ok(ruins, `${body.name} missing ruins group`)
+    assert.ok(Array.isArray(veg.userData.treeColliders), `${body.name} missing tree collision data`)
+    assert.ok(
+      veg.userData.treeColliders.every((c) => Number.isFinite(c.x) && Number.isFinite(c.z) && c.radius > 0),
+      `${body.name} has invalid tree collision data`
+    )
     const v = veg.children.length
     const r = ruins.children.length
     if (v > 0) withVeg++
@@ -173,6 +208,34 @@ test('Haven Reach has a broken coastline rather than a round disc', () => {
   const max = Math.max(...shore)
   assert.ok(min < max * 0.8, `Haven shoreline is too uniform: ${min.toFixed(0)}–${max.toFixed(0)} m`)
   assert.ok(max - min > haven.radius * 0.25, 'Haven should have a visible bay/headland silhouette')
+})
+
+test('Haven Reach is lower without breaking its shared placement surface', () => {
+  const haven = getWorld(generateWorld(8675309)).bodies.find((b) => b.name === 'Haven Reach')
+  const profile = getIslandProfile(haven)
+  assert.ok(profile.height < haven.radius * 0.28, `Haven remains too tall: ${profile.height.toFixed(0)}m`)
+  assert.ok(profile.height > haven.radius * 0.1, 'Haven should remain a substantial island')
+
+  // The mesh and every vegetation/ruin/talus builder consume this same cached
+  // profile. Sampling the built terrain keeps a lowered island from drifting
+  // away from the surface used to seat its placeables.
+  const mesh = buildIslandMesh(haven)
+  const terrain = new THREE.Mesh(mesh.geometry)
+  terrain.position.fromArray(haven.position)
+  terrain.updateMatrixWorld(true)
+  const ray = new THREE.Raycaster()
+  const origin = new THREE.Vector3()
+  const down = new THREE.Vector3(0, -1, 0)
+  for (const r of [0.2, 0.5, 0.75]) {
+    const theta = 0.9 + r
+    const x = haven.position[0] + Math.cos(theta) * profile.radius * r
+    const z = haven.position[2] + Math.sin(theta) * profile.radius * r
+    origin.set(x, 10000, z)
+    ray.set(origin, down)
+    const hit = ray.intersectObject(terrain, false)[0]
+    assert.ok(hit, `Haven terrain missing at r=${r}`)
+    assert.ok(Math.abs(islandTerrainYAt(haven, x, z) - hit.point.y) < 0.02)
+  }
 })
 
 test('island props are stable across rebuilds', () => {

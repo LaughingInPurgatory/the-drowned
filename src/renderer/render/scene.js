@@ -54,6 +54,7 @@ const _wxFlashHorizon = new THREE.Color(0xd0dceb)
 const _wxFlashCloud = new THREE.Color(0xe8f0ff)
 const _wxStormFog = new THREE.Color(0x4a5560)
 const _wxFlashFog = new THREE.Color(0xc8d4e8)
+const _moonLightColor = new THREE.Color(0xa8bce0)
 
 export function createScene(container) {
   const scene = new THREE.Scene()
@@ -80,6 +81,7 @@ export function createScene(container) {
   renderer.toneMapping = THREE.NeutralToneMapping
   renderer.toneMappingExposure = 1.0
   renderer.shadowMap.enabled = true
+  renderer.shadowMap.autoUpdate = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
   container.appendChild(renderer.domElement)
   // Fill the container; size from client rect so aspect matches the pixels the
@@ -120,22 +122,37 @@ export function createScene(container) {
   // Real sunlight now, not a point light at a star. Built at boot and never at
   // runtime: a light added mid-session recompiles every MeshStandardMaterial
   // (the combat hitch shipMesh.js warns about).
+  // One pooled directional light supplies the only large-area shadow map. It
+  // follows the sun by day and the moon at night, so night shadows use the
+  // visible light source without paying for two concurrent shadow maps.
   const sun = new THREE.DirectionalLight(day0.sunColor.getHex(), day0.sunIntensity)
   sun.position.copy(day0.sunDirection).multiplyScalar(1200)
   sun.castShadow = true
-  // The shadow box travels with the player (see render()). It only has to cover
-  // the boat and whatever it is moored against — an ocean-wide shadow map would
-  // be all texel and no detail.
-  sun.shadow.mapSize.set(2048, 2048)
+  sun.shadow.autoUpdate = false
+  // The shadow box travels with the player (see updateEnvironment()). It only
+  // has to cover the boat and whatever it is moored against — an ocean-wide
+  // shadow map would be all texel and no detail.
+  // 1024 is enough for the 64 m on-foot shadow box and halves the depth-pass
+  // cost of the old 2048 map. The close camera keeps useful detail by using a
+  // much smaller shadow box than the ship view.
+  sun.shadow.mapSize.set(1024, 1024)
   const shadowCam = sun.shadow.camera
-  shadowCam.near = 1
-  shadowCam.far = 3000
+  // Layer 1 is reserved for the local first-person body: it is excluded from
+  // the view camera, but included in the sun's shadow pass so the survivor's
+  // shadow still lands on terrain while the body stays out of the lens.
+  shadowCam.layers.enable(1)
+  shadowCam.near = 0.5
+  shadowCam.far = 2000
   shadowCam.left = -320
   shadowCam.right = 320
   shadowCam.top = 320
   shadowCam.bottom = -320
-  sun.shadow.bias = -0.0006
-  sun.shadow.normalBias = 0.6
+  // Keep the bias small enough for the scaled survivor and ship fittings to
+  // leave visible contact shadows instead of floating above the receiver.
+  sun.shadow.bias = -0.00005
+  sun.shadow.normalBias = 0.02
+  sun.shadow.radius = 1.5
+  sun.shadow.intensity = 1
   scene.add(sun)
   scene.add(sun.target)
   // Sky above, sea bounce below — the standard outdoor fill. Without the sea
@@ -200,8 +217,20 @@ export function createScene(container) {
    *   rainGloom?: number,
    *   stormGloom?: number
    * } | null} [weather] optional rain/storm modifiers from render/weather.js
+   * @param {{ shadowExtent?: number, normalBias?: number }} [shadow] view-specific
+   *   shadow tuning; the close on-foot camera needs finer shadow texels.
    */
-  function updateEnvironment(t, weather = null) {
+  let shadowFrame = 0
+  let lastShadowMapFrame = -Infinity
+  let lastShadowCameraTarget = new THREE.Vector3()
+  let lastShadowDirection = new THREE.Vector3()
+  let lastEnvironmentTarget = new THREE.Vector3()
+  let lastShadowExtent = -1
+  let lastCelestialMode = ''
+  let lastShadowEnabled = false
+  let haveShadowHistory = false
+
+  function updateEnvironment(t, weather = null, shadow = null) {
     const day = daylightAt(t)
     const cloudCover = weather?.cloudCover ?? 0.52
     const sunMul = weather?.sunMul ?? 1
@@ -267,13 +296,60 @@ export function createScene(container) {
     scene.fog.density = day.fogDensity * fogMul
 
     // Key light. The shadow box travels with the player — an ocean-wide shadow
-    // map would be all texel and no detail.
-    sun.color.copy(day.sunColor)
-    sun.intensity = day.sunIntensity * sunMul + flash * 4.5
+    // map would be all texel and no detail. At night the same light becomes a
+    // cool moon key, keeping one shadow map instead of rendering both lights.
+    const sunUp = day.sunDirection.y > 0.02
+    const moonUp = day.moonDirection.y > 0.02 && day.moonPhase > 0.03
+    const useMoonKey = !sunUp && moonUp
+    const keyDirection = useMoonKey ? day.moonDirection : day.sunDirection
+    const keyMode = useMoonKey ? 'moon' : 'sun'
+    const moonAltitude = Math.max(0, day.moonDirection.y)
+    const moonIntensity = 0.28 * day.moonPhase * Math.min(1, moonAltitude * 4)
+    sun.color.copy(useMoonKey ? _moonLightColor : day.sunColor)
+    sun.intensity =
+      (useMoonKey ? moonIntensity : day.sunIntensity) * sunMul + (flash > 0.05 ? flash * 4.5 : 0)
     sun.target.position.set(camera.position.x, 0, camera.position.z)
-    sun.position.copy(sun.target.position).addScaledVector(day.sunDirection, 1200)
-    // No point paying for a shadow pass once the sun is down.
-    sun.castShadow = day.sunDirection.y > 0.02 || flash > 0.2
+    sun.position.copy(sun.target.position).addScaledVector(keyDirection, 1200)
+    const shadowExtent = Math.max(24, Number(shadow?.shadowExtent) || 128)
+    shadowCam.left = -shadowExtent
+    shadowCam.right = shadowExtent
+    shadowCam.top = shadowExtent
+    shadowCam.bottom = -shadowExtent
+    sun.shadow.normalBias = Number.isFinite(Number(shadow?.normalBias)) ? Number(shadow.normalBias) : 0.02
+    shadowCam.updateProjectionMatrix()
+    // No point paying for a shadow pass when neither celestial source is up.
+    // Lightning still changes illumination, but it is not a stable shadow key.
+    const shadowEnabled = sunUp || useMoonKey
+    sun.castShadow = shadowEnabled
+
+    // Static world geometry does not need a new depth map every render. Moving
+    // actors still get responsive shadows: refresh every two frames while the
+    // camera is moving, and every eight frames while it is settled. This keeps
+    // the shadow pass bounded without leaving a visibly stale avatar/ship.
+    const cameraMoved =
+      !haveShadowHistory || sun.target.position.distanceToSquared(lastEnvironmentTarget) > 0.0025
+    const shadowCadence = cameraMoved ? 2 : 8
+    const modeChanged = keyMode !== lastCelestialMode || shadowEnabled !== lastShadowEnabled
+    const extentChanged = Math.abs(shadowExtent - lastShadowExtent) > 0.01
+    const shadowDue = shadowFrame - lastShadowMapFrame >= shadowCadence
+    const shadowDirectionChanged =
+      !haveShadowHistory || keyDirection.dot(lastShadowDirection) < 0.9998
+    const shadowTargetMoved =
+      !haveShadowHistory || sun.target.position.distanceToSquared(lastShadowCameraTarget) > 0.01
+    if (shadowEnabled && (modeChanged || extentChanged || shadowDirectionChanged || shadowTargetMoved || shadowDue)) {
+      sun.shadow.needsUpdate = true
+      lastShadowMapFrame = shadowFrame
+      lastShadowCameraTarget.copy(sun.target.position)
+      lastShadowDirection.copy(keyDirection)
+    } else if (!shadowEnabled) {
+      sun.shadow.needsUpdate = false
+    }
+    lastEnvironmentTarget.copy(sun.target.position)
+    lastShadowExtent = shadowExtent
+    lastCelestialMode = keyMode
+    lastShadowEnabled = shadowEnabled
+    haveShadowHistory = true
+    shadowFrame++
 
     hemi.color.copy(day.hemiSky)
     hemi.groundColor.copy(day.hemiGround)

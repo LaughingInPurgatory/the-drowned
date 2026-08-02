@@ -372,7 +372,6 @@ const STYLE = `
 }
 #main-menu input[type="text"]:focus,
 #main-menu input:not([type]):focus { outline: none; border-color: var(--ui-glow); box-shadow: 0 1px 3px rgba(0,0,0,0.7); }
-
 /* Create Captain — portrait upload (matches Character sheet). */
 #main-menu .new-game-view {
   width: min(480px, 92vw);

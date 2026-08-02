@@ -1434,7 +1434,7 @@ function navLightMaterials() {
  * Soft searchlight volume material. A flat-opacity cylinder reads as a solid
  * cone; this fades along the beam and softens the silhouette so it glows.
  */
-function makeSearchlightBeamMaterial(beamLen) {
+export function makeSearchlightBeamMaterial(beamLen) {
   return new THREE.ShaderMaterial({
     uniforms: {
       uColor: { value: new THREE.Color(0xfff2cc) },
@@ -1575,7 +1575,10 @@ function addSearchlight(group, hull, { withSpot = false } = {}) {
     // while a marine searchlight needs enough throw to pick out a quay or hull.
     spot = new THREE.SpotLight(0xfff0d0, 0, 240, 0.12, 0.58, 1.8)
     spot.castShadow = false
-    spot.shadow.mapSize.set(1024, 1024)
+    // The searchlight is a close, optional secondary source. A 512 map keeps
+    // its moving shadows readable without adding a second 1024² depth pass
+    // every frame while L is held.
+    spot.shadow.mapSize.set(512, 512)
     spot.shadow.camera.near = 0.5
     spot.shadow.camera.far = 240
     spot.shadow.bias = -0.00015
@@ -1798,6 +1801,8 @@ export function buildShipMesh(shipClass, opts = {}) {
           ...mapsForWearKit(wearKit, isMiner ? 1.25 : 1.2)
         })
   const hullMesh = new THREE.Mesh(geometry, material)
+  hullMesh.castShadow = true
+  hullMesh.receiveShadow = true
   group.add(hullMesh)
 
   // Edge overlays are cosmetic; skip for NPCs to avoid combat-spawn hitches.
@@ -1877,6 +1882,16 @@ export function buildShipMesh(shipClass, opts = {}) {
   }
 
   retileShipUVs(group)
+  // The hull is the main receiver; fittings and superstructure must both cast
+  // and receive too or the ship reads as a uniformly lit cut-out.
+  group.traverse((object) => {
+    if (!object.isMesh) return
+    const materials = Array.isArray(object.material) ? object.material : [object.material]
+    if (materials.some((material) => material?.isMeshStandardMaterial || material?.isMeshPhysicalMaterial)) {
+      object.castShadow = true
+      object.receiveShadow = true
+    }
+  })
   return group
 }
 

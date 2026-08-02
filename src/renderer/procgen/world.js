@@ -50,6 +50,8 @@ const PLACE_ATTEMPTS = 60
 const FLOATING_OUTPOST_CHANCE = 0.45
 /** Ports that keep a crew berth — where you wake up after being sunk. */
 const BERTH_CHANCE = 0.3
+/** Coastal ports sit on the beach edge; this is the small seaward gap. */
+export const COASTAL_PORT_GAP = Object.freeze([18, 36])
 
 /**
  * How far out a place is, 0 at Haven Reach → 1 at the world's edge.
@@ -157,7 +159,7 @@ function coastPosition(rng, host, ownShell = 0) {
   // Keep the broad placement shell above unchanged for unrelated bodies.
   const isPort = ownShell === PORT_CLEARANCE
   const jetty = isPort
-    ? range(rng, 30, 90) + Math.min(42, ownShell * 0.08)
+    ? range(rng, COASTAL_PORT_GAP[0], COASTAL_PORT_GAP[1])
     : range(rng, 50, 140) + Math.min(120, ownShell * 0.12)
   const r = Math.max(80, shore) + jetty
   return [host.position[0] + dirX * r, 0, host.position[2] + dirZ * r]
@@ -210,6 +212,58 @@ function hash01(str) {
     h = Math.imul(h, 16777619)
   }
   return ((h >>> 0) % 100000) / 100000
+}
+
+/** Stable coastal placement gap for saves made before the shoreline move. */
+export function coastalPortGap(portId) {
+  return COASTAL_PORT_GAP[0] + hash01(`coast-gap:${portId}`) * (COASTAL_PORT_GAP[1] - COASTAL_PORT_GAP[0])
+}
+
+/** Re-seat saved coastal ports after the harbour shoreline was brought in. */
+export function normalizeCoastalPortPositions(world, player = null) {
+  const bodies = world?.bodies
+  if (!Array.isArray(bodies)) return world
+  const islands = new Map(bodies.filter((body) => body.kind === 'island').map((body) => [body.id, body]))
+  for (const port of bodies) {
+    if (port.kind !== 'port' || !port.parentId) continue
+    const host = islands.get(port.parentId)
+    if (!host) continue
+    const source = port.surfaceOffset ?? [
+      (Number(port.position?.[0]) || 0) - (Number(host.position?.[0]) || 0),
+      0,
+      (Number(port.position?.[2]) || 0) - (Number(host.position?.[2]) || 0)
+    ]
+    let dx = Number(source[0]) || 0
+    let dz = Number(source[2]) || 0
+    const length = Math.hypot(dx, dz)
+    if (length < 1e-6) {
+      dx = 1
+      dz = 0
+    } else {
+      dx /= length
+      dz /= length
+    }
+    const probeX = host.position[0] + dx * (host.radius * 3 + 2000)
+    const probeZ = host.position[2] + dz * (host.radius * 3 + 2000)
+    const shore = islandShorelineToward(host, probeX, probeZ) - SHORE_KEEP_OUT
+    const previousX = Number(port.position?.[0]) || 0
+    const previousZ = Number(port.position?.[2]) || 0
+    const existingGap = Math.hypot(previousX - host.position[0], previousZ - host.position[2]) - shore
+    if (existingGap >= COASTAL_PORT_GAP[0] && existingGap <= COASTAL_PORT_GAP[1]) continue
+    const distance = Math.max(80, shore) + coastalPortGap(port.id)
+    port.position = [host.position[0] + dx * distance, 0, host.position[2] + dz * distance]
+    port.surfaceOffset = [port.position[0] - host.position[0], 0, port.position[2] - host.position[2]]
+    if (player?.dockedBodyId === port.id) {
+      const moveX = port.position[0] - previousX
+      const moveZ = port.position[2] - previousZ
+      for (const position of [player.dockedExteriorPosition, player.ship?.position]) {
+        if (!Array.isArray(position) || position.length < 3) continue
+        position[0] += moveX
+        position[2] += moveZ
+      }
+    }
+  }
+  return world
 }
 
 /** Deterministic from the id, so a harbour's berth survives a reload. */

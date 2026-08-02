@@ -1,0 +1,7 @@
+Ship collision clank
+
+Source: "metcollide2.wav" by Mihacappy, Freesound
+https://freesound.org/people/Mihacappy/sounds/825198/
+
+License: Creative Commons 0 (CC0 1.0)
+The bundled MP3 is the high-quality preview of the CC0 source recording.

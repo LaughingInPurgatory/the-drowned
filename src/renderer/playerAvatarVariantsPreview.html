@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Drowned — Avatar Parts Catalog</title>
+    <style>
+      :root { color-scheme: dark; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      html, body { margin: 0; background: #0a1318; color: #e9e4d4; }
+      body { padding: 26px; }
+      h1 { margin: 0 0 8px; color: #f2c96b; font-size: 20px; letter-spacing: .08em; text-transform: uppercase; }
+      .intro { margin: 0 0 24px; color: #aeb9b8; font-size: 12px; }
+      .catalog { display: grid; grid-template-columns: repeat(3, minmax(280px, 1fr)); gap: 18px; max-width: 1500px; margin: auto; }
+      .focused .catalog { grid-template-columns: 1fr; }
+      .focused .panel { max-width: 1300px; margin: auto; }
+      .focused canvas { height: 460px; }
+      .panel { border: 1px solid #35484b; background: #142228; box-shadow: 0 12px 28px #0008; }
+      .panel h2 { margin: 16px 16px 5px; font-size: 15px; color: #f2c96b; letter-spacing: .06em; text-transform: uppercase; }
+      .panel p { min-height: 30px; margin: 0 16px 12px; color: #aeb9b8; font-size: 10px; line-height: 1.4; }
+      canvas { display: block; width: 100%; height: 360px; background: #182930; }
+      .labels { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; padding: 12px; }
+      .labels span { min-height: 28px; color: #d7d1bf; font-size: 9px; line-height: 1.2; text-align: center; }
+      @media (max-width: 1000px) { .catalog { grid-template-columns: 1fr; } .panel { max-width: 760px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>On-foot survivor // interchangeable parts catalog</h1>
+      <p class="intro">Ten head variations · ten upper bodies (five masculine, five feminine) · ten lower bodies · all share the same neck, waist and boot anchors.</p>
+      <div class="catalog">
+        <section id="headsPanel" class="panel">
+          <h2>Heads // 10</h2>
+          <p>Hair colour, face shape, facial details and hairstyle variations.</p>
+          <canvas id="heads"></canvas>
+          <div id="headLabels" class="labels"></div>
+        </section>
+        <section id="uppersPanel" class="panel">
+          <h2>Upper bodies // 10</h2>
+          <p>Five masculine and five feminine silhouettes, including clothed chest volume, workwear and gear.</p>
+          <canvas id="uppers"></canvas>
+          <div id="upperLabels" class="labels"></div>
+        </section>
+        <section id="lowersPanel" class="panel">
+          <h2>Lower bodies // 10</h2>
+          <p>Trousers, cargo wear, shorts and skirts with matching boots and attachment points.</p>
+          <canvas id="lowers"></canvas>
+          <div id="lowerLabels" class="labels"></div>
+        </section>
+      </div>
+    </main>
+    <script type="module">
+      import * as THREE from 'three'
+      import {
+        HEAD_VARIATIONS,
+        UPPER_BODY_VARIATIONS,
+        LOWER_BODY_VARIATIONS,
+        buildPlayerAvatarMesh
+      } from './render/playerAvatarMesh.js'
+
+      const palettes = {
+        heads: { list: HEAD_VARIATIONS, label: 'headLabels', ids: (i) => ({ headId: i }) },
+        uppers: { list: UPPER_BODY_VARIATIONS, label: 'upperLabels', ids: (i) => ({ upperBodyId: i }) },
+        lowers: { list: LOWER_BODY_VARIATIONS, label: 'lowerLabels', ids: (i) => ({ lowerBodyId: i }) }
+      }
+
+      const focus = new URLSearchParams(window.location.search).get('focus')
+      if (palettes[focus]) {
+        document.body.classList.add('focused')
+        for (const kind of Object.keys(palettes)) {
+          if (kind !== focus) document.getElementById(`${kind}Panel`).style.display = 'none'
+        }
+      }
+
+      function setupPanel(canvas, kind) {
+        const focused = document.body.classList.contains('focused')
+        const width = Math.max(520, canvas.clientWidth * Math.min(window.devicePixelRatio, 2))
+        const canvasHeight = focused ? 460 : 360
+        const height = canvasHeight * Math.min(window.devicePixelRatio, 2)
+        const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+        renderer.setSize(width / renderer.getPixelRatio(), height / renderer.getPixelRatio(), false)
+        renderer.outputColorSpace = THREE.SRGBColorSpace
+
+        const scene = new THREE.Scene()
+        scene.background = new THREE.Color(0x182930)
+        scene.add(new THREE.HemisphereLight(0xd7e2e1, 0x1e2626, 2.4))
+        const key = new THREE.DirectionalLight(0xffe4ad, 3.0)
+        key.position.set(-4, 8, 10)
+        scene.add(key)
+        const rim = new THREE.DirectionalLight(0x77a9bd, 1.5)
+        rim.position.set(6, 4, -8)
+        scene.add(rim)
+
+        const camera = focused
+          ? new THREE.OrthographicCamera(-6.3, 6.3, 2.6, -3.5, 0.1, 40)
+          : new THREE.OrthographicCamera(-6.3, 6.3, 3.0, -5.0, 0.1, 40)
+        camera.position.set(0, focused ? -0.45 : -0.8, 14)
+        camera.lookAt(0, focused ? -0.45 : -0.8, 0)
+        const cfg = palettes[kind]
+        cfg.list.forEach((item, i) => {
+          const avatar = buildPlayerAvatarMesh(cfg.ids(i))
+          avatar.position.set((i % 5 - 2) * 2.35, i < 5 ? 0 : -2.55, 0)
+          avatar.scale.multiplyScalar(focused ? 1.08 : 0.92)
+          avatar.traverse((child) => { if (child.isMesh) child.castShadow = true })
+          scene.add(avatar)
+          const label = document.createElement('span')
+          label.textContent = `${i + 1}. ${item.name}`
+          document.getElementById(cfg.label).append(label)
+        })
+
+        function render() {
+          renderer.render(scene, camera)
+          requestAnimationFrame(render)
+        }
+        render()
+      }
+
+      for (const kind of Object.keys(palettes)) setupPanel(document.getElementById(kind), kind)
+    </script>
+  </body>
+</html>

@@ -4,24 +4,23 @@ import { waveHeight, SEA_MAX_AMPLITUDE } from '../world/sea.js'
 /**
  * Wake — soft foam trail + thin Kelvin arms.
  *
- * Middle ground after two extremes: solid chalk ramp (too artificial) and
- * sparse low-lift foam (invisible under the sea). Sits clear of crests,
- * draws without depth-fighting the ocean, foam is ragged but not empty.
+ * A conservative foam overlay keeps the shape readable without turning the
+ * whole wake into a flat translucent triangle.
  */
 
 const TRAIL_SEGMENTS = 56
 const TRAIL_LIFETIME = 4.0
 const TRAIL_MAX_HALF_WIDTH = 7.5
-/**
- * Clear of crest mismatch so the sea does not bury foam when depth-tested.
- * Stay modest so it does not read as a floating deck.
- */
-const WAKE_LIFT = Math.max(0.7, SEA_MAX_AMPLITUDE * 0.22)
+// A modest lift keeps the foam on top of the camera-facing water triangles.
+// The visible water is displaced in the ocean vertex shader, so a ribbon that
+// is only a few centimetres above the CPU wave sample can disappear into a
+// neighbouring ocean triangle at low chase-camera angles.
+const WAKE_LIFT = Math.max(1.15, SEA_MAX_AMPLITUDE * 0.28)
 const WAKE_THRESHOLD = 0.015
 export const WAKE_FULL_SPEED = 13
 const SAMPLE_SPACING = 1.85
 
-const VERTEX = `
+const FOAM_VERTEX = `
 attribute float aFade;
 varying float vFade;
 varying vec2 vUv;
@@ -35,7 +34,7 @@ void main() {
 }
 `
 
-const FRAGMENT = `
+const FOAM_FRAGMENT = `
 uniform vec3 uColor;
 uniform float uTime;
 varying float vFade;
@@ -59,45 +58,26 @@ float valueNoise(vec2 p) {
   return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
-float fbm(vec2 p) {
-  float v = 0.0;
-  float amp = 0.5;
-  for (int i = 0; i < 4; i++) {
-    v += valueNoise(p) * amp;
-    p *= 2.07;
-    amp *= 0.5;
-  }
-  return v;
-}
-
 void main() {
   float edge = abs(vUv.x * 2.0 - 1.0);
-
-  // World-space churn — pattern sits in the water, not glued to the ribbon.
-  vec2 w = vWorld * 0.38;
-  vec2 churn = vec2(uTime * 0.26, uTime * -0.2);
-  float clumps = fbm(w + churn);
-  float fine = valueNoise(w * 4.6 + churn * 2.8);
-
-  // Soft ragged rim (no hard strip edge).
-  float wander = fbm(w * 0.4 + churn * 0.5);
-  float outer = 0.58 + wander * 0.32;
-  float across = smoothstep(outer + 0.14, outer - 0.32, edge);
-  // Mild hollow mid-channel without killing the sheet.
-  across *= 0.4 + 0.6 * smoothstep(0.02, 0.42, edge);
-
   float age = vUv.y;
-  // Near hull: denser foam. Far aft: more broken, still present.
-  float breakup = mix(0.32, 0.14, age) + edge * 0.14;
-  breakup += smoothstep(0.55, 1.0, edge) * 0.18;
-  // Bias so average noise still produces foam (not empty).
-  float foam = smoothstep(breakup - 0.08, breakup + 0.42, clumps * 0.65 + fine * 0.28 + 0.22);
+  vec2 drift = vec2(uTime * 0.08, -uTime * 0.06);
+  float broad = valueNoise(vWorld * 0.18 + drift);
+  float detail = valueNoise(vWorld * 0.72 - drift * 1.7);
 
-  float a = across * foam * vFade * 1.45;
-  if (a <= 0.02) discard;
-  // Soft cool white — not chalk, not invisible.
-  vec3 col = mix(uColor, vec3(0.94, 0.97, 0.99), 0.5);
-  gl_FragColor = vec4(col, min(0.82, a));
+  // Foam favours the two churn channels at the ribbon's shoulders; the
+  // middle is only a broken wash instead of a painted triangular sheet.
+  float channels = 0.48 + 0.52 * smoothstep(0.08, 0.28, edge);
+  float rim = 1.0 - smoothstep(0.34, 0.96, edge);
+  float breakup = valueNoise(vWorld * 1.65 + drift * 2.2);
+  float flecks = smoothstep(0.30, 0.78, broad * 0.46 + detail * 0.34 + breakup * 0.20);
+  float foam = mix(0.18, 1.0, flecks) * channels * rim;
+  foam *= mix(1.0, 0.64, smoothstep(0.18, 1.0, age));
+
+  float alpha = foam * vFade * 1.08;
+  if (alpha <= 0.015) discard;
+  vec3 colour = mix(uColor, vec3(0.98, 0.995, 1.0), 0.48 + detail * 0.18);
+  gl_FragColor = vec4(colour, min(0.78, alpha));
 }
 `
 
@@ -121,24 +101,18 @@ function buildStrip(segments) {
   return geometry
 }
 
-function wakeMaterial(color) {
+function foamMaterial(color) {
   return new THREE.ShaderMaterial({
     uniforms: {
       uColor: { value: new THREE.Color(color) },
       uTime: { value: 0 }
     },
-    vertexShader: VERTEX,
-    fragmentShader: FRAGMENT,
+    vertexShader: FOAM_VERTEX,
+    fragmentShader: FOAM_FRAGMENT,
     transparent: true,
-    // Depth-test so the hull occludes foam that would otherwise paint over the
-    // deck/superstructure. depthWrite off so soft ribbons do not punch holes
-    // in each other. Lift + polygonOffset keep the trail above the sea without
-    // drawing on top of the boat.
     depthWrite: false,
     depthTest: true,
-    polygonOffset: true,
-    polygonOffsetFactor: -1.5,
-    polygonOffsetUnits: -1.5,
+    depthFunc: THREE.LessDepth,
     fog: false,
     toneMapped: false,
     side: THREE.DoubleSide
@@ -152,28 +126,29 @@ function surfaceY(x, z, t) {
 export function createWake() {
   const group = new THREE.Group()
   group.frustumCulled = false
-  // After opaque hulls (default 0), before UI overlays — depth test still
-  // lets the ship win where ribbons cross the mesh.
-  group.renderOrder = 5
+  // Transparent wake is drawn after the opaque ocean and hull. Depth testing
+  // then lets the hull's depth win wherever a bow arm crosses the ship.
+  group.renderOrder = 0.5
   group.name = 'wake'
 
   const trailGeo = buildStrip(TRAIL_SEGMENTS)
-  const trail = new THREE.Mesh(trailGeo, wakeMaterial(0xd0e0e8))
+  const trail = new THREE.Mesh(trailGeo, foamMaterial(0xd0e0e8))
   trail.frustumCulled = false
-  trail.renderOrder = 5
-  trail.name = 'wake-trail'
+  trail.renderOrder = 0.5
+  trail.name = 'wake-trail-foam'
   group.add(trail)
 
   const bowGeos = [buildStrip(12), buildStrip(12)]
-  const bowMat = wakeMaterial(0xe2eef4)
-  const bows = bowGeos.map((g, i) => {
-    const m = new THREE.Mesh(g, bowMat)
-    m.frustumCulled = false
-    m.renderOrder = 5
-    m.name = `wake-bow-${i}`
-    group.add(m)
-    return m
-  })
+  const bowFoamMat = foamMaterial(0xe2eef4)
+  const bows = []
+  for (const [i, g] of bowGeos.entries()) {
+    const foam = new THREE.Mesh(g, bowFoamMat)
+    foam.frustumCulled = false
+    foam.renderOrder = 0.5
+    foam.name = `wake-bow-${i}`
+    group.add(foam)
+    bows.push(foam)
+  }
 
   const samples = []
   let lastSample = null
@@ -185,23 +160,30 @@ export function createWake() {
     for (const b of bows) b.visible = false
   }
 
-  function update(position, travelHeading, speedFraction, hullLength, t, dt) {
+  function update(position, travelHeading, speedFraction, hullLength, hullHalfBeam, t, dt) {
     const speed = Math.max(0, Number(speedFraction) || 0)
     const active = speed > WAKE_THRESHOLD
     const px = Number(position?.[0]) || 0
     const pz = Number(position?.[2]) || 0
     const heading = Number.isFinite(travelHeading) ? travelHeading : 0
     const hLen = Math.max(4, Number(hullLength) || 16)
+    // Ship classes are now materially wider than the original space-era
+    // roster. Scale foam from the current rendered hull instead of letting a
+    // large saved ship swallow its own wake.
+    const hBeam = Math.max(1.5, Number(hullHalfBeam) || 4)
+    const wakeWidth = Math.max(TRAIL_MAX_HALF_WIDTH, hBeam * 1.35)
     const simT = Number.isFinite(t) ? t : 0
     const step = Math.max(1e-3, Number(dt) || 1 / 60)
 
     trail.material.uniforms.uTime.value = simT
-    bowMat.uniforms.uTime.value = simT
+    bowFoamMat.uniforms.uTime.value = simT
     group.visible = true
 
     // Trail anchors slightly astern of the origin so foam starts behind the
     // hull rather than through the midships deck.
-    const sternBack = hLen * 0.32
+    // The hull geometry runs roughly from -length/2 to +length/2. Start just
+    // beyond the transom so the first foam is not buried inside a long hull.
+    const sternBack = hLen * 0.53
     const fx = Math.sin(heading)
     const fz = Math.cos(heading)
     const ax = px - fx * sternBack
@@ -248,7 +230,7 @@ export function createWake() {
         continue
       }
       const k = s.age / TRAIL_LIFETIME
-      const half = TRAIL_MAX_HALF_WIDTH * s.speed * (0.35 + Math.min(0.75, k * 1.15))
+      const half = wakeWidth * s.speed * (0.35 + Math.min(0.75, k * 1.15))
       const nx = Math.cos(s.heading)
       const nz = -Math.sin(s.heading)
       for (const [k2, sign] of [
@@ -268,12 +250,12 @@ export function createWake() {
     trail.visible = samples.length > 1
 
     // Kelvin arms — visible but thinner than the old solid wedges.
-    const tipX = px + Math.sin(heading) * hLen * 0.44
-    const tipZ = pz + Math.cos(heading) * hLen * 0.44
+    const tipX = px + Math.sin(heading) * hLen * 0.5
+    const tipZ = pz + Math.cos(heading) * hLen * 0.5
     const armBase = heading + Math.PI
     const spread = 0.35
     const armLen = hLen * (0.35 + speed * 0.55)
-    const armWidth = 0.28 + speed * 0.7
+    const armWidth = Math.max(0.28 + speed * 0.7, hBeam * 0.12)
     for (let b = 0; b < 2; b++) {
       const sign = b === 0 ? -1 : 1
       const a = armBase + sign * spread
@@ -315,7 +297,7 @@ export function createWake() {
     trailGeo.dispose()
     for (const g of bowGeos) g.dispose()
     trail.material.dispose()
-    bowMat.dispose()
+    bowFoamMat.dispose()
   }
 
   return { group, update, reset, dispose }

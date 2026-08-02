@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   applyDamage,
   fireProjectile,
+  fireOnFootProjectile,
   updateProjectiles,
   updateNpcAI,
   PLAYER_DAMAGE_TAKEN_MULT,
@@ -75,6 +76,83 @@ test('fireProjectile spawns a projectile per hardpoint that travels and can hit 
 
   step(gameState, 20, () => updateProjectiles(gameState, DT))
   assert.ok(gameState.player.ship.hull < 100, 'projectile should eventually hit the player ship')
+})
+
+test('Fixo Pistol uses deck-gun stats and reports world impacts', () => {
+  const onFoot = { fixoPistolReadyAt: -Infinity }
+  const gameState = { simTime: 0, projectiles: [], npcs: [], player: { ship: {} } }
+  assert.equal(fireOnFootProjectile(gameState, onFoot, [0, 2, 0], [0, 0, 1]), true)
+  assert.equal(fireOnFootProjectile(gameState, onFoot, [0, 2, 0], [0, 0, 1]), false)
+  assert.equal(gameState.projectiles[0].weaponId, 'fixo_pistol')
+  assert.equal(gameState.projectiles[0].damage, getWeapon('pulse_laser').damage)
+
+  let hitPayload = null
+  updateProjectiles(
+    gameState,
+    DT,
+    (payload) => { hitPayload = payload },
+    ({ to }) => ({ position: to })
+  )
+  assert.equal(gameState.projectiles.length, 0)
+  assert.equal(hitPayload?.onFootImpact, true)
+})
+
+test('player ship rounds report world impacts separately from on-foot rounds', () => {
+  const gameState = {
+    simTime: 0,
+    projectiles: [{
+      id: 'ship-round',
+      ownerId: 'player',
+      weaponId: 'pulse_laser',
+      weaponType: 'laser',
+      position: [0, 0, 0],
+      velocity: [0, 0, 100],
+      damage: 8,
+      ttl: 1
+    }],
+    npcs: [],
+    player: { ship: {} }
+  }
+  let hitPayload = null
+  updateProjectiles(
+    gameState,
+    DT,
+    (payload) => { hitPayload = payload },
+    ({ to }) => ({ position: to, waterImpact: true })
+  )
+  assert.equal(gameState.projectiles.length, 0)
+  assert.equal(hitPayload?.worldImpact, true)
+  assert.equal(hitPayload?.onFootImpact, false)
+  assert.equal(hitPayload?.waterImpact, true)
+})
+
+test('NPC ship rounds use the same world-impact path', () => {
+  const gameState = {
+    simTime: 0,
+    projectiles: [{
+      id: 'npc-round',
+      ownerId: 'npc-1',
+      targetRef: { kind: 'npc', id: 'missing-target' },
+      weaponId: 'pulse_laser',
+      weaponType: 'laser',
+      position: [0, 0, 0],
+      velocity: [0, 0, 100],
+      damage: 8,
+      ttl: 1
+    }],
+    npcs: [],
+    player: { ship: {} }
+  }
+  let hitPayload = null
+  updateProjectiles(
+    gameState,
+    DT,
+    (payload) => { hitPayload = payload },
+    ({ to }) => ({ position: to })
+  )
+  assert.equal(gameState.projectiles.length, 0)
+  assert.equal(hitPayload?.worldImpact, true)
+  assert.equal(hitPayload?.onFootImpact, false)
 })
 
 test('fireProjectile with a weaponTypeFilter only fires matching hardpoints', () => {

@@ -16,7 +16,7 @@ import { islandShorelineToward, islandMaxShoreline } from '../render/islandMesh.
 
 test('a harbour undock shell clears its jetties, the approach shell stays tight', () => {
   const port = { kind: 'port', position: [0, 0, 0] }
-  assert.equal(collisionRadiusFor(port), 120)
+  assert.equal(collisionRadiusFor(port), 28)
   assert.equal(exteriorRadiusFor(port), PORT_EXTERIOR_RADIUS)
   assert.ok(
     exteriorRadiusFor(port) > collisionRadiusFor(port),
@@ -26,7 +26,7 @@ test('a harbour undock shell clears its jetties, the approach shell stays tight'
 
 test('an outpost is a smaller obstruction than a harbour', () => {
   const outpost = { kind: 'outpost', position: [0, 0, 0] }
-  assert.equal(collisionRadiusFor(outpost), 40)
+  assert.equal(collisionRadiusFor(outpost), 12)
   assert.equal(exteriorRadiusFor(outpost), OUTPOST_EXTERIOR_RADIUS)
   assert.ok(exteriorRadiusFor(outpost) < PORT_EXTERIOR_RADIUS)
 })
@@ -70,13 +70,13 @@ test('grounding uses the coastline on the bearing you approach from', () => {
 
 test('running onto a shore sheers the hull off it and kills the way into it', () => {
   const port = { kind: 'port', position: [0, 0, 100] }
-  const shipState = { position: [0, 0, 20], velocity: [0, 0, 50] }
+  const shipState = { position: [0, 0, 70], velocity: [0, 0, 50] }
   const shipRadius = 5
 
   resolveBodyCollisions(shipState, [port], shipRadius)
 
   const dist = Math.hypot(shipState.position[0], shipState.position[2] - port.position[2])
-  assert.ok(Math.abs(dist - 125) < 1e-6, 'hull should sit exactly on the collision circle')
+  assert.ok(Math.abs(dist - 33) < 1e-6, 'hull should sit exactly on the tight harbour collision circle')
   assert.ok(shipState.velocity[2] <= 0, 'way driving into it must be cancelled')
 })
 
@@ -118,6 +118,22 @@ test('wreck fields have no whole-field shell — you sail into them', () => {
   resolveBodyCollisions(shipState, [field], 5)
   const dist = Math.hypot(shipState.position[0], shipState.position[2])
   assert.ok(dist < 50, `should not bounce off the field extent (dist=${dist})`)
+})
+
+test('harbour breakwater rocks collide individually without making a solid ring', () => {
+  const port = {
+    kind: 'port',
+    position: [0, 0, 0],
+    breakwaterRocks: [{ x: 40, z: 0, radius: 4 }]
+  }
+  const shipState = { position: [40, 0, 0], velocity: [-10, 0, 0] }
+  resolveBodyCollisions(shipState, [port], 2)
+  assert.ok(Math.abs(shipState.position[0] - 46) < 1e-6, 'rock should push the hull clear')
+  assert.ok(shipState.velocity[0] >= 0, 'rock contact should cancel inward way')
+
+  const gapState = { position: [0, 0, 34], velocity: [0, 0, 1] }
+  resolveBodyCollisions(gapState, [port], 2)
+  assert.ok(Math.abs(gapState.position[2] - 34) < 1e-6, 'open water between quay and mole should stay open')
 })
 
 test('wreck fields push the hull off an individual hulk', () => {
