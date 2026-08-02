@@ -17,7 +17,7 @@
 
 <p align="center">
   <strong>A procedural open-world sea of trade, salvage and combat</strong><br/>
-  Electron + Three.js · one seamless ocean · arcade boat handling · persistent saves
+  Electron + Three.js · one seamless ocean · boat handling · island exploration · persistent saves
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 
 The flood did not arrive as one clean ending. It came in broken coastlines, drowned roads, dead radio towers and ships that never found a port again. Decades later, the old continents are gone beneath one enormous sea. People live on the islands that remain, trade between half-working harbours, and go out every day to pull something useful from the wreckage.
 
-You begin at **Port Haven**, the last dependable harbour in **Haven Reach**, with a patched-up light runner, a clean record and a sea full of reasons to leave. There is work close to home: haul cargo, chart a coast, recover salvage, follow a signal. There are better Barter Unit payouts farther out, where the patrol lights thin, the weather turns, and the deep still holds things that were never meant to be found.
+You begin at **Port Haven**, the last dependable harbour in **Haven Reach**, with a patched-up light runner, a clean record and a sea full of reasons to leave. There is work close to home: haul cargo, chart a coast, recover salvage, follow a signal. There are better Barter Unit (**BU**) payouts farther out, where the patrol lights thin, the weather turns, and the deep still holds things that were never meant to be found.
 
 Somewhere beyond the safe water, the old military order called **the Drowned** is still moving. Their hulls and weapons are not sold across a counter. They are recovered from Drowned wrecks and sealed sites, studied, and assembled piece by piece in harbour Industry. Every captain eventually decides whether the deep is worth the answer it might contain.
 
@@ -45,6 +45,7 @@ The Drowned is a small-boat open-world game about making a living on a flooded E
 - **A working captain’s economy.** Buy and sell goods, survey data, mined material and ship parts through harbour Services. Storage is local, so cargo left behind stays where you put it. Outposts are leaner; harbours offer the full Trade, Shipyard, Armoury and Industry spread.
 - **100+ vessel classes.** Buy, salvage or assemble hulls ranging from fast runners and workboats to heavy freighters, gunboats, explorers and salvage craft. Fit weapons, accessories and drone bays to make a ship that suits the way you actually play.
 - **Combat drones.** Ships with drone bays can carry small airborne combat drones. Buy them in the Armoury, install them in the loadout, then launch with **G** and recall with **H**. They are support craft that fight alongside your boat; they are not extra player-controlled ships.
+- **Step ashore.** Bring the ship right up to an island shoreline and press **F** when the prompt appears. On land, use **W/A/S/D** to move, mouse look to turn, **Shift** to run, **Space** to jump and **F** near the boat to board again. The ship stays alongside as a protected placeholder while you explore.
 - **The law remembers.** Local security runs from **0–6** and changes with your position. Your **Notoriety** rises when you attack non-aggressors in watched water. Lose enough standing and police respond faster, high-security harbours refuse a berth, and eventually every patrol sees you as a target.
 - **Salvage with consequences.** Wreck fields hold finite material and recover on the campaign clock. In low-security water, successful salvage hits can attract a pirate ambush. The farther out you go, the more valuable the wrecks become—and the more likely someone else is already watching them.
 - **Signals in the empty water.** Use the boat’s sonar pulse to survey nearby islands and wreck fields. Use **Region Sonar** to deploy scan probes and hunt Anomalous Signals: Drowned incursions, datacores, sealed sites and rare salvage caches.
@@ -58,25 +59,28 @@ Harbours are generated from the same world seed as the islands around them: quay
 1. Start a New Game at Port Haven and choose **Undock**.
 2. Press **Space** to take the helm. Use **W/S** for throttle, **A/D** to steer and **Q/E** to move sideways.
 3. Use **Tab** to lock a contact under the crosshair. Press **P** to survey a nearby island or wreck field, and **F** to use a locked contact when the HUD says it is in range.
-4. Return to a harbour, come alongside, then press **S** to open Services. Transfer cargo through **Inventory (I)** before buying or selling; harbour storage is local.
-5. Open **M** for the sea chart, **B** for Region Sonar and **J** for your missions. The yellow waypoint is guidance, not autopilot.
+4. Bring the ship alongside an island until **Press F to disembark** appears. Explore with **W/A/S/D**, then return to the boat and press **F** to board.
+5. Return to a harbour, come alongside, then press **S** to open Services. Transfer cargo through **Inventory (I)** before buying or selling; harbour storage is local.
+6. Open **M** for the sea chart, **B** for Region Sonar and **J** for your missions. The yellow waypoint is guidance, not autopilot.
 
 ## Controls
 
-You take the helm with **Space**. While the helm is active, the pointer is locked for turret aiming. Open a panel or press Space again to free the pointer. After alt-tab, click the game canvas or press Space to take control back. **Settings → Controls** in the main menu and pause menu uses this same list.
+You take the helm with **Space**. While the helm is active, the pointer is locked for turret aiming. On foot, the pointer is locked for mouse look instead. Open a panel or press Space again to free the pointer. After alt-tab, click the game canvas or press Space to take control back. **Settings → Controls** in the main menu and pause menu uses the same bindings.
 
 | Input | Action |
 | --- | --- |
-| **Space** | Take / leave the helm |
-| **Mouse movement** | Aim the turret — traverse and elevate the guns |
-| **Mouse wheel** | Chase-camera zoom |
+| **Space** | Take / leave the helm; jump on land |
+| **Mouse movement** | Aim the turret at sea; look around on foot |
+| **Mouse wheel** | Chase-camera zoom at sea |
 | **Mouse wheel over Overview** | Scroll the body list |
 | **Alt + Enter** | Toggle fullscreen |
-| **Left click** | Fire gun mounts; can be held with RMB |
-| **Right click** | Fire launchers; can be held with LMB |
-| **W / S** | Ahead / astern; release to coast down |
+| **Left click** | Fire ship gun mounts, or the Fixo Pistol on foot; can be held with RMB at sea |
+| **Right click** | Fire ship launchers; unavailable on foot |
+| **W / S** | Ahead / astern at sea; move forward / back on foot |
+| **Shift (on foot)** | Hold while moving to run; uses stamina |
+| **L (on foot)** | Toggle handheld flashlight |
 | **S (alongside)** | Open / close dockside Services |
-| **A / D** | Helm to port / starboard |
+| **A / D** | Helm to port / starboard at sea; strafe left / right on foot |
 | **Q / E** | Bow and stern thrusters — crab sideways to port / starboard |
 | **Tab** | Lock the contact under the crosshair, or cycle nearby contacts |
 | **Shift + Tab** | Clear target lock |
@@ -85,11 +89,11 @@ You take the helm with **Space**. While the helm is active, the pointer is locke
 | **C** | Cruise Control — holds heading and speed; A/D steer; W/S/Q/E cancel |
 | **M** | Open the sea chart; pan, zoom and set a waypoint |
 | **B** | Open Region Sonar; deploy scan probes and investigate signals |
-| **F** | Use the locked contact — salvage, dock or hack when in range |
+| **F** | Use the locked contact — salvage, dock or hack when in range; disembark / board when prompted |
 | **P** | Sonar pulse — survey a nearby island or wreck field |
 | **G** | Launch installed combat drones; requires drone bays and drones aboard |
 | **H** | Recall combat drones |
-| **L** | Bow searchlight on / off |
+| **L** | Bow searchlight on / off at sea |
 | **I** | Inventory |
 | **J** | Missions journal |
 | **F1** | Character sheet |
@@ -97,7 +101,7 @@ You take the helm with **Space**. While the helm is active, the pointer is locke
 | **F5** | Hail the locked target |
 | **Free mouse** | Click Overview, the sea chart or Region Sonar to set waypoints; scroll Overview with the wheel |
 
-There is no roll, pitch or vertical thrust input. You are driving a surface vessel: throttle, helm, thrusters, guns and the water under the hull.
+There is no roll, pitch or vertical thrust input for the boat. You are driving a surface vessel: throttle, helm, thrusters, guns and the water under the hull. On foot, the camera is first-person and the avatar cannot enter the acidic sea beyond shallow wading depth.
 
 ## Settings and saves
 
