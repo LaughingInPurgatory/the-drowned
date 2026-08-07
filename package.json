@@ -1,7 +1,7 @@
 {
   "name": "the-drowned",
   "productName": "The Drowned",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Procedurally generated open-world ocean trading/combat game set on a flooded Earth",
   "main": "./out/main/index.js",
   "author": "Laughing In Purgatory",
