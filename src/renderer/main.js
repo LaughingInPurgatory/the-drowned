@@ -3709,6 +3709,39 @@ const onFootProjectileFrom = new THREE.Vector3()
 const onFootProjectileDelta = new THREE.Vector3()
 const onFootProjectileEnd = new THREE.Vector3()
 const onFootWaterImpact = new THREE.Vector3()
+const losRay = new THREE.Raycaster()
+const losFrom = new THREE.Vector3()
+const losDelta = new THREE.Vector3()
+
+/**
+ * Can a ship at `fromPos` actually see the on-foot player right now — same
+ * terrain raycast resolveProjectileWorldImpact uses for round impacts, run
+ * proactively so a retaliating NPC can tell "blocked by that headland"
+ * from "clear shot" before it opens up, not just after a round it fired
+ * blind smacks into a hillside.
+ * @param {number[]} fromPos world-space [x,y,z], e.g. an NPC's position
+ */
+function hasLineOfSightToOnFootPlayer(fromPos) {
+  const onFoot = gameState?.player?.onFoot
+  if (!onFoot?.active || !Array.isArray(onFoot.position) || !Array.isArray(fromPos)) return false
+  losFrom.fromArray(fromPos)
+  losFrom.y += 3 // rough turret/deck height above the waterline
+  losDelta.set(
+    onFoot.position[0] - losFrom.x,
+    (Number(onFoot.position[1]) || 0) + ON_FOOT_AVATAR_HEIGHT * 0.6 - losFrom.y,
+    onFoot.position[2] - losFrom.z
+  )
+  const distance = losDelta.length()
+  if (distance < 1e-5) return true
+  losRay.set(losFrom, losDelta.normalize())
+  // Stop just short of the player so their own avatar mesh can't self-block.
+  losRay.far = Math.max(0, distance - 1.5)
+  for (const bodyMesh of bodyMeshes.values()) {
+    if (!bodyMesh.visible) continue
+    if (losRay.intersectObject(bodyMesh, true).length) return false
+  }
+  return true
+}
 
 /** Return the first island/structure surface crossed by a player round. */
 function resolveProjectileWorldImpact({ from, to }) {
@@ -3871,7 +3904,15 @@ function syncOnFootCameraSafe(onFoot, options = {}) {
 function syncPlayerFlashlight() {
   const onFoot = gameState?.player?.onFoot
   const enabled = !!onFoot?.active && !!onFoot.flashlightOn
-  playerFlashlight.root.visible = enabled
+  // `playerFlashlight.root` stays visible unconditionally — same reasoning
+  // as the ship's own searchlight (see setSearchlightOn in shipMesh.js):
+  // a light is part of the renderer's shader-compiling light topology
+  // whenever any ancestor in its chain is visible, so toggling a *group*
+  // that wraps a light on/off is the same mid-session topology change as
+  // adding/removing the light outright — one shader recompile per press.
+  // setPlayerFlashlightOn already does this the safe way, zeroing
+  // spot.intensity and hiding the housing/glow/beam meshes (not lights,
+  // so free to toggle) while leaving the SpotLight itself always visible.
   if (!enabled) {
     setPlayerFlashlightOn(playerFlashlight, false)
     return
@@ -7303,10 +7344,26 @@ function animate() {
     audio.setStrafeActive(false)
     audio.setThrustState(null)
     gameState.inCombat = false
-    // Ship rounds are discarded while ashore; Fixo Pistol rounds remain live.
-    gameState.projectiles = (gameState.projectiles ?? []).filter((projectile) => projectile.onFoot)
+    // Ship rounds already in flight when the player stepped ashore are
+    // discarded — a shot that was aimed at the boat a moment ago should not
+    // bizarrely find the person who just left it. Fixo Pistol rounds remain
+    // live, and so does anything a hostile ship fires *after* this point
+    // aimed squarely at the on-foot player (see opponentsFor/updateNpcAI in
+    // combat.js): that is a live retaliation shot and has to survive to
+    // actually reach them.
+    gameState.projectiles = (gameState.projectiles ?? []).filter(
+      (projectile) => projectile.onFoot || projectile.targetRef?.kind === 'player'
+    )
     updateOnFootPlayer(dt)
     updateProjectiles(gameState, dt, onProjectileHit, resolveProjectileWorldImpact)
+    if (gameState.player.onFoot.health <= 0) {
+      // No explicit cause: onProjectileHit already called notePlayerDamagedBy
+      // on the hit, so gameState.player.lastKiller names the actual shooter
+      // — handlePlayerDeath's default message reads the same as a normal
+      // ship-combat death ("Destroyed by <ship> Piloted by <pilot>").
+      handlePlayerDeath()
+      return
+    }
     if (laserFireHeld) tryOnFootFire()
     syncProjectileMeshesNow()
     updateHitImpactEffects(dt)
@@ -7359,6 +7416,58 @@ function animate() {
     {
       const day = refreshEnvironment(gameState.simTime)
       _nightLightFactor = nightLightFactorFromDay(day)
+    }
+    // Sea traffic keeps living while the player is ashore — only the
+    // player's own ship stops being an active participant (it already just
+    // rides the swell above, via snapToSea/applySeaAttitude). Same AI-update
+    // + mesh-sync pattern the normal helm branch runs; going on foot used to
+    // freeze every NPC in place because this whole branch returns before
+    // ever reaching that code.
+    {
+      const onFootCombatFrame = prepareCombatFrame(gameState)
+      // Only meaningful here: no scene/mesh access from inside combat.js, so
+      // the actual terrain raycast has to be handed in from the render side.
+      // Consumed by opponentsFor (combat.js) to drop the player from a
+      // hostile ship's target list the instant a hill gets between them —
+      // same disengage machinery as losing range, so it naturally resumes
+      // the moment sight is clear again.
+      onFootCombatFrame.hasLineOfSightToOnFootPlayer = hasLineOfSightToOnFootPlayer
+      for (const npc of gameState.npcs) {
+        if (npc.destroyed) continue
+        updateNpcAI(
+          npc,
+          gameState,
+          dt,
+          onWeaponFired,
+          (fromPos) => {
+            notePlayerDamagedBy(npc.id, { ram: true })
+            pulseDamageVignette(fromPos)
+          },
+          onFootCombatFrame
+        )
+      }
+      for (const npc of gameState.npcs) {
+        let mesh = npcMeshes.get(npc.id)
+        if (!mesh && !npc.destroyed) mesh = addNpcMesh(npc)
+        if (!mesh) continue
+        if (npc.destroyed) {
+          if (!npc.deathFxPlayed) {
+            npc.deathFxPlayed = true
+            const r = getShipCollisionRadius(getShipClass(npc.shipClassId))
+            playShipDeathFx(npc.position, r)
+          }
+          removeNpcMesh(npc.id)
+          continue
+        }
+        syncMeshToEntity(mesh, npc)
+        updateNpcThrusters(mesh, npc, dt)
+        if (npc.faction === 'police' || mesh.userData?.policeLights) {
+          updatePoliceLights(mesh, gameState.simTime)
+        }
+        if (_nightLightFactor > 0.05 || mesh.userData.runningLights?.lastNight !== 0) {
+          updateShipNightLights(mesh, _nightLightFactor)
+        }
+      }
     }
     ocean.setSearchlight(null)
     render()

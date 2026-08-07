@@ -126,20 +126,30 @@ export function pruneCombatEngagement(gameState) {
 }
 
 const HIT_RADIUS = 1.5
+// Generous, not person-scale on purpose. A ship's aim is a single snapshot
+// taken when it opens up (aimTurretAt), with no lead prediction; over a
+// laser's ~0.1-1.3s flight time a walking/running target on foot can cover
+// several metres, and a tight hitbox against that made every shot resolve
+// as a terrain splash a stride short of the player instead of a hit — it
+// "landed" (visible impact FX) but never actually connected.
+const ON_FOOT_HIT_RADIUS = 6
 // Mining lasers need a generous pad — pure geometric rock shells are easy to miss
 // at speed / with wing parallax, and felt "broken" when reticle sat on a rock.
 const MINE_HIT_PAD = 14
 // Nothing on this sea has shields — armour absorbs, then the hull takes it, and
 // steel does not grow back. Repairs are a yard job (game/economy.js repairShip).
 
-const ATTACK_RANGE = 250
+const ATTACK_RANGE = 800
 // Anomaly-spawned guards/waves (tagged npc.anomalySiteId) hunt a bit further
 // than normal contacts so a site fight starts as you approach the cluster —
 // not the old space-era multi-km radius.
 const ANOMALY_GUARD_ATTACK_RANGE = 550
 const ANOMALY_GUARD_DISENGAGE_RANGE = 850
-const DISENGAGE_RANGE = 375
-const FIRE_RANGE = 200
+// Same 1.5x gap above ATTACK_RANGE as before the engagement range was
+// raised — the buffer that stops a target sitting right at the boundary
+// from flickering between attack and patrol every frame.
+const DISENGAGE_RANGE = 1200
+const FIRE_RANGE = 800
 const FIRE_CONE_DOT = 0.9
 const FLEE_HULL_FRACTION = 0.25
 const COMBAT_COOLDOWN_S = 6
@@ -575,6 +585,31 @@ export function updateProjectiles(gameState, dt, onHit, onWorldImpact) {
         hit = true
         break
       }
+    } else if (proj.targetRef?.kind !== 'npc' && gameState.player.onFoot?.active) {
+      // Ashore, a shot aimed "at the player" means the actual body, not the
+      // abandoned hull — human-scale hit radius, straight to onFoot.health
+      // (no armour/hull to absorb it the way a ship has). Full weapon
+      // damage, unscaled: a boat's gun hitting a person on a beach is
+      // supposed to be dangerous, not a ship-combat tickle.
+      const onFoot = gameState.player.onFoot
+      _targetPos.fromArray(onFoot.position)
+      if (closestDistanceToSegment(_targetPos, _projPrev, _projNext) < ON_FOOT_HIT_RADIUS) {
+        onFoot.health = Math.max(0, Number(onFoot.health) - proj.damage)
+        markPlayerCombatEngagement(gameState, proj, gameState.player.ship, true)
+        _inbound.subVectors(_projPrev, _projNext)
+        onHit?.({
+          position: proj.position.slice(),
+          weaponType: proj.weaponType,
+          weaponId: proj.weaponId,
+          destroyed: false,
+          hitPlayer: true,
+          onFootHit: true,
+          ownerId: proj.ownerId ?? null,
+          inboundDir: [_inbound.x, _inbound.y, _inbound.z],
+          targetNpcId: null
+        })
+        hit = true
+      }
     } else {
       // NPC projectile — hit player or specific NPC target. Shots already in
       // the air when the player ties up pass harmlessly.
@@ -788,14 +823,17 @@ export function prepareCombatFrame(gameState) {
     else if (n.faction === 'alien') aliens.push(n)
     else if (n.faction === 'police') police.push(n)
   }
+  const onFootActive = !!gameState.player.onFoot?.active
   return {
     system,
     bodies: system?.bodies ?? [],
-    playerPos: gameState.player.ship.position,
+    // Ashore, anyone allowed to target the player at all (see opponentsFor)
+    // aims at the actual body, not the abandoned hull sitting by the shore.
+    playerPos: onFootActive ? gameState.player.onFoot.position : gameState.player.ship.position,
     // Moored alongside: nobody starts anything with a boat tied up under a
     // harbour's guns, and nothing can reach it if they try.
     playerMoored: !!gameState.player.dockedBodyId,
-    playerOnFoot: !!gameState.player.onFoot?.active,
+    playerOnFoot: onFootActive,
     truce,
     policeSos: policeHostileToPlayer(gameState, system),
     civSos: civiliansHostileToPlayer(gameState, system),
@@ -815,7 +853,29 @@ function opponentsFor(npc, gameState, frame = null) {
   const ctx = frame ?? prepareCombatFrame(gameState)
   // A moored boat is not a target. Without this, raiders queue up off the quay
   // and open fire on something that cannot answer or leave.
-  if (ctx.playerMoored || ctx.playerOnFoot) return []
+  if (ctx.playerMoored) return []
+  const opponents = opponentsForShip(npc, ctx)
+  if (!ctx.playerOnFoot) return opponents
+  // Ashore, the player's own ship is a protected placeholder — nobody goes
+  // looking for a fight with someone who isn't there. The one exception: an
+  // NPC the player just shot at (hostileToPlayer, set by
+  // markPlayerCombatEngagement) fires back if it gets a shot — everyone
+  // else leaves the player alone. And even a hostile NPC drops the player
+  // the instant terrain blocks the shot (hasLineOfSightToOnFootPlayer, main
+  // process only — no scene access here); this reuses the same "opponent
+  // vanished" disengage path range loss already goes through, so it picks
+  // the target back up the moment sight is clear again with no extra state.
+  if (
+    !npc.hostileToPlayer ||
+    (ctx.hasLineOfSightToOnFootPlayer && !ctx.hasLineOfSightToOnFootPlayer(npc.position))
+  ) {
+    return opponents.filter((o) => o.id !== 'player')
+  }
+  return opponents
+}
+
+/** The pre-on-foot-filter opponent list, by faction. See opponentsFor. */
+function opponentsForShip(npc, ctx) {
   const playerPos = ctx.playerPos
   const engaged = !!ctx.engagedMap[npc.id]
 
@@ -863,12 +923,12 @@ function opponentsFor(npc, gameState, frame = null) {
 
 export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame = null) {
   if (npc.destroyed) return
-  if (gameState.player?.onFoot?.active) {
-    // The boat is a protected placeholder while the captain is ashore.
-    npc.aiState = npc.aiState === 'attack' || npc.aiState === 'ram' ? 'patrol' : npc.aiState
-    npc.velocity = [0, 0, 0]
-    return
-  }
+  // The player's own ship is a protected placeholder while the captain is
+  // ashore — handled by opponentsFor() below (ctx.playerOnFoot), the same
+  // way a moored boat is excluded, so an NPC that was hunting the player
+  // simply finds no opponent. Traffic itself must keep moving: this used to
+  // additionally zero every NPC's velocity here, which froze the entire sea,
+  // not just the player's boat.
   const npcShipClass = getShipClass(npc.shipClassId)
 
   const npcPos = new THREE.Vector3().fromArray(npc.position)
@@ -970,18 +1030,27 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
       )
     }
   } else if (npc.aiState === 'ram') {
-    // A suicide run is aimed squarely at the player regardless of whatever
-    // opponentsFor would otherwise pick (e.g. an alien, if this pirate was
-    // truced) — turns and accelerates harder than a normal attack run for a
-    // dramatic charge, and destroys itself on impact alongside the damage.
-    forward = faceToward(npc, npcPos, playerPos, stats.turnRate * 1.6, dt)
-    velocity.addScaledVector(forward, stats.accel * 1.6 * dt)
-    const hitDistance = getShipCollisionRadius(npcShipClass) + getShipCollisionRadius(getShipClass(gameState.player.ship.classId))
-    if (!gameState.player.dockedBodyId && npcPos.distanceTo(playerPos) < hitDistance) {
-      applyDamage(gameState.player.ship, RAM_DAMAGE, gameState.simTime, { player: true })
-      npc.hull = 0
-      npc.destroyed = true
-      onPlayerHit?.(npc.position)
+    if (gameState.player?.onFoot?.active) {
+      // A committed ram run bypasses opponentsFor by design (see below), so
+      // it does not get the free pass the rest of the AI gets from the
+      // player going ashore — it would otherwise still cross the finish
+      // line and damage a boat that is supposed to be a protected
+      // placeholder. Abort the run rather than let it complete.
+      npc.aiState = 'patrol'
+    } else {
+      // A suicide run is aimed squarely at the player regardless of whatever
+      // opponentsFor would otherwise pick (e.g. an alien, if this pirate was
+      // truced) — turns and accelerates harder than a normal attack run for a
+      // dramatic charge, and destroys itself on impact alongside the damage.
+      forward = faceToward(npc, npcPos, playerPos, stats.turnRate * 1.6, dt)
+      velocity.addScaledVector(forward, stats.accel * 1.6 * dt)
+      const hitDistance = getShipCollisionRadius(npcShipClass) + getShipCollisionRadius(getShipClass(gameState.player.ship.classId))
+      if (!gameState.player.dockedBodyId && npcPos.distanceTo(playerPos) < hitDistance) {
+        applyDamage(gameState.player.ship, RAM_DAMAGE, gameState.simTime, { player: true })
+        npc.hull = 0
+        npc.destroyed = true
+        onPlayerHit?.(npc.position)
+      }
     }
   } else if (npc.aiState === 'flee') {
     const fleeFromPos = opponent ? new THREE.Vector3().fromArray(opponent.position) : playerPos
