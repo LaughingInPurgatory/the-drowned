@@ -1,4 +1,5 @@
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { createWebGPURendererOnCanvas } from '../render/webgpuBoot.js'
 import { escapeHtml } from './escapeHtml.js'
 import {
   HEAD_VARIATIONS,
@@ -60,12 +61,6 @@ function createAvatarPickerModal({ key, current, onSelect }) {
 
   const canvas = modal.querySelector('canvas')
   const optionGrid = modal.querySelector('.avatar-option-grid')
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setSize(Math.max(1, canvas.clientWidth), 390, false)
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.shadowMap.enabled = true
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap
 
   const scene = new THREE.Scene()
   scene.background = new THREE.Color(0x102027)
@@ -119,17 +114,35 @@ function createAvatarPickerModal({ key, current, onSelect }) {
     if (event.target === modal) closeAvatarPickerModal()
   })
 
+  /** @type {import('three/webgpu').WebGPURenderer | null} */
+  let renderer = null
   let raf = 0
+  let closed = false
+
   const render = () => {
-    if (!modal.isConnected) return
+    if (!modal.isConnected || closed || !renderer) return
     const turn = Math.sin(performance.now() * 0.00045) * 0.12
     for (const avatar of choices) avatar.rotation.y = turn
     renderer.render(scene, camera)
     raf = requestAnimationFrame(render)
   }
-  render()
+
+  void (async () => {
+    try {
+      renderer = await createWebGPURendererOnCanvas(canvas, {
+        alpha: false,
+        antialias: true,
+        shadows: true
+      })
+      renderer.setSize(Math.max(1, canvas.clientWidth), 390, false)
+      if (!closed) render()
+    } catch (err) {
+      console.error('Avatar picker WebGPU init failed', err)
+    }
+  })()
 
   const close = () => {
+    closed = true
     cancelAnimationFrame(raf)
     for (const avatar of choices) {
       avatar.traverse((child) => {
@@ -138,7 +151,7 @@ function createAvatarPickerModal({ key, current, onSelect }) {
         for (const material of materials) material?.dispose?.()
       })
     }
-    renderer.dispose()
+    renderer?.dispose()
     modal.remove()
   }
   activeAvatarPickerModal = { close }

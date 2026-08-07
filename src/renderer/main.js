@@ -1,13 +1,16 @@
 import * as THREE from 'three'
+import { MeshBasicNodeMaterial } from 'three/webgpu'
+import { uniform, vec4, Fn, float, smoothstep, positionLocal } from 'three/tsl'
 import { createScene } from './render/scene.js'
 import {
   buildShipMesh,
   updatePoliceLights,
   updateShipNightLights,
   nightLightFactorFromDay,
-  toggleSearchlight
+  toggleSearchlight,
+  offerShipNavAreaLights
 } from './render/shipMesh.js'
-import { buildHarbourMesh, updateHarbourMesh } from './render/harbourMesh.js'
+import { buildHarbourMesh, updateHarbourMesh, offerHarbourAreaLights } from './render/harbourMesh.js'
 import { buildHarbourNpcGroup, updateHarbourNpcGroup } from './render/harbourNpcs.js'
 import {
   buildIslandMesh,
@@ -30,6 +33,7 @@ import { createSonarPulse } from './render/sonarPulse.js'
 import { createSprayOverlay } from './render/spray.js'
 import { createWeather } from './render/weather.js'
 import { createLensFlare } from './render/lensFlare.js'
+import { daylightAt } from './render/sky.js'
 import { createGullFlock, tryHitGullFlock, updateGullFlock } from './render/seagullMesh.js'
 import {
   updateTurretAim,
@@ -59,7 +63,13 @@ import {
   updateRockExplosion,
   disposeRockExplosion
 } from './render/rockExplosionFx.js'
-import { spawnHitImpact, updateHitImpact, disposeHitImpact, preloadHitImpactFx } from './render/hitImpactFx.js'
+import {
+  spawnHitImpact,
+  spawnWaterColumn,
+  updateHitImpact,
+  disposeHitImpact,
+  preloadHitImpactFx
+} from './render/hitImpactFx.js'
 import { createMissileTrailSystem } from './render/missileTrailFx.js'
 import { createGameState } from './game/state.js'
 import {
@@ -77,6 +87,7 @@ import {
 } from './game/onFoot.js'
 import { CANONICAL_WORLD_SEED, generateWorld } from './procgen/world.js'
 import { DEV_TEST_SETUP, createDevTestGameState } from './game/devTestSetup.js'
+import { installShotHarness } from './devShots.js'
 
 import { advanceGameClock, reanchorGameClock } from './game/gameClock.js'
 import {
@@ -457,7 +468,9 @@ const SONAR_PING_COUNT = 4
 const SONAR_PING_INTERVAL_S = 1.55
 
 const appEl = document.getElementById('app')
-const { scene, camera, renderer, render, updateEnvironment, setPostOverlay, ocean } = createScene(appEl)
+// WebGPU device init is async — top-level await (index.html is type=module).
+const { scene, camera, renderer, render, captureFrame, updateEnvironment, setPostOverlay, ocean, areaLights } =
+  await createScene(appEl)
 const playerFlashlight = buildPlayerFlashlight()
 scene.add(playerFlashlight.root)
 // Sonar rings — the boat sounds from where it is; there is nothing to launch.
@@ -507,13 +520,15 @@ let weatherFrame = {
   mode: 'clear',
   rain: 0,
   storm: 0,
-  cloudCover: 0.52,
+  cloudCover: 0.6,
   sunMul: 1,
   fogMul: 1,
   hemiMul: 1,
   flash: 0,
   thunder: null
 }
+/** Screenshot harness override for the weather clock only (devShots.js). */
+let shotWeatherTime = null
 /** 0 day … 1 night — drives nav / running lights (searchlight is manual, L). */
 let _nightLightFactor = 0
 /** Scratch for feeding the ocean searchlight pool (custom water shader). */
@@ -528,7 +543,7 @@ const CLEAR_WEATHER_FRAME = Object.freeze({
   storm: 0,
   rainGloom: 0,
   stormGloom: 0,
-  cloudCover: 0.52,
+  cloudCover: 0.6,
   sunMul: 1,
   fogMul: 1,
   hemiMul: 1,
@@ -548,16 +563,23 @@ function tickWeather(dt, t) {
   if (!gameState) {
     if (titleStormActive) {
       // Occasional visual-only title storm; keep the menu quiet.
+      // Title-safe: bolts/glow stay out of the logo + menu column.
+      weatherFx.setTitleSafe(true)
       const titleStormTime = 4750 + (t % 70)
       weatherFrame = weatherFx.update(dt, titleStormTime, aspect)
     } else {
+      weatherFx.setTitleSafe(false)
       weatherFx.clear()
       weatherFrame = CLEAR_WEATHER_FRAME
     }
     audio.setRainLevel(0)
     return
   }
-  weatherFrame = weatherFx.update(dt, t, aspect)
+  // In session: full-frame weather (no UI mask).
+  weatherFx.setTitleSafe(false)
+  // Screenshot harness only: drive the weather sim off its own clock so a shot
+  // can pin the hour and the weather independently (see devShots.js).
+  weatherFrame = weatherFx.update(dt, shotWeatherTime ?? t, aspect)
   audio.setRainLevel(weatherFrame.rain)
   if (weatherFrame.thunder) audio.playThunder(weatherFrame.thunder)
 }
@@ -571,12 +593,28 @@ function tickWeather(dt, t) {
  */
 function refreshEnvironment(t) {
   const onFoot = !!gameState?.player?.onFoot?.active
-  const day = updateEnvironment(
-    t,
-    weatherFrame,
-    onFoot ? { shadowExtent: 64, normalBias: 0.012 } : null
-  )
-  const sunStrength = Math.min(1, (day.sunIntensity * (weatherFrame.sunMul ?? 1)) / 2.0) * 0.85
+  const docked = !!gameState?.player?.dockedBodyId
+  // Tighter shadow box near the player = denser texels for contact shadows on
+  // jetties/hull fittings. Open water keeps a wider box for longer hull shade.
+  let shadowOpts = { shadowExtent: 120, normalBias: 0.016 }
+  if (onFoot) shadowOpts = { shadowExtent: 48, normalBias: 0.01, bias: -0.00005 }
+  // Tighter berth box + lower normalBias so pier piles and deck furniture
+  // cast crisp contact on the quay (the floating-table tell was partly soft
+  // shadow maps missing the deck under sheds/tanks).
+  else if (docked) shadowOpts = { shadowExtent: 96, normalBias: 0.011, bias: -0.00006 }
+  const day = updateEnvironment(t, weatherFrame, shadowOpts)
+  const elev = day.elevation ?? day.sunDirection.y
+  // Hotter key near the horizon → stronger flare; noon stays controlled.
+  const lowSunBoost =
+    elev > 0.02 && elev < 0.38 ? 1 + (0.38 - elev) * 1.55 : elev > 0 ? 0.92 : 0
+  // cloudCover is a sky threshold (higher = clearer), so invert for dimming.
+  const coverAmt = 1 - Math.min(1, Math.max(0, weatherFrame.cloudCover ?? 0.6))
+  const coverDim = 1 - Math.min(0.55, coverAmt * 1.1)
+  const sunStrength =
+    Math.min(1.2, (day.sunIntensity * (weatherFrame.sunMul ?? 1)) / 2.15) *
+    0.95 *
+    lowSunBoost *
+    coverDim
   // Storm cover kills the flare; a lightning flash briefly restores a white glint.
   const flareMul =
     (1 - Math.min(0.95, (weatherFrame.storm ?? 0) * 0.9 + (weatherFrame.rain ?? 0) * 0.35)) +
@@ -584,7 +622,8 @@ function refreshEnvironment(t) {
   lensFlare.update(camera, day.sunDirection, {
     aspect: renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight),
     color: day.sunColor,
-    strength: sunStrength * Math.max(0, flareMul)
+    strength: Math.max(0, sunStrength * flareMul),
+    elevation: elev
   })
   return day
 }
@@ -2330,17 +2369,20 @@ function buildMenuLighthouse(portMesh, body) {
     new THREE.MeshBasicMaterial({ color: 0xffe3a4 })
   )
   root.add(lamp)
-  const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(18, 0.8, 260, 20, 1, true),
-    new THREE.ShaderMaterial({
-      transparent: true,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      uniforms: { uColor: { value: new THREE.Color(0xffedbd) } },
-      vertexShader: `varying float vBeamEnd; void main() { vBeamEnd = uv.y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: `uniform vec3 uColor; varying float vBeamEnd; void main() { float fade = 1.0 - smoothstep(0.55, 1.0, vBeamEnd); gl_FragColor = vec4(uColor, fade * 0.13); }`
-    })
-  )
+  const beamColor = uniform(new THREE.Color(0xffedbd))
+  const beamMat = new MeshBasicNodeMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false
+  })
+  beamMat.colorNode = Fn(() => {
+    // Soft fade toward the far tip (local Y along the 260-unit cylinder).
+    const along = positionLocal.y.div(260).add(0.5).clamp(0, 1)
+    const fade = float(1).sub(smoothstep(float(0.55), float(1), along))
+    return vec4(beamColor, fade.mul(0.13))
+  })()
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(18, 0.8, 260, 20, 1, true), beamMat)
   beam.rotation.x = Math.PI / 2
   beam.position.z = 130
   root.add(beam)
@@ -2425,10 +2467,15 @@ function stopMenuBackground() {
 function updateMenuBackground(dt) {
   if (!menuActive) return
   menuAnimT += dt
+  // Title clock drives night factor so quay lamps glow at night on the menu too.
+  const menuNight = nightLightFactorFromDay(daylightAt(menuAnimT))
+  areaLights.begin()
   for (const mesh of menuBodyMeshes) {
-    updateHarbourMesh(mesh, menuAnimT)
+    updateHarbourMesh(mesh, menuAnimT, menuNight)
+    offerHarbourAreaLights(mesh, areaLights)
     updateHarbourNpcGroup(mesh.userData?.harbourPedestrians, dt)
   }
+  areaLights.flush(camera)
   if (menuLighthouse) {
     const lampAngle = menuAnimT * 0.72
     menuLighthouse.rotation.y = lampAngle
@@ -2632,7 +2679,11 @@ function onProjectileHit({
     return
   }
   if (worldImpact) {
-    const hitFx = spawnHitImpact(position, weaponType === 'missile' ? 'missile' : 'laser', null)
+    // A round going into the sea throws a column of water, not a shower of
+    // sparks. Same `{ group, ttl }` shape, so it rides the existing list.
+    const hitFx = waterImpact
+      ? spawnWaterColumn(position, gameState.simTime, weaponType === 'missile' ? 1.6 : 1)
+      : spawnHitImpact(position, weaponType === 'missile' ? 'missile' : 'laser', null)
     scene.add(hitFx.group)
     hitImpacts.push(hitFx)
     if (!silentImpact) {
@@ -3160,37 +3211,39 @@ function maybeSpawnMiningPirateAmbush() {
   }
 }
 
+function startNewGameSession({ characterName, shipInstanceName, portraitDataUrl } = {}) {
+  // Career seed only diversifies missions; galaxy + home system are fixed.
+  const seed = Math.floor(Math.random() * 1e9)
+  const newState = DEV_TEST_SETUP
+    ? createDevTestGameState({ characterName, shipInstanceName, seed })
+    : createGameState({
+        characterName,
+        shipInstanceName,
+        portraitDataUrl: portraitDataUrl || null,
+        shipClassId: STARTER_SHIP_CLASS_ID,
+        seed,
+        galaxySeed: CANONICAL_WORLD_SEED
+      })
+  if (DEV_TEST_SETUP && portraitDataUrl) {
+    newState.player.portraitDataUrl = portraitDataUrl
+  }
+  // Begin the campaign tied up at Port Haven rather than adrift. Setting
+  // dockedBodyId is enough: startSession's restoreSessionLocation() owns the
+  // whole berthed entry path (berth pose, berthed HUD, harbour services),
+  // which is the same route a save-load takes. Starting law is 10, so the
+  // Sec 6 berth check passes.
+  const world = getWorld(newState.galaxy)
+  const homePort =
+    world?.bodies?.find((b) => b.id === newState.player.homePortId) ??
+    world?.bodies?.find((b) => b.kind === 'port')
+  if (homePort) newState.player.dockedBodyId = homePort.id
+  // Berthed, so do not grab the helm on entry — Undock hands it back.
+  startSession(newState, { enterFlightMode: !homePort })
+}
+
 const deathScreen = createDeathScreen(appEl, () => returnToMenu())
 const menu = createMenu(appEl, {
-  onNewGame: ({ characterName, shipInstanceName, portraitDataUrl }) => {
-    // Career seed only diversifies missions; galaxy + home system are fixed.
-    const seed = Math.floor(Math.random() * 1e9)
-    const gameState = DEV_TEST_SETUP
-      ? createDevTestGameState({ characterName, shipInstanceName, seed })
-      : createGameState({
-          characterName,
-          shipInstanceName,
-          portraitDataUrl: portraitDataUrl || null,
-          shipClassId: STARTER_SHIP_CLASS_ID,
-          seed,
-          galaxySeed: CANONICAL_WORLD_SEED
-        })
-    if (DEV_TEST_SETUP && portraitDataUrl) {
-      gameState.player.portraitDataUrl = portraitDataUrl
-    }
-    // Begin the campaign tied up at Port Haven rather than adrift. Setting
-    // dockedBodyId is enough: startSession's restoreSessionLocation() owns the
-    // whole berthed entry path (berth pose, berthed HUD, harbour services),
-    // which is the same route a save-load takes. Starting law is 10, so the
-    // Sec 6 berth check passes.
-    const world = getWorld(gameState.galaxy)
-    const homePort =
-      world?.bodies?.find((b) => b.id === gameState.player.homePortId) ??
-      world?.bodies?.find((b) => b.kind === 'port')
-    if (homePort) gameState.player.dockedBodyId = homePort.id
-    // Berthed, so do not grab the helm on entry — Undock hands it back.
-    startSession(gameState, { enterFlightMode: !homePort })
-  },
+  onNewGame: startNewGameSession,
   onLoadGame: async () => {
     try {
       const loaded = await persistLoadGame()
@@ -7165,7 +7218,9 @@ function animate() {
         wreckMeshes.delete(id)
       }
     }
-    for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime + deathOrbit.t)
+    for (const mesh of bodyMeshes.values()) {
+      updateHarbourMesh(mesh, gameState.simTime + deathOrbit.t, _nightLightFactor)
+    }
     ocean.setSearchlight(null)
     try {
       audio.setDroneBuzz(0)
@@ -7289,7 +7344,9 @@ function animate() {
     updateBelowRadarPrompts()
     if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
     if (targetDirEl) targetDirEl.style.display = 'none'
-    for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
+    for (const mesh of bodyMeshes.values()) {
+      updateHarbourMesh(mesh, gameState.simTime, _nightLightFactor)
+    }
     updateBodyVisibility()
     hud?.element && (hud.element.style.display = '')
     systemOverview?.hide?.()
@@ -7299,7 +7356,10 @@ function animate() {
       camera.updateProjectionMatrix()
     }
     updateCrosshair()
-    refreshEnvironment(gameState.simTime)
+    {
+      const day = refreshEnvironment(gameState.simTime)
+      _nightLightFactor = nightLightFactorFromDay(day)
+    }
     ocean.setSearchlight(null)
     render()
     if (hudReticleRing.visible) {
@@ -7315,6 +7375,7 @@ function animate() {
   if (docked) {
     spray.clear()
     audio.setStrafeActive(false)
+    audio.setSeaMotion(0)
     if (targetDirEl) targetDirEl.style.display = 'none'
     // Hide foam while moored — do not dispose/reset every frame (that left
     // Continue-from-docked with a dead wake object after undock).
@@ -7329,13 +7390,19 @@ function animate() {
     }
     applySeaAttitude(gameState.player.ship, headingOf(gameState.player.ship), gameState.simTime)
     syncMeshToEntity(playerMesh, gameState.player.ship)
-    for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
     updateBodyVisibility()
     applyDockOrbitCamera()
     {
       const day = refreshEnvironment(gameState.simTime)
       _nightLightFactor = nightLightFactorFromDay(day)
       if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
+      areaLights.begin()
+      for (const mesh of bodyMeshes.values()) {
+        updateHarbourMesh(mesh, gameState.simTime, _nightLightFactor)
+        offerHarbourAreaLights(mesh, areaLights)
+      }
+      if (playerMesh) offerShipNavAreaLights(playerMesh, areaLights)
+      areaLights.flush(camera)
       syncOceanSearchlight()
     }
     if (chartOpen) seaChart?.refresh?.()
@@ -7399,7 +7466,10 @@ function animate() {
       1e-3,
       (playerShipClass.stats?.speed ?? 1) * (skillAp.speedMult ?? 1)
     )
-    audio.setEngineRevs(Math.min(1, Math.max(0.2, apSpeed / apTop)))
+    const apFrac = Math.min(1, Math.max(0.2, apSpeed / apTop))
+    audio.setEngineRevs(apFrac)
+    // Bow-wake / spray layer tracks hull speed, not just throttle.
+    audio.setSeaMotion(Math.min(1, apSpeed / apTop))
   } else {
     {
       const skillB = playerSkillBonuses(gameState)
@@ -7421,6 +7491,19 @@ function animate() {
     thrustState = !flightMode ? null : keys.has('KeyW') ? 'accel' : keys.has('KeyS') ? 'brake' : 'idle'
     audio.setThrustState(thrustState)
     if (thrustState) audio.setEngineRevs(Math.abs(gameState.player.ship.throttle ?? 0))
+    // Sea spray from actual hull speed so coasting still washes the bow.
+    {
+      const hullSpd = Math.hypot(
+        gameState.player.ship.velocity[0] ?? 0,
+        gameState.player.ship.velocity[2] ?? 0
+      )
+      const skillSea = playerSkillBonuses(gameState)
+      const top = Math.max(
+        1e-3,
+        (playerShipClass.stats?.speed ?? 1) * (skillSea.speedMult ?? 1)
+      )
+      audio.setSeaMotion(Math.min(1, hullSpd / top))
+    }
   }
   // The sea has the final say on where the hull sits — after handling, before
   // anything reads the pose. Every other mover goes through the same clamp
@@ -7471,7 +7554,11 @@ function animate() {
   // it is actually being thrown up — off the bow, past the chase camera —
   // rather than from the middle of the frame.
   const speedFrac = shipSpeed / Math.max(1e-3, playerShipClass.stats.speed)
-  if (shipSpeed < 0.35 && !cruising) {
+  // Rain hits the glass whether or not she is making way, so the overlay still
+  // has to run when stopped — it simply has no bow spray to throw. Clearing on
+  // low speed regardless is what kept lens rain invisible in every storm.
+  const lensRain = weatherFrame.rain || 0
+  if (shipSpeed < 0.35 && !cruising && lensRain <= 0.01) {
     spray.clear()
   } else {
     _sprayOrigin
@@ -7484,7 +7571,8 @@ function animate() {
       speedFrac,
       cruising ? 1 : 0,
       [_sprayOrigin.x, _sprayOrigin.y],
-      renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight)
+      renderer.domElement.clientWidth / Math.max(1, renderer.domElement.clientHeight),
+      { rain: lensRain }
     )
   }
   // FOV is fixed (BASE_FOV) in both helm and Cruise Control — no speed zoom.
@@ -7791,8 +7879,6 @@ function animate() {
   }
   updateHitImpactEffects(dt)
 
-  // Harbour beacons pulse. Land does not animate.
-  for (const mesh of bodyMeshes.values()) updateHarbourMesh(mesh, gameState.simTime)
   updateBodyVisibility()
   // Depleted rocks "explode" (see onProjectileHit) and stay hidden until
   // their own respawn delay passes — isRockAlive is the single source of
@@ -8011,6 +8097,17 @@ function animate() {
   const day = refreshEnvironment(gameState.simTime)
   _nightLightFactor = nightLightFactorFromDay(day)
   if (playerMesh) updateShipNightLights(playerMesh, _nightLightFactor)
+  // Harbour beacons pulse + feed the fixed area-light pool (stable light count).
+  areaLights.begin()
+  for (const mesh of bodyMeshes.values()) {
+    updateHarbourMesh(mesh, gameState.simTime, _nightLightFactor)
+    offerHarbourAreaLights(mesh, areaLights)
+  }
+  if (playerMesh) offerShipNavAreaLights(playerMesh, areaLights)
+  for (const mesh of npcMeshes.values()) {
+    if (_nightLightFactor > 0.05) offerShipNavAreaLights(mesh, areaLights)
+  }
+  areaLights.flush(camera)
   // After mesh/turret sync so the water pool follows the beam.
   syncOceanSearchlight()
   render()
@@ -8027,14 +8124,113 @@ function animate() {
 }
 animate()
 
-// Intro/menu — apply saved sound + UI colour defaults, preload Quaternius
-// nature (trees/grass/foliage), then title screen. Display mode is already
-// applied by the main process on window create.
-void Promise.all([
-  loadSoundPreference(),
-  loadUiThemePreference(),
-  preloadNatureModels()
-]).finally(() => {
-  startMenuBackground()
+// Title screen: camera + island/harbour visuals go up immediately. This used
+// to wait on `Promise.all([loadSoundPreference(), loadUiThemePreference(),
+// preloadNatureModels()])` before calling `startMenuBackground()` — every one
+// of those is a real Electron IPC round-trip (or, for nature, real asset
+// decode) in the packaged app, taking real wall-clock time. `animate()`'s
+// render loop was already running and presenting frames the whole time it
+// waited, with the camera sitting at its unset default — a blank, fog-lit
+// frame with nothing in it. It only ever looked fine in the dev-server/shot
+// harness because that window has no preload script, so `window.electronAPI`
+// is undefined there and every one of those calls short-circuits in
+// microtask time, closing the gate before a single frame could show it.
+// Sound and UI-theme preferences apply themselves whenever they resolve
+// (loadSoundPreference/loadUiThemePreference both do this internally); menu
+// bodies build without vegetation if nature assets are not ready yet
+// (`isNatureReady()` in islandMesh.js already tolerates that) and are rebuilt
+// with it once preloadNatureModels() resolves, below.
+startMenuBackground()
+
+// Sound/theme prefs and nature assets load in the background and are no
+// longer on the critical path to a visible menu. Nature specifically: the
+// first `buildMenuSystemVisuals` above ran before models could possibly be
+// ready and skipped vegetation (`isNatureReady()` gate in islandMesh.js) —
+// once it resolves, rebuild so trees/grass appear rather than never.
+void Promise.all([loadSoundPreference(), loadUiThemePreference(), preloadNatureModels()]).then(
+  () => {
+    if (menuActive && !gameState) {
+      clearMenuBodies()
+      buildMenuSystemVisuals(getMenuWorld())
+    }
+  }
+)
+;(() => {
+  // `?shot=` drives the visual-QA loop and owns the boot path itself: menu,
+  // clock, weather and where the boat sits. No-op without the query param.
+  if (
+    installShotHarness({
+      startNewGame: () => startNewGameSession({}),
+      getState: () => gameState,
+      setSimTime: (t) => {
+        if (!gameState) return
+        gameState.simTime = t
+        reanchorGameClock(gameState)
+      },
+      setMenuHour: (t) => {
+        menuAnimT = t
+      },
+      setWeatherTime: (t) => {
+        shotWeatherTime = t
+      },
+      teleport: (x, z) => {
+        const ship = gameState.player.ship
+        ship.position[0] = x
+        ship.position[2] = z
+        snapToSea(ship, gameState.simTime)
+      },
+      setHeading: (rad) => {
+        const ship = gameState.player.ship
+        ship.heading = rad
+        applySeaAttitude(ship, rad, gameState.simTime)
+      },
+      /** Seed cruise-ish forward motion so wake/spray can appear in still shots. */
+      nudgeUnderway: () => {
+        const ship = gameState?.player?.ship
+        if (!ship) return
+        const h = Number.isFinite(ship.heading) ? ship.heading : 0
+        const spd = 11
+        ship.velocity = [Math.sin(h) * spd, 0, Math.cos(h) * spd]
+        ship.throttle = 0.85
+        // Cruise flag drives wake floor in updatePlayerWake.
+        try {
+          cruising = true
+        } catch {
+          /* ignore */
+        }
+      },
+      undock: () => {
+        // Same teardown the UNDOCK button does, not just the sim call.
+        dockingUI?.hide?.()
+        beginUndocking()
+      },
+      goAshore: () => beginDisembark(),
+      hideMenu: () => menu.hide(),
+      captureFrame,
+      /** Strip every DOM overlay so a shot grades the render, not the HUD. */
+      hideOverlays: () => {
+        const style = document.createElement('style')
+        style.textContent = 'body > *:not(canvas), #app > *:not(canvas) { display: none !important }'
+        document.head.appendChild(style)
+      },
+      nearest: (kind) => {
+        const world = getWorld(gameState.galaxy)
+        const p = gameState.player.ship.position
+        let best = null
+        let bestD = Infinity
+        for (const b of world?.bodies ?? []) {
+          if (kind && b.kind !== kind) continue
+          const d = Math.hypot(b.position[0] - p[0], b.position[2] - p[2])
+          if (d < bestD) {
+            bestD = d
+            best = b
+          }
+        }
+        return best
+      }
+    })
+  ) {
+    return
+  }
   hasSave().then((exists) => menu.show(exists))
-})
+})()

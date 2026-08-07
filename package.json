@@ -1,7 +1,7 @@
 {
   "name": "the-drowned",
   "productName": "The Drowned",
-  "version": "1.6.0",
+  "version": "2.0.0",
   "description": "Procedurally generated open-world ocean trading/combat game set on a flooded Earth",
   "main": "./out/main/index.js",
   "author": "Laughing In Purgatory",
@@ -17,18 +17,18 @@
     "make:win": "electron-vite build && electron-builder --win nsis --x64 --arm64"
   },
   "dependencies": {
-    "three": "^0.169.0"
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "electron": "^32.0.0",
-    "electron-vite": "^2.3.0",
     "electron-builder": "^25.0.0",
+    "electron-vite": "^2.3.0",
     "vite": "^5.4.0"
   },
   "build": {
     "appId": "com.drownedworld.game",
     "productName": "The Drowned",
-    "copyright": "\u00a9 Laughing In Purgatory 2026",
+    "copyright": "© Laughing In Purgatory 2026",
     "icon": "build/icon.png",
     "directories": {
       "output": "release",

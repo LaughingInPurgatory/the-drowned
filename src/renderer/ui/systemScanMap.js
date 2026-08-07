@@ -2,7 +2,8 @@
  * 3D region sonar scan map — bodies + Anomalous Signals + 4 repositionable sonar probes.
  * Opened from the radar "Region Sonar Scan" button.
  */
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
+import { createWebGPURendererOnCanvas } from '../render/webgpuBoot.js'
 import { getSystem } from '../procgen/world.js'
 import {
   SYSTEM_SCAN_PROBE_COUNT,
@@ -215,13 +216,27 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
         align: 'center'
       })
   })
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  /** @type {import('three/webgpu').WebGPURenderer | null} */
+  let renderer = null
+  let gpuReady = false
   const scene = new THREE.Scene()
   // Sea-scale map: world is 80 km radius — not a star system.
   const camera = new THREE.PerspectiveCamera(50, 1, 20, 220000)
   camera.position.set(0, 12000, 18000)
   camera.lookAt(0, 0, 0)
+
+  void (async () => {
+    try {
+      renderer = await createWebGPURendererOnCanvas(canvas, {
+        alpha: true,
+        antialias: true
+      })
+      gpuReady = true
+      // size is applied on open via existing resize path
+    } catch (err) {
+      console.error('System scan map WebGPU init failed', err)
+    }
+  })()
 
   const ambient = new THREE.AmbientLight(0xcce8ff, 1.55)
   scene.add(ambient)
@@ -949,14 +964,16 @@ export function createSystemScanMap(container, gameState, hooks = {}) {
     rebuildAnomalyMarkers()
     renderSignals()
     syncCamera()
-    const w = canvas.clientWidth
-    const h = canvas.clientHeight
-    if (w && h) {
-      renderer.setSize(w, h, false)
-      camera.aspect = w / h
-      camera.updateProjectionMatrix()
+    if (renderer && gpuReady) {
+      const w = canvas.clientWidth
+      const h = canvas.clientHeight
+      if (w && h) {
+        renderer.setSize(w, h, false)
+        camera.aspect = w / h
+        camera.updateProjectionMatrix()
+      }
+      renderer.render(scene, camera)
     }
-    renderer.render(scene, camera)
     raf = requestAnimationFrame(frame)
   }
 

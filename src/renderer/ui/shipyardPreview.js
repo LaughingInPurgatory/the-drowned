@@ -2,9 +2,10 @@
  * Interactive 3D ship preview for the shipyard (sits under Ship stats).
  * Click-drag to orbit; scroll to zoom.
  */
-import * as THREE from 'three'
+import * as THREE from 'three/webgpu'
 import { buildShipMesh } from '../render/shipMesh.js'
 import { createSkyEnvironment } from '../render/scene.js'
+import { createWebGPURendererOnCanvas } from '../render/webgpuBoot.js'
 import { getShipClass } from '../data/shipClasses.js'
 
 const STYLE = `
@@ -101,21 +102,12 @@ export function createShipyardPreview(container) {
   const wrap = root.querySelector('.sp-canvas-wrap')
   const canvas = root.querySelector('canvas')
 
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    antialias: true,
-    alpha: true,
-    powerPreference: 'low-power'
-  })
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
-  renderer.setClearColor(0x000000, 0)
-  renderer.outputColorSpace = THREE.SRGBColorSpace
-  renderer.toneMapping = THREE.ACESFilmicToneMapping
-  renderer.toneMappingExposure = 1.2
+  /** @type {import('three/webgpu').WebGPURenderer | null} */
+  let renderer = null
+  let gpuReady = false
+  let pendingClassId = null
 
   const scene = new THREE.Scene()
-  // Same IBL as the world, or hulls read flat here and shiny in flight.
-  scene.environment = createSkyEnvironment(renderer)
   const camera = new THREE.PerspectiveCamera(40, 1, 0.2, 500)
   camera.position.set(0, 0, 40)
 
@@ -148,12 +140,35 @@ export function createShipyardPreview(container) {
   let lastY = 0
 
   function resize() {
+    if (!renderer) return
     const w = Math.max(1, wrap.clientWidth)
     const h = Math.max(1, wrap.clientHeight)
     camera.aspect = w / h
     camera.updateProjectionMatrix()
     renderer.setSize(w, h, false)
   }
+
+  // WebGPU-only secondary context (no WebGL fallback).
+  void (async () => {
+    try {
+      renderer = await createWebGPURendererOnCanvas(canvas, {
+        alpha: true,
+        antialias: true,
+        toneMapping: THREE.ACESFilmicToneMapping,
+        exposure: 1.2
+      })
+      renderer.setClearColor(0x000000, 0)
+      // Same IBL as the world, or hulls read flat here and shiny in flight.
+      scene.environment = createSkyEnvironment(renderer)
+      gpuReady = true
+      resize()
+      if (pendingClassId) setClass(pendingClassId)
+      if (visible) startLoop()
+    } catch (err) {
+      console.error('Shipyard preview WebGPU init failed', err)
+      labelEl.textContent = 'Preview unavailable (WebGPU)'
+    }
+  })()
 
   function applyOrbit() {
     const cp = Math.cos(pitch)
@@ -187,6 +202,11 @@ export function createShipyardPreview(container) {
   }
 
   function setClass(classId) {
+    if (!gpuReady) {
+      pendingClassId = classId
+      return
+    }
+    pendingClassId = null
     if (!classId) {
       clearMesh()
       labelEl.textContent = 'Hull preview'
@@ -220,7 +240,7 @@ export function createShipyardPreview(container) {
 
   function frame() {
     raf = 0
-    if (!visible) return
+    if (!visible || !renderer) return
     applyOrbit()
     // Slow idle spin when not dragging.
     if (!dragging && mesh) {
@@ -318,7 +338,7 @@ export function createShipyardPreview(container) {
       wrap.classList.remove('dragging')
       // Keep mesh cached for re-open same class; dispose when leaving dock entirely.
     },
-    /** Tear down WebGL resources (call on undock / dock UI hide). */
+    /** Tear down WebGPU resources (call on undock / dock UI hide). */
     dispose() {
       this.hide()
       clearMesh()
@@ -328,7 +348,7 @@ export function createShipyardPreview(container) {
       wrap.removeEventListener('pointerup', onPointerUp)
       wrap.removeEventListener('pointercancel', onPointerUp)
       wrap.removeEventListener('pointerleave', onPointerUp)
-      renderer.dispose()
+      renderer?.dispose()
       root.remove()
     },
     element: root

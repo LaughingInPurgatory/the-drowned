@@ -1271,8 +1271,10 @@ const HULL_BEAM_SCALE = 2.48
  * Least fraction of a section's half-depth that must sit above the waterline
  * amidships. Hand-crafted classes were centred on y = 0 (half submerged); this
  * floors freeboard so every hull floats rather than sits in the surface.
+ * 0.42 left some hulls looking slightly detached from the sea at berth cam —
+ * drop just enough that the waterline bites without drowning the freeboard.
  */
-const MIN_FREEBOARD_FRACTION = 0.42
+const MIN_FREEBOARD_FRACTION = 0.32
 /**
  * Deck rise at the stem above the midships deck, as a fraction of mid half-depth.
  *
@@ -1289,8 +1291,8 @@ const SHEER_AFT = 0.32
  * midships draft. 0 = flat keel; 1 = forefoot at the waterline. Enough rocker
  * to read as a boat, not so much the ends fly clear of the sea.
  */
-const ROCKER_BOW = 0.5
-const ROCKER_AFT = 0.28
+const ROCKER_BOW = 0.36
+const ROCKER_AFT = 0.22
 
 for (const c of SHIP_CLASSES) {
   const hull = c?.hull

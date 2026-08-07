@@ -1,6 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { waveHeight, waveNormal, snapToSea, SEA_MAX_AMPLITUDE, seaShaderChunk } from './sea.js'
+import {
+  waveHeight,
+  waveNormal,
+  snapToSea,
+  SEA_MAX_AMPLITUDE,
+  SEA_COMPILED,
+  SEA_DETAIL_SLOPE,
+  seaParamAt
+} from './sea.js'
 
 test('waveHeight is deterministic for the same inputs', () => {
   assert.equal(waveHeight(120, -40, 3.5), waveHeight(120, -40, 3.5))
@@ -55,34 +63,51 @@ test('snapToSea tolerates an entity with no velocity array', () => {
   assert.equal(buoy.position[1], waveHeight(10, 10, 1))
 })
 
-test('the emitted GLSL computes the same surface as waveHeight', () => {
-  // The shader source is the visible water and waveHeight is where the boats
-  // sit. Re-evaluating the emitted literals in JS is the only check available
-  // without a GL context, and it catches the failure that matters: a precision
-  // or formatting slip that would leave hulls hovering or half-sunk.
-  const src = seaShaderChunk()
-  const num = String.raw`(-?[\d.]+(?:e[-+]?\d+)?)`
-  const re = new RegExp(
-    String.raw`h \+= ${num} \* sin\(\(${num} \* p\.x \+ ${num} \* p\.y\) \* ${num} - t \* ${num}\);`,
-    'g'
-  )
-  const terms = [...src.matchAll(re)].map((m) => m.slice(1).map(Number))
-  assert.ok(terms.length >= 3, `expected wave terms in the emitted GLSL, found ${terms.length}`)
-
-  const fromShader = (x, z, t) =>
-    terms.reduce((h, [amp, dx, dz, k, rate]) => h + amp * Math.sin((dx * x + dz * z) * k - t * rate), 0)
-
+test('the table the ocean shader reads reproduces waveHeight exactly', () => {
+  // SEA_COMPILED is the shared band: render/oceanNodeMaterial.js sums these
+  // same numbers on the GPU, and waveHeight sums them here for buoyancy. This
+  // re-derives the hull sample straight off the exported table, so any edit
+  // that leaves the two summing different things fails before a boat visibly
+  // hovers over the water.
+  const fromTable = (x, z, t) => {
+    const q = seaParamAt(x, z, t)
+    return SEA_COMPILED.reduce(
+      (h, w) => h + w.bAmp * Math.sin((w.dx * q.x + w.dz * q.z) * w.k - t * w.omega),
+      0
+    )
+  }
   for (const [x, z, t] of [[0, 0, 0], [412, -88, 6.25], [-3300, 1750, 40]]) {
     assert.ok(
-      Math.abs(fromShader(x, z, t) - waveHeight(x, z, t)) < 1e-6,
-      `shader and buoyancy disagree at ${x},${z},${t}`
+      Math.abs(fromTable(x, z, t) - waveHeight(x, z, t)) < 1e-12,
+      `shader table and buoyancy disagree at ${x},${z},${t}`
     )
   }
 })
 
-test('the emitted GLSL declares the functions the ocean shader calls', () => {
-  const src = seaShaderChunk()
-  assert.match(src, /float seaHeight\(vec2 p, float t\)/)
-  assert.match(src, /vec3 seaNormal\(vec2 p, float t\)/)
-  assert.ok(!/undefined|NaN/.test(src), 'emitted GLSL must not contain undefined/NaN literals')
+test('the shared band carries every product the shader needs, finite', () => {
+  assert.ok(SEA_COMPILED.length >= 8, 'spectrum lost components')
+  for (const w of SEA_COMPILED) {
+    for (const key of ['len', 'dx', 'dz', 'k', 'omega', 'amp', 'qa', 'ak', 'qak', 'bAmp']) {
+      assert.ok(Number.isFinite(w[key]), `${key} is not finite`)
+    }
+    // Unit bearing — the shader relies on this to build tangents.
+    assert.ok(Math.abs(Math.hypot(w.dx, w.dz) - 1) < 1e-12)
+    // Deep-water dispersion, not a hardcoded speed.
+    assert.ok(Math.abs(w.omega - Math.sqrt(9.81 * w.k)) < 1e-9)
+  }
+})
+
+test('the shader-only detail band contributes slope but never height', () => {
+  // The whole reason this band is allowed to exist on the GPU alone is that it
+  // displaces nothing, so it cannot move a hull. Guard the shape of the data:
+  // an `amp` sneaking in here is a boat hovering by that much.
+  for (const w of SEA_DETAIL_SLOPE) {
+    assert.equal(w.amp, undefined, 'detail components must not carry an amplitude')
+    assert.ok(w.slope > 0 && w.slope < 0.2, 'detail slope out of sane range')
+    assert.ok(Math.abs(Math.hypot(w.dx, w.dz) - 1) < 1e-12)
+    assert.ok(Math.abs(w.omega - Math.sqrt(9.81 * w.k)) < 1e-9)
+  }
+  // Total added slope stays well under the point where normals invert.
+  const total = SEA_DETAIL_SLOPE.reduce((s, w) => s + w.slope, 0)
+  assert.ok(total < 0.5, `detail band slope ${total} is too steep to stay stable`)
 })

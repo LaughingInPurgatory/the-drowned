@@ -33,6 +33,16 @@ if (process.env.DEV_REMOTE_DEBUG) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env.DEV_REMOTE_DEBUG)
 }
 
+// WebGPU-only renderer (see src/renderer/render/webgpuBoot.js). Must run before
+// app ready. Without this some Electron/Chromium builds leave navigator.gpu off.
+// macOS uses Metal; do NOT enable Vulkan there (it can break the WebGPU backend).
+app.commandLine.appendSwitch('enable-unsafe-webgpu')
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('enable-features', 'Vulkan,WebGPUService')
+} else {
+  app.commandLine.appendSwitch('enable-features', 'WebGPUService')
+}
+
 function appIconPath() {
   // Packaged: electron-builder embeds the platform icon in the binary.
   // Dev / Linux window chrome + About dialog still need an explicit PNG path.

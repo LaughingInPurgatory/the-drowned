@@ -9,6 +9,19 @@ import {
   cloneStationMaps,
   getAlgaeAlbedoMap
 } from './textures.js'
+import {
+  getCorrugatedMaps,
+  getPlankMaps,
+  getGrowthMaps,
+  getRustStreakMap,
+  getSoftDiscMap,
+  getNetMap,
+  getTarpNormalMap,
+  catenaryMesh,
+  ropeCoilMesh,
+  contactShadow,
+  mergeStatic
+} from './harbourDetail.js'
 import { remoteness } from '../procgen/world.js'
 import { SEA_MAX_AMPLITUDE } from '../world/sea.js'
 
@@ -25,15 +38,47 @@ import { SEA_MAX_AMPLITUDE } from '../world/sea.js'
  * so these can be dropped straight at sea level (unlike the old orbital modules,
  * which needed lifting; see main.js `floatOnWaterline`).
  *
- * Surfaces use soft-blended triplanar PBR maps so box edges do not show hard
- * UV seams, and major slabs are slightly rounded so silhouettes read as worn
- * concrete/steel rather than plastic cubes.
+ * Surfaces mix soft-blended triplanar PBR station maps with procedural
+ * waterfront detail (planks, corrugated cladding, barnacles, rust streaks)
+ * from harbourDetail.js. Major slabs are slightly rounded so silhouettes read
+ * as worn concrete/steel rather than plastic cubes.
  */
 
 /** Deck height above the waterline. Clear of the swell, boardable from a boat. */
 const DECK_HEIGHT = SEA_MAX_AMPLITUDE + 3.5
 /** How far the piles run below the surface. */
 const PILE_DEPTH = SEA_MAX_AMPLITUDE + 9
+/** Barnacle / weed crust thickness straddling the waterline. */
+const TIDE_BAND_H = Math.max(1.35, SEA_MAX_AMPLITUDE * 0.85)
+
+/**
+ * Register a lamp as an area-light *emitter* (no THREE.PointLight child).
+ * The fixed pool in areaLightPool.js binds real lights each frame so adding a
+ * harbour never changes NUM_POINT_LIGHTS (that recompile freezes the title).
+ *
+ * @param {THREE.Object3D} group harbour root
+ * @param {'quay'|'beacon'|'tower'|'mole'} tier
+ */
+function registerAreaEmitter(group, x, y, z, tier = 'quay') {
+  const specs = {
+    quay: { color: 0xffc078, base: 9000, distance: 42, priority: 3 },
+    beacon: { color: 0xffb257, base: 6500, distance: 38, priority: 4 },
+    tower: { color: 0xffd9a0, base: 14000, distance: 70, priority: 6 },
+    mole: { color: 0xffc078, base: 7500, distance: 40, priority: 3 }
+  }
+  const s = specs[tier] ?? specs.quay
+  if (!group.userData.areaEmitters) group.userData.areaEmitters = []
+  group.userData.areaEmitters.push({
+    x,
+    y,
+    z,
+    color: s.color,
+    base: s.base,
+    distance: s.distance,
+    priority: s.priority,
+    tier
+  })
+}
 
 function hashString(str) {
   let h = 0
@@ -99,42 +144,106 @@ function texturedMat(role, props, tri = {}) {
   return mat
 }
 
+/**
+ * Material from procedural harbourDetail maps (planks / cladding / growth).
+ * Falls back to a solid material when canvas is unavailable (Node tests).
+ * Optional `uvRepeat` clones maps so shared cache textures keep their defaults.
+ */
+function detailMat(maps, props, tri = null, uvRepeat = null) {
+  const clean = {}
+  if (maps) {
+    for (const [k, v] of Object.entries(maps)) {
+      if (v == null) continue
+      if (uvRepeat && v.isTexture) {
+        const c = v.clone()
+        c.wrapS = v.wrapS
+        c.wrapT = v.wrapT
+        c.repeat.set(uvRepeat[0], uvRepeat[1])
+        c.needsUpdate = true
+        clean[k] = c
+      } else {
+        clean[k] = v
+      }
+    }
+  }
+  const mat = new THREE.MeshStandardMaterial({
+    ...clean,
+    ...props,
+    normalScale: props.normalScale ?? new THREE.Vector2(1.25, 1.25)
+  })
+  if (tri && (clean.map || clean.roughnessMap || clean.normalMap)) {
+    applySoftTriplanar(mat, tri)
+  }
+  return mat
+}
+
 function materials(rng, weathered) {
   // Further out, everything is more rust than paint.
   const rust = new THREE.Color(0x6d4a33).lerp(new THREE.Color(0x8a5a38), rng())
   const plate = new THREE.Color(0x8a8680).lerp(rust, weathered * 0.5)
-  // Warm weathered timber — rock maps read as rough plank grain under this tint.
-  const timberTone = new THREE.Color(0x7a654c).lerp(new THREE.Color(0x4e3f30), weathered * 0.45)
-  const wetPile = new THREE.Color(0x3a342c).lerp(rust, weathered * 0.35)
+  // Warm weathered timber — plank maps carry groove/nail grain; tint ages them.
+  // Slightly cooler/darker so damp edge patches in the map read as wet wood.
+  const timberTone = new THREE.Color(0x8f7760).lerp(new THREE.Color(0x524232), weathered * 0.55)
+  // Near-black wet timber — piles must go darker than dry upper legs or the
+  // jetty reads as toothpicks stuck in a blue sheet.
+  const wetPile = new THREE.Color(0x14120f).lerp(rust, weathered * 0.18)
+  const soakPile = new THREE.Color(0x0a0908).lerp(new THREE.Color(0x1e1812), weathered * 0.28)
+  const plank = getPlankMaps()
+  const corrugated = getCorrugatedMaps()
+  const growth = getGrowthMaps()
+  const disc = getSoftDiscMap()
+  const rustStreak = getRustStreakMap()
+  const tarpN = getTarpNormalMap()
+  const netMap = getNetMap()
+
   return {
-    // Quay deck: coarse grit (darkmetal) under timber tint, dense repeat.
-    deck: texturedMat(
-      'floor',
+    // Quay deck: procedural planks (grooves, nails, damp patches) — the single
+    // biggest step from "one slab" to a worked waterfront. Slightly wetter
+    // clearcoat-ish env so deck near the waterline does not read bone-dry.
+    deck: detailMat(
+      plank,
       {
         color: timberTone,
-        roughness: 0.94,
-        metalness: 0.04,
-        normalScale: new THREE.Vector2(1.1, 1.1)
+        roughness: 0.78 + weathered * 0.1,
+        metalness: 0.03,
+        envMapIntensity: 0.28,
+        normalScale: new THREE.Vector2(1.55, 1.55)
       },
-      { scale: 0.18, sharpness: 5, offset: true, rng }
+      plank.map ? { scale: 0.22, sharpness: 5.5, key: 'harbour|planks' } : null
     ),
-    // Sheet / tank / roof steel.
+    // Sheet / tank / roof steel — photo set + roughness variance so it is not
+    // one plastic chrome value across every tank.
     plate: texturedMat(
       'hull',
       {
         color: plate,
-        roughness: 0.72 + weathered * 0.12,
-        metalness: 0.58 - weathered * 0.12,
+        roughness: 0.62 + weathered * 0.22,
+        metalness: 0.62 - weathered * 0.18,
+        envMapIntensity: 0.55 - weathered * 0.15,
         normalScale: new THREE.Vector2(1.35, 1.35)
       },
       { scale: 0.16, sharpness: 4.5, offset: true, rng }
     ),
-    // Warehouse walls — painted plate gone chalky.
-    wall: texturedMat(
+    // Warehouse walls — corrugated cladding with sheet overlaps and rust bloom.
+    wall: detailMat(
+      corrugated,
+      {
+        color: new THREE.Color(0xd2c4a8).lerp(rust, weathered * 0.38),
+        roughness: 0.72 + weathered * 0.16,
+        metalness: 0.28 - weathered * 0.1,
+        envMapIntensity: 0.35,
+        normalScale: new THREE.Vector2(1.55, 1.55)
+      },
+      // No triplanar here. Corrugated is *directional* — blending the same rib
+      // pattern across three axes crosses the ribs with themselves and the wall
+      // reads as a giant diamond quilt. Cladding gets a single per-face
+      // projection (retileUVsTriplanar on the geometry) instead.
+      null
+    ),
+    // Fallback chalky panel when canvas maps are missing (tests).
+    wallFlat: texturedMat(
       'panel',
       {
-        // Plates are intentionally light enough to survive the dark albedo map;
-        // the prior mid-grey multiplied into near-black silhouettes at distance.
         color: new THREE.Color(0xc8b79e).lerp(rust, weathered * 0.32),
         roughness: 0.86,
         metalness: 0.22,
@@ -147,27 +256,62 @@ function materials(rng, weathered) {
       'beam',
       {
         color: new THREE.Color(0x4a4640).lerp(rust, weathered * 0.55),
-        roughness: 0.84,
-        metalness: 0.55
+        roughness: 0.78 + weathered * 0.12,
+        metalness: 0.52,
+        envMapIntensity: 0.28
       },
       { scale: 0.28, sharpness: 3.8 }
     ),
-    // Wet lower piles / rust crust.
+    // Wet lower piles / rust crust — dark and slightly shiny so submerged
+    // timber separates hard from dry upper legs and the open sea.
     pileWet: texturedMat(
       'beam',
       {
         color: wetPile,
-        roughness: 0.92,
-        metalness: 0.35
+        roughness: 0.38,
+        metalness: 0.18,
+        envMapIntensity: 0.62,
+        normalScale: new THREE.Vector2(1.25, 1.25)
       },
       { scale: 0.32, sharpness: 3.5 }
+    ),
+    // Permanent soak ring just below mean water — darkest band on the pile.
+    pileSoak: texturedMat(
+      'beam',
+      {
+        color: soakPile,
+        roughness: 0.32,
+        metalness: 0.2,
+        envMapIntensity: 0.7,
+        normalScale: new THREE.Vector2(1.15, 1.15)
+      },
+      { scale: 0.4, sharpness: 3.2 }
+    ),
+    // Barnacle + weed crust for the intertidal band on piles and poles.
+    // Kept chalky-light so the collar still reads at berth camera distance
+    // against dark wet timber. UV repeat densifies shells around the pile.
+    growth: detailMat(
+      growth,
+      {
+        // Darker olive barnacle band — chalky-white collars floated the piles
+        // against blue water at berth range.
+        color: new THREE.Color(0x9a9278).lerp(new THREE.Color(0x4a5a32), weathered * 0.5),
+        roughness: 0.92,
+        metalness: 0.02,
+        envMapIntensity: 0.1,
+        normalScale: new THREE.Vector2(2.2, 2.2)
+      },
+      // UV on cylinders aligns V with height — skip triplanar so the crust wraps.
+      null,
+      growth.map ? [2.4, 1.4] : null
     ),
     rust: texturedMat(
       'hull',
       {
         color: rust,
-        roughness: 0.96,
-        metalness: 0.28,
+        roughness: 0.94 + weathered * 0.04,
+        metalness: 0.22,
+        envMapIntensity: 0.2,
         normalScale: new THREE.Vector2(1.0, 1.0)
       },
       { scale: 0.24, sharpness: 3.6 }
@@ -176,8 +320,6 @@ function materials(rng, weathered) {
     rubble: texturedMat(
       'rubble',
       {
-        // Harbour stone stays dark and porous even in clean home waters; the
-        // waterline and algae do the rest of the weathering below.
         color: new THREE.Color(0x625d55).lerp(rust, weathered * 0.24),
         roughness: 1,
         metalness: 0.04,
@@ -189,8 +331,9 @@ function materials(rng, weathered) {
       'rubble',
       {
         color: new THREE.Color(0x39453e).lerp(rust, weathered * 0.16),
-        roughness: 1,
+        roughness: 0.82,
         metalness: 0.02,
+        envMapIntensity: 0.22,
         normalScale: new THREE.Vector2(2.05, 2.05)
       },
       { scale: 0.14, sharpness: 2.6 }
@@ -207,11 +350,61 @@ function materials(rng, weathered) {
       'accent',
       {
         color: pick(rng, [0xc4531c, 0xc9a227, 0x2f6f8f, 0xb03a2e]),
-        roughness: 0.58,
-        metalness: 0.28
+        roughness: 0.52 + weathered * 0.2,
+        metalness: 0.32,
+        envMapIntensity: 0.4
       },
       { scale: 0.22, sharpness: 5 }
     ),
+    rope: new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0x8a7348).lerp(new THREE.Color(0x5a4a32), weathered * 0.4),
+      roughness: 0.95,
+      metalness: 0.02
+    }),
+    tarp: new THREE.MeshStandardMaterial({
+      color: pick(rng, [0x3a5a48, 0x5a4838, 0x3a4a5a, 0x6a3a2a]),
+      roughness: 0.9,
+      metalness: 0.04,
+      normalMap: tarpN ?? null,
+      normalScale: new THREE.Vector2(0.9, 0.9),
+      side: THREE.DoubleSide
+    }),
+    net: new THREE.MeshStandardMaterial({
+      map: netMap ?? null,
+      color: 0x6f6350,
+      roughness: 0.95,
+      metalness: 0.02,
+      transparent: !!netMap,
+      alphaTest: netMap ? 0.35 : 0,
+      side: THREE.DoubleSide,
+      depthWrite: true
+    }),
+    // Transparent vertical rust weep hung under fixings / tank bands.
+    rustStreak: new THREE.MeshBasicMaterial({
+      map: rustStreak ?? null,
+      transparent: true,
+      opacity: 0.85,
+      depthWrite: false,
+      side: THREE.DoubleSide
+    }),
+    // Contact shadow disc — stops crates reading as pasted onto the deck.
+    // Stronger opacity: weak blobs were the "floating prop" tell at berth cam.
+    blobShadow: new THREE.MeshBasicMaterial({
+      map: disc ?? null,
+      color: 0x050403,
+      transparent: true,
+      opacity: disc ? 0.72 : 0.48,
+      depthWrite: false
+    }),
+    // Warm pool under lamps — reads hard at night, soft amber kiss by day.
+    lightPool: new THREE.MeshBasicMaterial({
+      map: disc ?? null,
+      color: 0xffc078,
+      transparent: true,
+      opacity: 0.58,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    }),
     lamp: new THREE.MeshStandardMaterial({
       color: 0xffd9a0,
       emissive: 0xffb257,
@@ -251,33 +444,95 @@ function addJetty(group, mats, rng, { x, z, w, l, rot = 0 }) {
   kerb.receiveShadow = true
   jetty.add(kerb)
 
-  // Piles. Spacing is by length so a long jetty gets more, not bigger, legs.
-  // Split wet (lower) / dry (upper) so the waterline reads naturally.
-  const rows = Math.max(2, Math.round(l / 7))
-  const cols = Math.max(2, Math.round(w / 7))
-  const pileH = DECK_HEIGHT + PILE_DEPTH
+  // Piles. Tighter spacing (was ~7 m) so the quay does not read as a table on
+  // four toothpicks. Split into wet / permanent soak / tide crust / dry upper
+  // so the waterline reads as lived-in marine surface rather than one painted pole.
+  const rows = Math.max(3, Math.round(l / 5.2))
+  const cols = Math.max(3, Math.round(w / 5.2))
+  const tideH = TIDE_BAND_H
+  const bollards = []
   for (let i = 0; i < rows; i++) {
     for (let j = 0; j < cols; j++) {
       const px = -w / 2 + (j + 0.5) * (w / cols)
       const pz = -l / 2 + (i + 0.5) * (l / rows)
-      const wetH = PILE_DEPTH * 0.55
-      const dryH = pileH - wetH
+      // Wet section bottoms out below the deepest trough; soak band straddles
+      // mean water and climbs high enough that a crest still leaves a dark
+      // wet collar on the pile (the COD waterline tell).
+      const soakTop = tideH * 0.55
+      const soakBot = -tideH * 1.15
+      const wetTop = soakBot
+      const wetBot = -PILE_DEPTH
+      const wetH = Math.max(0.8, wetTop - wetBot)
+      // Fatter legs — thin cylinders were the low-poly pier tell at range.
       const wet = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.52, 0.62, wetH, 8),
+        new THREE.CylinderGeometry(0.62, 0.78, wetH, 8),
         mats.pileWet
       )
-      wet.position.set(px, -PILE_DEPTH + wetH / 2, pz)
+      wet.position.set(px, wetBot + wetH / 2, pz)
       wet.castShadow = true
       wet.receiveShadow = true
       jetty.add(wet)
+
+      // Permanent dark soak ring — fat, near-black, proud of the pile so it
+      // silhouettes against the sea at berth camera distance.
+      const soakH = Math.max(0.9, soakTop - soakBot)
+      const soak = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.8, 0.9, soakH, 10),
+        mats.pileSoak
+      )
+      soak.position.set(px, soakBot + soakH / 2, pz)
+      soak.castShadow = true
+      soak.receiveShadow = true
+      jetty.add(soak)
+
+      // Barnacle/weed collar at the intertidal — olive, fatter than the soak.
+      const growthMesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.88, 0.98, tideH * 1.05, 12),
+        mats.growth
+      )
+      growthMesh.position.set(px, tideH * 0.28, pz)
+      growthMesh.castShadow = true
+      growthMesh.receiveShadow = true
+      jetty.add(growthMesh)
+
+      const dryBot = tideH * 0.7
+      const dryH = Math.max(0.6, DECK_HEIGHT - 0.2 - dryBot)
       const dry = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.48, 0.54, dryH, 8),
+        new THREE.CylinderGeometry(0.54, 0.6, dryH, 8),
         mats.beam
       )
-      dry.position.set(px, -PILE_DEPTH + wetH + dryH / 2, pz)
+      dry.position.set(px, dryBot + dryH / 2, pz)
       dry.castShadow = true
       dry.receiveShadow = true
       jetty.add(dry)
+      // Note: no fixed-Y water discs under piles — ocean is opaque and waves
+      // ±SEA_MAX_AMPLITUDE, so a y≈0 quad is buried or floating. Grounding
+      // comes from the dark soak ring + growth collar geometry above.
+    }
+  }
+
+  // Horizontal cross-braces between piles near the waterline. Sparse toothpicks
+  // alone read as a floating table; a few wales plant the structure.
+  // Deterministic pattern only — do NOT pull from `rng` here or the rest of the
+  // harbour layout (fingers, sheds, tanks) desyncs from its seed.
+  for (let i = 0; i < rows; i++) {
+    const z = -l / 2 + (i + 0.5) * (l / rows)
+    for (let j = 0; j < cols - 1; j++) {
+      if ((i + j) % 2 !== 0) continue
+      const x0 = -w / 2 + (j + 0.5) * (w / cols)
+      const x1 = -w / 2 + (j + 1.5) * (w / cols)
+      const y = ((i * 3 + j * 5) % 7) * 0.18 - 0.4
+      addBeamBetween(jetty, mats.pileSoak ?? mats.beam, [x0, y, z], [x1, y, z], 0.11)
+    }
+  }
+  for (let j = 0; j < cols; j++) {
+    const x = -w / 2 + (j + 0.5) * (w / cols)
+    for (let i = 0; i < rows - 1; i++) {
+      if ((i + j) % 2 === 0) continue
+      const z0 = -l / 2 + (i + 0.5) * (l / rows)
+      const z1 = -l / 2 + (i + 1.5) * (l / rows)
+      const y = ((i * 5 + j * 2) % 7) * 0.2 - 0.25
+      addBeamBetween(jetty, mats.beam, [x, y, z0], [x, y, z1], 0.1)
     }
   }
 
@@ -291,13 +546,41 @@ function addJetty(group, mats, rng, { x, z, w, l, rot = 0 }) {
       tyre.rotation.y = Math.PI / 2
       jetty.add(tyre)
       if (i % 2 === 0) {
+        const bx = sx * (w / 2 - 0.9)
         const bollard = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 1.1, 8), mats.beam)
-        bollard.position.set(sx * (w / 2 - 0.9), DECK_HEIGHT + 0.9, fz)
+        bollard.position.set(bx, DECK_HEIGHT + 0.9, fz)
         bollard.castShadow = true
         jetty.add(bollard)
+        // Contact disc so the bollard is grounded on the planks.
+        jetty.add(contactShadow(mats.blobShadow, 1.45, bx, DECK_HEIGHT + 0.42, fz))
+        bollards.push([bx, DECK_HEIGHT + 1.35, fz])
+        // Short drooping mooring line to the fender post / water side.
+        if (rng() < 0.55) {
+          const line = catenaryMesh(
+            [bx, DECK_HEIGHT + 1.2, fz],
+            [sx * (w / 2 + 0.55), DECK_HEIGHT - 0.4, fz + range(rng, -0.4, 0.4)],
+            range(rng, 0.45, 1.1),
+            0.045,
+            mats.rope,
+            10
+          )
+          jetty.add(line)
+        }
       }
     }
   }
+
+  // Occasional rope coil on the deck — working harbour clutter, not ornament.
+  if (bollards.length && rng() < 0.7) {
+    const [bx, , bz] = bollards[Math.floor(rng() * bollards.length)]
+    const coil = ropeCoilMesh(range(rng, 0.35, 0.55), mats.rope, intRange(rng, 2, 4))
+    coil.position.set(bx + range(rng, -0.6, 0.6), DECK_HEIGHT + 0.4, bz + range(rng, 0.6, 1.4))
+    jetty.add(coil)
+    jetty.add(
+      contactShadow(mats.blobShadow, 1.75, coil.position.x, DECK_HEIGHT + 0.41, coil.position.z)
+    )
+  }
+
   group.add(jetty)
   return jetty
 }
@@ -315,12 +598,25 @@ function addShed(group, mats, rng, { x, z, w, d, h, rot = 0, lit = true }) {
   wallShape.lineTo(0, h + roofH)
   wallShape.lineTo(-w / 2, h)
   wallShape.lineTo(-w / 2, 0)
-  const wallGeo = new THREE.ExtrudeGeometry(wallShape, { depth: d, bevelEnabled: true, bevelSegments: 1, bevelSize: Math.min(0.12, w * 0.025), bevelThickness: 0.08 })
+  const wallGeo = new THREE.ExtrudeGeometry(wallShape, {
+    depth: d,
+    bevelEnabled: true,
+    bevelSegments: 1,
+    bevelSize: Math.min(0.12, w * 0.025),
+    bevelThickness: 0.08
+  })
   wallGeo.translate(0, 0, -d / 2)
-  const body = new THREE.Mesh(wallGeo, mats.wall)
+  // Prefer corrugated cladding; fall back to chalky panel maps in headless tests.
+  const wallMat = mats.wall?.map ? mats.wall : mats.wallFlat
+  // World-scale UVs, one projection per face: sheets stay ~1.6 m wide however
+  // the shed was sized, and the ribs run vertically like real cladding.
+  const body = new THREE.Mesh(retileUVsTriplanar(wallGeo, 0.62), wallMat)
   body.castShadow = true
   body.receiveShadow = true
   shed.add(body)
+
+  // Contact shadow under the shed footprint.
+  shed.add(contactShadow(mats.blobShadow, Math.max(w, d) * 1.35, 0, 0.02, 0))
 
   for (const sx of [-1, 1]) {
     const slope = new THREE.Mesh(roundedBox(w * 0.56, 0.22, d * 1.06, 0.05, 1), mats.plate)
@@ -343,12 +639,42 @@ function addShed(group, mats, rng, { x, z, w, d, h, rot = 0, lit = true }) {
   addBeamBetween(shed, mats.beam, [-doorW * 0.56, 0, d / 2 + 0.16], [-doorW * 0.56, h, d / 2 + 0.16], 0.11)
   addBeamBetween(shed, mats.beam, [doorW * 0.56, 0, d / 2 + 0.16], [doorW * 0.56, h, d / 2 + 0.16], 0.11)
   addBeamBetween(shed, mats.beam, [-w * 0.48, h, d / 2 + 0.16], [w * 0.48, h, d / 2 + 0.16], 0.11)
+
+  // Rust weeps under the eaves and door lintel — oxide run-off from fixings.
+  if (mats.rustStreak?.map) {
+    const streaks = intRange(rng, 2, 5)
+    for (let i = 0; i < streaks; i++) {
+      const sw = range(rng, 0.18, 0.42)
+      const sh = range(rng, h * 0.28, h * 0.7)
+      const streak = new THREE.Mesh(new THREE.PlaneGeometry(sw, sh), mats.rustStreak)
+      const side = rng() < 0.55 ? 1 : -1
+      if (side > 0) {
+        streak.position.set(range(rng, -w * 0.4, w * 0.4), h - sh * 0.35, d / 2 + 0.12)
+      } else {
+        streak.position.set(range(rng, -w * 0.4, w * 0.4), h - sh * 0.4, -d / 2 - 0.12)
+        streak.rotation.y = Math.PI
+      }
+      streak.renderOrder = 2
+      shed.add(streak)
+    }
+  }
+
   if (lit) {
     const winCount = intRange(rng, 2, 4)
     for (let i = 0; i < winCount; i++) {
       const win = new THREE.Mesh(new THREE.BoxGeometry(w * 0.12, h * 0.2, 0.15), mats.glass)
       win.position.set(-w * 0.3 + (i / Math.max(1, winCount - 1)) * w * 0.6, h * 0.7, d / 2 + 0.05)
       shed.add(win)
+      // Small rust weep under each window sill.
+      if (mats.rustStreak?.map && rng() < 0.7) {
+        const weep = new THREE.Mesh(
+          new THREE.PlaneGeometry(w * 0.1, h * 0.22),
+          mats.rustStreak
+        )
+        weep.position.set(win.position.x, win.position.y - h * 0.22, d / 2 + 0.13)
+        weep.renderOrder = 2
+        shed.add(weep)
+      }
     }
   }
   const vent = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, h * 0.32, 8), mats.beam)
@@ -362,6 +688,21 @@ function addShed(group, mats, rng, { x, z, w, d, h, rot = 0, lit = true }) {
   awning.position.set(0, h * 0.74, d * 0.58)
   awning.rotation.x = -0.16
   shed.add(awning)
+
+  // Occasional tarp draped over a crate stack beside the door — breaks the
+  // clean gable silhouette and sells "people work here".
+  if (rng() < 0.55) {
+    const tarp = new THREE.Mesh(
+      new THREE.PlaneGeometry(doorW * range(rng, 0.7, 1.1), d * range(rng, 0.22, 0.4)),
+      mats.tarp
+    )
+    tarp.position.set(range(rng, -w * 0.15, w * 0.15), 0.35, d * 0.42)
+    tarp.rotation.x = -Math.PI / 2 + range(rng, -0.12, 0.08)
+    tarp.rotation.z = range(rng, -0.2, 0.2)
+    tarp.castShadow = true
+    shed.add(tarp)
+  }
+
   group.add(shed)
   return shed
 }
@@ -384,6 +725,28 @@ function addTanks(group, mats, rng, { x, z, count, r, h }) {
       band.position.set(tx, DECK_HEIGHT + h * f, z)
       band.rotation.x = Math.PI / 2
       group.add(band)
+    }
+    // Ground the tank and paint oxide weeps down the shell from each band.
+    group.add(contactShadow(mats.blobShadow, r * 3.1, tx, DECK_HEIGHT + 0.4, z))
+    if (mats.rustStreak?.map) {
+      const weeps = intRange(rng, 2, 4)
+      for (let s = 0; s < weeps; s++) {
+        const ang = rng() * Math.PI * 2
+        const sh = h * range(rng, 0.35, 0.75)
+        const streak = new THREE.Mesh(
+          new THREE.PlaneGeometry(r * range(rng, 0.18, 0.35), sh),
+          mats.rustStreak
+        )
+        streak.position.set(
+          tx + Math.cos(ang) * (r + 0.04),
+          DECK_HEIGHT + h * range(rng, 0.45, 0.85),
+          z + Math.sin(ang) * (r + 0.04)
+        )
+        streak.lookAt(tx, streak.position.y, z)
+        streak.rotateY(Math.PI)
+        streak.renderOrder = 2
+        group.add(streak)
+      }
     }
   }
 }
@@ -453,6 +816,9 @@ function addHarbourTower(group, mats, { x, z, h, radius }) {
   beacon.position.y = h * 1.5
   beacon.userData.beacon = true
   tower.add(beacon)
+  // Tower top flood — brightest waterfront light (port landmark).
+  // Emitter is in tower-local space; offerHarbourAreaLights transforms it.
+  registerAreaEmitter(tower, 0, h * 1.5, 0, 'tower')
   group.add(tower)
 }
 
@@ -586,13 +952,27 @@ function addBreakwater(group, mats, rng, radius) {
   const lampY = DECK_HEIGHT + 6.4
   const botY = -PILE_DEPTH * 0.5
   const postH = lampY - botY
+  const postX = Math.cos(headA) * radius
+  const postZ = Math.sin(headA) * radius
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.75, postH, 6), mats.plate)
-  post.position.set(Math.cos(headA) * radius, (lampY + botY) / 2, Math.sin(headA) * radius)
+  post.position.set(postX, (lampY + botY) / 2, postZ)
+  post.castShadow = true
+  post.receiveShadow = true
   group.add(post)
+  if (mats.pileSoak) {
+    const soak = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.62, 0.72, TIDE_BAND_H * 0.9, 8),
+      mats.pileSoak
+    )
+    soak.position.set(postX, 0, postZ)
+    soak.castShadow = true
+    group.add(soak)
+  }
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.9, 8, 6), mats.lamp)
-  lamp.position.set(Math.cos(headA) * radius, lampY, Math.sin(headA) * radius)
+  lamp.position.set(postX, lampY, postZ)
   lamp.userData.beacon = true
   group.add(lamp)
+  registerAreaEmitter(group, postX, lampY, postZ, 'mole')
 }
 
 /** Lamp posts planted in the water along the quay edge (not floating mid-air). */
@@ -604,13 +984,39 @@ function addQuayLights(group, mats, positions) {
     const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.28, postH, 5), mats.beam)
     post.position.set(x, (lampY + botY) / 2, z)
     post.castShadow = true
+    post.receiveShadow = true
     group.add(post)
+    // Dark soak + tide crust on the light pole so legs do not float mid-water.
+    if (mats.pileSoak) {
+      const soak = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.28, 0.34, TIDE_BAND_H * 0.85, 8),
+        mats.pileSoak
+      )
+      soak.position.set(x, -TIDE_BAND_H * 0.15, z)
+      soak.castShadow = true
+      group.add(soak)
+    }
+    // Tide crust on the light pole too.
+    const growth = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.28, 0.34, TIDE_BAND_H, 8),
+      mats.growth
+    )
+    growth.position.set(x, TIDE_BAND_H * 0.1, z)
+    growth.castShadow = true
+    group.add(growth)
     const head = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, 0.9), mats.plate)
     head.position.set(x, DECK_HEIGHT + 6.1, z)
+    head.castShadow = true
     group.add(head)
     const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.32, 7, 5), mats.lamp)
     lamp.position.set(x, lampY, z)
     group.add(lamp)
+    // Soft light pool on the deck / water under the lamp.
+    const pool = contactShadow(mats.lightPool, 7.5, x, DECK_HEIGHT + 0.4, z)
+    pool.renderOrder = 3
+    group.add(pool)
+    // Real glow — warms deck timber and nearby hulls at night (pooled lights).
+    registerAreaEmitter(group, x, lampY, z, 'quay')
   }
 }
 
@@ -716,21 +1122,71 @@ export function buildHarbourMesh(body) {
     const isDrum = rng() < 0.35
     const item = new THREE.Mesh(isDrum ? drumGeo : crateGeo, rng() < 0.3 ? mats.accent : mats.rust)
     const s = size * range(rng, 0.025, 0.055)
-    item.scale.set(s, s * range(rng, 0.8, 1.4), s)
-    item.position.set(
-      range(rng, -quayW * 0.42, quayW * 0.42),
-      DECK_HEIGHT + 0.35 + (s * range(rng, 0.8, 1.4)) / 2,
-      range(rng, -quayL * 0.42, quayL * 0.42)
-    )
+    const sy = s * range(rng, 0.8, 1.4)
+    item.scale.set(s, sy, s)
+    const ix = range(rng, -quayW * 0.42, quayW * 0.42)
+    const iz = range(rng, -quayL * 0.42, quayL * 0.42)
+    item.position.set(ix, DECK_HEIGHT + 0.35 + sy / 2, iz)
     item.rotation.y = rng() * Math.PI
     item.castShadow = true
     item.receiveShadow = true
     group.add(item)
+    // Blob shadow under every prop — the cheapest "grounded" cue there is.
+    group.add(
+      contactShadow(
+        mats.blobShadow,
+        s * (isDrum ? 3.0 : 3.4),
+        ix,
+        DECK_HEIGHT + 0.4,
+        iz,
+        item.rotation.y
+      )
+    )
+    // Small stacks: occasional second crate on top.
+    if (!isDrum && rng() < 0.28) {
+      const top = new THREE.Mesh(crateGeo, rng() < 0.4 ? mats.accent : mats.rust)
+      const ts = s * range(rng, 0.7, 0.95)
+      top.scale.set(ts, ts * 0.9, ts)
+      top.position.set(ix + range(rng, -0.1, 0.1), DECK_HEIGHT + 0.35 + sy + ts * 0.45, iz)
+      top.rotation.y = rng() * Math.PI
+      top.castShadow = true
+      group.add(top)
+    }
+  }
+
+  // Drying nets on a simple frame along the quay — fishing-port tell.
+  if (isPort && rng() < 0.75 && mats.net?.map) {
+    const nx = quayW * range(rng, -0.3, 0.3)
+    const nz = quayL * range(rng, -0.35, 0.35)
+    const nw = size * range(rng, 0.12, 0.2)
+    const nh = size * range(rng, 0.08, 0.14)
+    for (const sx of [-1, 1]) {
+      addBeamBetween(
+        group,
+        mats.beam,
+        [nx + sx * nw * 0.5, DECK_HEIGHT + 0.4, nz],
+        [nx + sx * nw * 0.5, DECK_HEIGHT + 0.4 + nh, nz],
+        0.08
+      )
+    }
+    addBeamBetween(
+      group,
+      mats.beam,
+      [nx - nw * 0.5, DECK_HEIGHT + 0.4 + nh, nz],
+      [nx + nw * 0.5, DECK_HEIGHT + 0.4 + nh, nz],
+      0.07
+    )
+    const net = new THREE.Mesh(new THREE.PlaneGeometry(nw, nh), mats.net)
+    net.position.set(nx, DECK_HEIGHT + 0.4 + nh * 0.5, nz + 0.05)
+    net.castShadow = true
+    group.add(net)
   }
 
   // —— Lights ————————————————————————————————————————————————————————
+  // Cap visual posts + area emitters: the shared pool only has ~12 slots for
+  // the whole scene, so ports should not register six equal quay floods.
   const lampPositions = []
-  const lamps = isPort ? 6 : 2
+  const lamps = isPort ? 4 : 2
   for (let i = 0; i < lamps; i++) {
     const t = i / Math.max(1, lamps - 1)
     lampPositions.push([
@@ -749,21 +1205,100 @@ export function buildHarbourMesh(body) {
     mast.position.set(0, (lampY + botY) / 2, -quayL * 0.35)
     mast.castShadow = true
     group.add(mast)
+    const growth = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.36, TIDE_BAND_H, 8),
+      mats.growth
+    )
+    growth.position.set(0, 0, -quayL * 0.35)
+    group.add(growth)
     const light = new THREE.Mesh(new THREE.SphereGeometry(size * 0.035, 8, 6), mats.lamp)
     light.position.set(0, lampY, -quayL * 0.35)
     light.userData.beacon = true
     group.add(light)
+    const pool = contactShadow(mats.lightPool, 6, 0, DECK_HEIGHT + 0.4, -quayL * 0.35)
+    pool.renderOrder = 3
+    group.add(pool)
+    registerAreaEmitter(group, 0, lampY, -quayL * 0.35, 'beacon')
   }
+
+  // Collapse static geometry into one mesh per material so the detail density
+  // stays affordable with several harbours streamed in at once. Beacons and
+  // the lighthouse window keep animating after the merge.
+  mergeStatic(
+    group,
+    (obj) =>
+      !!(
+        obj.userData?.beacon ||
+        obj.userData?.lighthouseWindow ||
+        obj.userData?.lighthouse ||
+        obj.userData?.noMerge ||
+        obj.isInstancedMesh
+      )
+  )
 
   return group
 }
 
-/** Pulse the beacons. Called per frame from main.js in place of the old station spin. */
-export function updateHarbourMesh(mesh, elapsed) {
+/**
+ * Pulse beacons and cache night level for the area-light pool.
+ * @param {THREE.Object3D} mesh
+ * @param {number} elapsed sim time (for beacon pulse)
+ * @param {number} [nightFactor] 0 day … 1 night (default 1 so menu/title stays lit)
+ */
+export function updateHarbourMesh(mesh, elapsed, nightFactor = 1) {
   if (!mesh?.traverse) return
   const pulse = 0.55 + 0.45 * Math.sin(elapsed * 1.6)
+  // Strict night ramp — day residual was lighting titles with dozens of lamps.
+  const n = Math.min(1, Math.max(0, nightFactor))
+  const nightLevel = n * n
+  mesh.userData.areaLightLevel = nightLevel
+  mesh.userData.areaLightPulse = pulse
   mesh.traverse((child) => {
-    if (!child.userData?.beacon || !child.material) return
-    child.material.emissiveIntensity = 0.8 + pulse * 1.8
+    if (child.userData?.beacon && child.material) {
+      child.material.emissiveIntensity = 0.8 + pulse * 1.8
+    }
   })
+}
+
+const _emitWorld = new THREE.Vector3()
+
+/**
+ * Push this harbour's lamps into the shared area-light pool for the frame.
+ * @param {THREE.Object3D} mesh harbour root
+ * @param {{ offer: Function }} pool from createAreaLightPool
+ */
+export function offerHarbourAreaLights(mesh, pool) {
+  if (!mesh || !pool) return
+  const level = mesh.userData.areaLightLevel ?? 0
+  if (level < 0.04) return
+  const pulse = mesh.userData.areaLightPulse ?? 1
+  mesh.updateWorldMatrix(true, false)
+
+  // Emitters may live on the root or on child groups (tower local space).
+  const roots = [mesh]
+  mesh.traverse((child) => {
+    if (child !== mesh && child.userData?.areaEmitters) roots.push(child)
+  })
+
+  for (const root of roots) {
+    const list = root.userData.areaEmitters
+    if (!list?.length) continue
+    root.updateWorldMatrix(true, false)
+    for (const e of list) {
+      _emitWorld.set(e.x, e.y, e.z).applyMatrix4(root.matrixWorld)
+      const breathe =
+        e.tier === 'beacon' || e.tier === 'tower' || e.tier === 'mole'
+          ? 0.82 + 0.28 * pulse
+          : 1
+      pool.offer(
+        _emitWorld.x,
+        _emitWorld.y,
+        _emitWorld.z,
+        e.color,
+        e.base * level * breathe,
+        e.distance,
+        e.priority
+      )
+    }
+  }
 }

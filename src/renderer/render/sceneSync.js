@@ -5,7 +5,7 @@ import { PLAYER_AVATAR_HEIGHT } from './playerAvatarMesh.js'
 
 // Default chase seat: astern and above the boat (local +Z forward).
 // Elevated so the hull sits low in frame and the reticle is clear above it.
-const CHASE_OFFSET = new THREE.Vector3(0, 14, -44)
+const CHASE_OFFSET = new THREE.Vector3(0, 20, -44)
 // Keep the camera outside the stern even for the enlarged freighters. The
 // value is render-only and is supplied by main.js from the active hull class.
 const CHASE_AFT_CLEARANCE = 30

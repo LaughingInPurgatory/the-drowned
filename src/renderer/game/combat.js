@@ -1077,7 +1077,7 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
   // Every mover on the sea goes through the same clamp as the player, so an
   // NPC can never drift above or below the surface it is supposed to be on.
   snapToSea(npc, gameState.simTime)
-  applySeaAttitude(npc, headingOf(npc), gameState.simTime)
+  applySeaAttitude(npc, headingOf(npc), gameState.simTime, 0, 0, dt)
 }
 
 const _combatFlagPlayer = new THREE.Vector3()

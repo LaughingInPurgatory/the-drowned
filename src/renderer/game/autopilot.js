@@ -240,7 +240,7 @@ export function updateCruiseControl(
   // Throttle readout matches “full ahead under cruise”.
   shipState.throttle = rampUp
   snapToSea(shipState, simTime)
-  applySeaAttitude(shipState, heading, simTime)
+  applySeaAttitude(shipState, heading, simTime, 0, 0, dt)
   return false
 }
 

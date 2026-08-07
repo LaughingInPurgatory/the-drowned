@@ -1,8 +1,19 @@
 import * as THREE from 'three'
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js'
+import { MeshBasicNodeMaterial } from 'three/webgpu'
+import { uniform, vec4, Fn, float, mix, pow, smoothstep, positionLocal } from 'three/tsl'
 import { turretMountLocal } from '../game/turret.js'
 import { buildHullGeometry } from '../procgen/hull.js'
 import { mulberry32 } from '../procgen/prng.js'
-import { shipMaterialMaps, stationMaterialMaps, retileUVsTriplanar } from './textures.js'
+import { stationMaterialMaps, retileUVsTriplanar } from './textures.js'
+import {
+  getPlateMaps,
+  getTimberMaps,
+  getRubberMaps,
+  makeHullMaterial,
+  makeFittingMaterial,
+  getDecalMap
+} from './shipSurface.js'
 
 function hashString(str) {
   let h = 0
@@ -10,22 +21,37 @@ function hashString(str) {
   return Math.abs(h)
 }
 
-// Photo ambientCG PBR for ships (not the station procedural panel grid).
-// Tint via material.color — maps are neutral grey so class colours still read.
+// Procedural plate PBR for ships (see render/shipSurface.js). Tint via
+// material.color — the clean albedo is near-neutral so class colours read, and
+// the worn albedo already carries rust, chipping and oil.
 function shipHullMaps(normalStrength = 1.2) {
-  return shipMaterialMaps('shipHull', normalStrength)
+  return fittingMaps('hull', normalStrength)
 }
 function shipStructureMaps(normalStrength = 1.05) {
-  return shipMaterialMaps('shipStructure', normalStrength)
+  return fittingMaps('super', normalStrength)
 }
 function shipArmorMaps(normalStrength = 1.1) {
-  return shipMaterialMaps('shipArmor', normalStrength)
+  return fittingMaps('hull', normalStrength)
 }
 function shipTrimMaps(normalStrength = 0.95) {
-  return shipMaterialMaps('shipTrim', normalStrength)
+  return fittingMaps('trim', normalStrength)
 }
 function shipPaintMaps(normalStrength = 1.0) {
-  return shipMaterialMaps('shipPaint', normalStrength)
+  return fittingMaps('super', normalStrength)
+}
+/** Classic-material map bundle from the procedural plate set. */
+function fittingMaps(kind, normalStrength = 1.1) {
+  const m = getPlateMaps(kind)
+  if (!m.mapWorn) return {}
+  return {
+    map: m.mapWorn,
+    normalMap: m.normalMap,
+    roughnessMap: m.roughnessMap,
+    metalnessMap: m.metalnessMap,
+    aoMap: m.aoMap,
+    aoMapIntensity: 0.85,
+    normalScale: new THREE.Vector2(normalStrength, normalStrength)
+  }
 }
 function alienHullMaps(normalStrength = 0.9) {
   // Aliens keep the organic station path (bio albedo is intentional).
@@ -48,25 +74,29 @@ function hullWearKit(shipClass) {
   return ['armor', 'metal', 'dark'][h % 3]
 }
 
-function mapsForWearKit(kit, normalStrength) {
-  if (kit === 'dark') return shipArmorMaps(normalStrength)
-  if (kit === 'metal') return shipStructureMaps(normalStrength)
-  if (kit === 'paint') return shipPaintMaps(normalStrength)
-  return shipHullMaps(normalStrength)
-}
-
-function makeDetailMaterials(hullTint) {
+/**
+ * Exterior fittings for a full (player / close) hull.
+ * `premium` bumps env response + wet clearcoat so the player's boat reads
+ * above lite NPC tubes without adding lights or new draw topology.
+ */
+function makeDetailMaterials(hullTint, { premium = false } = {}) {
   const tint = hullTint?.clone?.() ?? new THREE.Color(0x8899aa)
   const darkTint = tint.clone().multiplyScalar(0.55)
   const lightTint = tint.clone().lerp(new THREE.Color(0xffffff), 0.22)
-  // Worn plated metal: mid metalness, high roughness — not chrome.
+  // Exterior ships have a sky PMREM — wet metal wants mid metalness and a thin
+  // clearcoat film, not chrome (interiors still cap metalness for bay ambient).
+  // Premium values are punchier so chase/berth range still reads wet plate.
+  const env = premium ? 1.32 : 0.9
+  const wetCoat = premium ? 0.62 : 0.26
+  const wetCoatR = premium ? 0.16 : 0.4
+  // Worn plated metal: mid metalness, wet film via clearcoat on Physical mats.
   return {
     hardpoint: new THREE.MeshStandardMaterial({
       color: 0x2a2e34,
       metalness: 0.72,
-      roughness: 0.48,
-      envMapIntensity: 0.8,
-      ...shipTrimMaps(1.0)
+      roughness: 0.45,
+      envMapIntensity: env * 0.95,
+      ...shipTrimMaps(1.1)
     }),
     // Bridge glass — MeshPhysicalMaterial so IBL reflects like real panes
     // (Standard + emissive read as plastic light-boxes). Keep tint near-neutral
@@ -80,7 +110,7 @@ function makeDetailMaterials(hullTint) {
       ior: 1.5,
       transparent: true,
       opacity: 1,
-      envMapIntensity: 1.45,
+      envMapIntensity: premium ? 1.65 : 1.45,
       clearcoat: 1,
       clearcoatRoughness: 0.04,
       // Warm cabin lamp, not a blue LED panel.
@@ -98,7 +128,7 @@ function makeDetailMaterials(hullTint) {
       ior: 1.5,
       transparent: true,
       opacity: 1,
-      envMapIntensity: 1.55,
+      envMapIntensity: premium ? 1.75 : 1.55,
       clearcoat: 1,
       clearcoatRoughness: 0.035,
       emissive: 0x2c281c,
@@ -131,19 +161,23 @@ function makeDetailMaterials(hullTint) {
       depthWrite: false,
       side: THREE.DoubleSide
     }),
-    panel: new THREE.MeshStandardMaterial({
+    panel: new THREE.MeshPhysicalMaterial({
       color: darkTint,
       metalness: 0.58,
-      roughness: 0.62,
-      envMapIntensity: 0.75,
-      ...shipArmorMaps(1.1)
+      roughness: premium ? 0.52 : 0.6,
+      envMapIntensity: env * 0.92,
+      clearcoat: wetCoat * 0.85,
+      clearcoatRoughness: wetCoatR,
+      ...shipArmorMaps(premium ? 1.25 : 1.1)
     }),
-    structure: new THREE.MeshStandardMaterial({
+    structure: new THREE.MeshPhysicalMaterial({
       color: lightTint,
       metalness: 0.62,
-      roughness: 0.55,
-      envMapIntensity: 0.8,
-      ...shipStructureMaps(1.05)
+      roughness: premium ? 0.46 : 0.54,
+      envMapIntensity: env,
+      clearcoat: wetCoat,
+      clearcoatRoughness: wetCoatR * 0.9,
+      ...shipStructureMaps(premium ? 1.2 : 1.05)
     }),
     radiator: new THREE.MeshStandardMaterial({
       color: 0x4a3830,
@@ -151,34 +185,115 @@ function makeDetailMaterials(hullTint) {
       roughness: 0.55,
       emissive: 0x1a1008,
       emissiveIntensity: 0.14,
-      envMapIntensity: 0.7,
-      ...shipTrimMaps(0.9)
+      envMapIntensity: env * 0.85,
+      ...shipTrimMaps(0.95)
     }),
-    accent: new THREE.MeshStandardMaterial({
+    accent: new THREE.MeshPhysicalMaterial({
       color: 0xc45a18,
       metalness: 0.4,
-      roughness: 0.55,
-      envMapIntensity: 0.75,
-      ...shipHullMaps(0.95)
+      roughness: premium ? 0.48 : 0.55,
+      envMapIntensity: env * 0.9,
+      clearcoat: wetCoat * 0.7,
+      clearcoatRoughness: wetCoatR,
+      ...shipHullMaps(1.05)
     }),
     antenna: new THREE.MeshStandardMaterial({
       color: 0xa0b0c0,
       metalness: 0.78,
-      roughness: 0.4,
-      envMapIntensity: 0.85,
-      ...shipTrimMaps(0.9)
+      roughness: 0.38,
+      envMapIntensity: env,
+      ...shipTrimMaps(1.0)
     }),
-    nacelle: new THREE.MeshStandardMaterial({
+    nacelle: new THREE.MeshPhysicalMaterial({
       color: darkTint.clone().offsetHSL(0, 0, -0.05),
       metalness: 0.65,
-      roughness: 0.58,
-      envMapIntensity: 0.75,
-      ...shipStructureMaps(1.0)
+      roughness: premium ? 0.5 : 0.58,
+      envMapIntensity: env * 0.92,
+      clearcoat: wetCoat * 0.75,
+      clearcoatRoughness: wetCoatR,
+      ...shipStructureMaps(1.1)
+    }),
+    // Capping rails, hatch coamings, scupper surrounds — painted steel trim
+    // that has to read darker than the topsides or the sheer line disappears.
+    trimSteel: makeFittingMaterial('trim', {
+      color: darkTint.clone().multiplyScalar(0.8),
+      metalness: 0.8,
+      roughness: 0.52,
+      envMapIntensity: env,
+      normalStrength: 1.2
+    }),
+    // Tread plate for working decks, hatch tops and platforms.
+    tread: makeFittingMaterial('deck', {
+      color: lightTint.clone().multiplyScalar(0.72),
+      metalness: 0.7,
+      roughness: 0.62,
+      envMapIntensity: env * 0.9,
+      normalStrength: 1.45
+    }),
+    // Salt-bleached, algae-stained marine timber: fender boards, gratings,
+    // hatch boards, dunnage under deck cargo.
+    timber: new THREE.MeshStandardMaterial({
+      color: 0xb6a58c,
+      metalness: 0.02,
+      roughness: 0.86,
+      envMapIntensity: 0.3,
+      ...(() => {
+        const t = getTimberMaps()
+        return t.map
+          ? {
+              map: t.map,
+              normalMap: t.normalMap,
+              roughnessMap: t.roughnessMap,
+              normalScale: new THREE.Vector2(1.3, 1.3)
+            }
+          : {}
+      })()
+    }),
+    // Perished rubber: tyre fenders, hoses, gaiters.
+    rubber: new THREE.MeshStandardMaterial({
+      color: 0x8d8a86,
+      metalness: 0.02,
+      roughness: 0.94,
+      envMapIntensity: 0.22,
+      ...(() => {
+        const r = getRubberMaps()
+        return r.map
+          ? { map: r.map, normalMap: r.normalMap, normalScale: new THREE.Vector2(1.15, 1.15) }
+          : {}
+      })()
+    }),
+    // Manila / polyprop line — mooring warps, lashings, rail lifelines.
+    rope: new THREE.MeshStandardMaterial({
+      color: 0x9a8862,
+      metalness: 0,
+      roughness: 0.95,
+      envMapIntensity: 0.18
+    }),
+    // High-vis working gear: life rings, buoys, hose reels, deck hazard paint.
+    hiVis: new THREE.MeshStandardMaterial({
+      color: 0xd8541e,
+      metalness: 0.05,
+      roughness: 0.7,
+      envMapIntensity: 0.4,
+      ...shipPaintMaps(0.8)
     })
   }
 }
 
 const hardpointMarkerGeometry = new THREE.ConeGeometry(0.16, 0.4, 6)
+
+/**
+ * Bevelled slab.
+ *
+ * A pure 90-degree corner is the single clearest tell that a shape was typed
+ * rather than modelled: real steel has a weld radius or a rolled edge, and that
+ * radius is what catches a highlight and separates one face from the next. Two
+ * segments is enough at this camera distance and costs almost nothing.
+ */
+function roundBox(w, h, d, radius = 0.06) {
+  const r = Math.max(0.006, Math.min(radius, w * 0.24, h * 0.24, d * 0.24))
+  return new RoundedBoxGeometry(w, h, d, 2, r)
+}
 
 function defaultStyle(hull, rng) {
   if (hull.style) return hull.style
@@ -393,7 +508,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
   const houseH = depth * (0.85 + rng() * 0.6)
 
   const house = add(
-    new THREE.Mesh(new THREE.BoxGeometry(houseW * 2, houseH, houseL), mats.structure)
+    new THREE.Mesh(roundBox(houseW * 2, houseH, houseL), mats.structure)
   )
   house.position.set(0, houseDeck + houseH * 0.5, houseZ)
 
@@ -402,12 +517,12 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     const bandH = houseH * 0.3
     const bandY = houseDeck + houseH * 0.74
     const front = add(
-      new THREE.Mesh(new THREE.BoxGeometry(houseW * 1.92, bandH, houseL * 0.06), mats.window)
+      new THREE.Mesh(roundBox(houseW * 1.92, bandH, houseL * 0.06), mats.window)
     )
     front.position.set(0, bandY, houseZ + houseL * 0.5)
     for (const sx of [-1, 1]) {
       const sideWin = add(
-        new THREE.Mesh(new THREE.BoxGeometry(houseW * 0.06, bandH, houseL * 0.72), mats.window)
+        new THREE.Mesh(roundBox(houseW * 0.06, bandH, houseL * 0.72), mats.window)
       )
       sideWin.position.set(sx * houseW, bandY, houseZ)
     }
@@ -418,7 +533,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
   {
     const roof = add(
       new THREE.Mesh(
-        new THREE.BoxGeometry(houseW * 2.08, houseH * 0.07, houseL * 1.12),
+        roundBox(houseW * 2.08, houseH * 0.07, houseL * 1.12),
         mats.panel
       )
     )
@@ -426,7 +541,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     if (beam > length * 0.06 || rng() < 0.5) {
       const upper = add(
         new THREE.Mesh(
-          new THREE.BoxGeometry(houseW * 1.2, houseH * 0.5, houseL * 0.6),
+          roundBox(houseW * 1.2, houseH * 0.5, houseL * 0.6),
           mats.structure
         )
       )
@@ -473,7 +588,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     mast.position.set(0, mastBase + mastH * 0.5, mastZ)
     const cross = add(
       new THREE.Mesh(
-        new THREE.BoxGeometry(beam * 0.9, beam * 0.03, beam * 0.05),
+        roundBox(beam * 0.9, beam * 0.03, beam * 0.05),
         mats.antenna
       )
     )
@@ -538,7 +653,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
         // deck height rather than one level all the way along.
         const y = (deckAt(f0) + deckAt(f1)) * 0.5
         const panel = add(
-          new THREE.Mesh(new THREE.BoxGeometry(thickness, bulwarkH, run * 1.06), mats.panel)
+          new THREE.Mesh(roundBox(thickness, bulwarkH, run * 1.06), mats.panel)
         )
         panel.position.set((x0 + x1) * 0.5, y + bulwarkH * 0.42, (z0 + z1) * 0.5)
         panel.rotation.y = Math.atan2(dx, dz)
@@ -562,12 +677,55 @@ function addHullDetails(group, hull, mats, role = 'trader') {
         const y = (deckAt(f0) + deckAt(f1)) * 0.5 + bulwarkH * 0.9
         const cap = add(
           new THREE.Mesh(
-            new THREE.BoxGeometry(thickness * 1.5, depth * 0.05, run * 1.04),
-            mats.accent
+            roundBox(thickness * 1.5, depth * 0.05, run * 1.04, depth * 0.02),
+            mats.trimSteel
           )
         )
         cap.position.set((x0 + x1) * 0.5, y, (z0 + z1) * 0.5)
         cap.rotation.y = Math.atan2(dx, dz)
+      }
+    }
+    // Rubbing strake: a half-round of perished rubber bolted along the sheer,
+    // at the height a quay wall actually meets the hull. Every working boat
+    // carries one and it is the thing that takes the punishment.
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < segs; i++) {
+        const f0 = 0.05 + (i / segs) * 0.88
+        const f1 = 0.05 + ((i + 1) / segs) * 0.88
+        const x0 = sx * halfBeamAt(f0) * 1.0
+        const x1 = sx * halfBeamAt(f1) * 1.0
+        const z0 = zAt(f0)
+        const z1 = zAt(f1)
+        const dx = x1 - x0
+        const dz = z1 - z0
+        const run = Math.hypot(dx, dz)
+        if (run < 1e-4) continue
+        const y = (deckAt(f0) + deckAt(f1)) * 0.5 - depth * 0.12
+        const strake = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(depth * 0.07, depth * 0.07, run * 1.05, 6),
+            mats.rubber
+          )
+        )
+        strake.position.set((x0 + x1) * 0.5, y, (z0 + z1) * 0.5)
+        strake.rotation.x = Math.PI / 2
+        strake.rotation.y = Math.atan2(dx, dz)
+        strake.rotation.order = 'YXZ'
+      }
+    }
+    // Scuppers: freeing ports cut through the bulwark. Small, but they are
+    // where every rust streak on the topsides starts, so they have to be there.
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 4; i++) {
+        const f = 0.18 + i * 0.16
+        const port = add(
+          new THREE.Mesh(roundBox(thickness * 2.2, bulwarkH * 0.32, depth * 0.3, 0.02), mats.trimSteel)
+        )
+        port.position.set(
+          sx * halfBeamAt(f) * 0.97,
+          deckAt(f) + bulwarkH * 0.2,
+          zAt(f)
+        )
       }
     }
   }
@@ -613,7 +771,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
           const y1 = deckAt(f1) * 0.96 + bulwarkH + stanchionH * h
           const rail = add(
             new THREE.Mesh(
-              new THREE.BoxGeometry(beam * 0.018, beam * 0.018, run * 1.02),
+              roundBox(beam * 0.018, beam * 0.018, run * 1.02),
               mats.antenna
             )
           )
@@ -644,7 +802,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     windlass.position.set(0, bowDeck + beam * 0.09, zAt(bowF))
     // Anchor stowed against the bow.
     const anchor = add(
-      new THREE.Mesh(new THREE.BoxGeometry(beam * 0.06, depth * 0.3, depth * 0.1), mats.hardpoint)
+      new THREE.Mesh(roundBox(beam * 0.06, depth * 0.3, depth * 0.1), mats.hardpoint)
     )
     anchor.position.set(halfBeamAt(0.95) * 0.9, bowDeck * 0.35, zAt(0.95))
     // Bollards, fore and aft.
@@ -669,15 +827,188 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     for (let i = 0; i < count; i++) {
       const f = 0.3 + (i / Math.max(1, count - 1)) * 0.4
       for (const sx of [-1, 1]) {
+        const r = depth * (0.15 + rng() * 0.06)
+        const y = deckAt(f) * 0.34
+        const x = sx * halfBeamAt(f) * 1.02
         const fender = add(
+          new THREE.Mesh(new THREE.TorusGeometry(r, r * 0.36, 8, 14), mats.rubber)
+        )
+        fender.position.set(x, y, zAt(f))
+        fender.rotation.y = Math.PI / 2
+        // Hung on a lanyard from the cap rail, not glued to the plating.
+        const lanyard = add(
           new THREE.Mesh(
-            new THREE.TorusGeometry(depth * 0.16, depth * 0.055, 5, 9),
-            mats.hardpoint
+            new THREE.CylinderGeometry(beam * 0.008, beam * 0.008, deckAt(f) + bulwarkH - y, 5),
+            mats.rope
           )
         )
-        fender.position.set(sx * halfBeamAt(f) * 1.0, deckAt(f) * 0.35, zAt(f))
-        fender.rotation.y = Math.PI / 2
+        lanyard.position.set(x, (y + deckAt(f) + bulwarkH) * 0.5, zAt(f))
       }
+    }
+  }
+
+  // —— Deck fittings ————————————————————————————————————————————————
+  // The small hardware is what separates a modelled deck from an extruded one.
+  // None of it is large; all of it is the stuff your eye expects to find.
+  {
+    // Mushroom ventilators either side of the house.
+    for (const sx of [-1, 1]) {
+      for (const f of [0.34, 0.46]) {
+        const stem = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.028, beam * 0.032, depth * 0.26, 8),
+            mats.trimSteel
+          )
+        )
+        stem.position.set(sx * halfBeamAt(f) * 0.55, deckAt(f) * 0.97 + depth * 0.13, zAt(f))
+        const cowl = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.07, beam * 0.05, depth * 0.06, 10),
+            mats.trimSteel
+          )
+        )
+        cowl.position.set(stem.position.x, deckAt(f) * 0.97 + depth * 0.28, zAt(f))
+      }
+    }
+    // A goose-neck cowl vent, turned away from the weather.
+    {
+      const f = 0.28
+      const neck = add(
+        new THREE.Mesh(
+          new THREE.TorusGeometry(depth * 0.16, beam * 0.035, 6, 10, Math.PI),
+          mats.trimSteel
+        )
+      )
+      neck.position.set(halfBeamAt(f) * 0.7, deckAt(f) * 0.97 + depth * 0.2, zAt(f))
+      neck.rotation.y = Math.PI / 2
+      const bell = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(beam * 0.075, beam * 0.04, depth * 0.1, 10, 1, true),
+          mats.trimSteel
+        )
+      )
+      bell.position.set(halfBeamAt(f) * 0.7, deckAt(f) * 0.97 + depth * 0.2, zAt(f) - depth * 0.18)
+      bell.rotation.x = Math.PI / 2
+    }
+    // Cargo hatch: raised coaming with a tread-plate lid on top.
+    {
+      const f = role === 'trader' ? 0.62 : 0.5
+      const hw = halfBeamAt(f) * 0.52
+      const hl = length * 0.1
+      const coaming = add(
+        new THREE.Mesh(roundBox(hw * 2, depth * 0.18, hl, depth * 0.03), mats.trimSteel)
+      )
+      coaming.position.set(0, deckAt(f) * 0.97 + depth * 0.09, zAt(f))
+      const lid = add(
+        new THREE.Mesh(roundBox(hw * 2.1, depth * 0.05, hl * 1.05, depth * 0.02), mats.tread)
+      )
+      lid.position.set(0, deckAt(f) * 0.97 + depth * 0.2, zAt(f))
+      // Dogs round the coaming so the lid reads as something that opens.
+      for (let i = 0; i < 6; i++) {
+        const t = (i / 5 - 0.5) * hl * 0.92
+        for (const sx of [-1, 1]) {
+          const dog = add(
+            new THREE.Mesh(
+              new THREE.CylinderGeometry(beam * 0.012, beam * 0.012, depth * 0.05, 5),
+              mats.antenna
+            )
+          )
+          dog.rotation.z = Math.PI / 2
+          dog.position.set(sx * hw * 1.05, deckAt(f) * 0.97 + depth * 0.13, zAt(f) + t)
+        }
+      }
+    }
+    // Cleats and fairleads down both sides, where a line would actually lead.
+    for (const f of [0.24, 0.44, 0.68, 0.8]) {
+      for (const sx of [-1, 1]) {
+        const base = add(
+          new THREE.Mesh(roundBox(beam * 0.07, depth * 0.05, beam * 0.05, 0.015), mats.antenna)
+        )
+        base.position.set(sx * halfBeamAt(f) * 0.72, deckAt(f) * 0.97 + depth * 0.025, zAt(f))
+        const horn = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.014, beam * 0.014, beam * 0.1, 6),
+            mats.antenna
+          )
+        )
+        horn.rotation.x = Math.PI / 2
+        horn.position.set(base.position.x, deckAt(f) * 0.97 + depth * 0.06, zAt(f))
+        // Fairlead in the bulwark alongside it.
+        const lead = add(
+          new THREE.Mesh(
+            new THREE.TorusGeometry(depth * 0.06, depth * 0.022, 6, 10),
+            mats.antenna
+          )
+        )
+        lead.position.set(sx * halfBeamAt(f) * 0.98, deckAt(f) + bulwarkH * 0.6, zAt(f))
+        lead.rotation.y = Math.PI / 2
+      }
+    }
+    // Mooring warps flaked down on deck, and a coil by the after cleat.
+    for (const sx of [-1, 1]) {
+      for (let i = 0; i < 3; i++) {
+        const coil = add(
+          new THREE.Mesh(
+            new THREE.TorusGeometry(beam * 0.09 - i * beam * 0.014, beam * 0.014, 5, 12),
+            mats.rope
+          )
+        )
+        coil.rotation.x = Math.PI / 2
+        coil.position.set(
+          sx * halfBeamAt(0.2) * 0.6,
+          deckAt(0.2) * 0.97 + depth * 0.02 + i * beam * 0.022,
+          zAt(0.2)
+        )
+        coil.rotation.z = i * 0.7
+      }
+    }
+    // Life rings on the after rail — the one splash of colour a working boat
+    // is guaranteed to carry, and it is legally required to be there.
+    for (const sx of [-1, 1]) {
+      const ring = add(
+        new THREE.Mesh(
+          new THREE.TorusGeometry(depth * 0.15, depth * 0.045, 8, 16),
+          mats.hiVis
+        )
+      )
+      ring.position.set(sx * halfBeamAt(0.16) * 0.95, deckAt(0.16) + bulwarkH + depth * 0.2, zAt(0.16))
+    }
+    // Deck ladder up the front of the house, so the bridge is reachable.
+    {
+      const f = housePos - 0.055
+      const y0 = deckAt(f) * 0.97
+      const rise = houseH * 0.95
+      for (const sx of [-1, 1]) {
+        const rail = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.012, beam * 0.012, rise, 5),
+            mats.antenna
+          )
+        )
+        rail.position.set(sx * beam * 0.07, y0 + rise * 0.5, zAt(f))
+      }
+      for (let i = 0; i < 5; i++) {
+        const rung = add(
+          new THREE.Mesh(
+            new THREE.CylinderGeometry(beam * 0.008, beam * 0.008, beam * 0.15, 5),
+            mats.antenna
+          )
+        )
+        rung.rotation.z = Math.PI / 2
+        rung.position.set(0, y0 + (i + 0.6) * (rise / 5.6), zAt(f))
+      }
+    }
+    // Fire hose reel and a run of lay-flat on the house side.
+    {
+      const f = housePos + 0.04
+      const drum = add(
+        new THREE.Mesh(
+          new THREE.CylinderGeometry(depth * 0.12, depth * 0.12, depth * 0.1, 12),
+          mats.hiVis
+        )
+      )
+      drum.rotation.z = Math.PI / 2
+      drum.position.set(houseW * 1.05, deckAt(f) * 0.97 + depth * 0.35, zAt(f))
     }
   }
 
@@ -694,7 +1025,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
         for (const sx of [-1, 1]) {
           const box = add(
             new THREE.Mesh(
-              new THREE.BoxGeometry(cw, depth * 0.42, length * 0.085),
+              roundBox(cw, depth * 0.42, length * 0.085),
               sIdx % 2 === 0 ? mats.panel : mats.accent
             )
           )
@@ -717,7 +1048,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       craneBase.position.set(0, deckAt(0.42) + depth * 0.25, zAt(0.42))
       const jib = add(
         new THREE.Mesh(
-          new THREE.BoxGeometry(beam * 0.06, beam * 0.06, length * 0.2),
+          roundBox(beam * 0.06, beam * 0.06, length * 0.2),
           mats.structure
         )
       )
@@ -749,7 +1080,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       for (const sx of [-1, 1]) {
         const locker = add(
           new THREE.Mesh(
-            new THREE.BoxGeometry(beam * 0.16, depth * 0.22, length * 0.06),
+            roundBox(beam * 0.16, depth * 0.22, length * 0.06),
             mats.hardpoint
           )
         )
@@ -762,7 +1093,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     }
     // Splinter plating around the house.
     const splinterPlate = add(
-      new THREE.Mesh(new THREE.BoxGeometry(houseW * 2.3, depth * 0.4, houseL * 1.25), mats.panel)
+      new THREE.Mesh(roundBox(houseW * 2.3, depth * 0.4, houseL * 1.25), mats.panel)
     )
     splinterPlate.position.set(0, houseDeck + depth * 0.2, houseZ)
   }
@@ -782,7 +1113,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
         davit.rotation.z = sx * 0.25
       }
       const tender = add(
-        new THREE.Mesh(new THREE.BoxGeometry(beam * 0.16, depth * 0.2, length * 0.11), mats.panel)
+        new THREE.Mesh(roundBox(beam * 0.16, depth * 0.2, length * 0.11), mats.panel)
       )
       tender.position.set(sx * halfBeamAt(0.35) * 1.05, deckAt(0.35) + depth * 0.42, zAt(0.36))
     }
@@ -812,13 +1143,13 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       leg.rotation.x = -0.16
     }
     const head = add(
-      new THREE.Mesh(new THREE.BoxGeometry(beam * 1.3, beam * 0.07, beam * 0.09), mats.structure)
+      new THREE.Mesh(roundBox(beam * 1.3, beam * 0.07, beam * 0.09), mats.structure)
     )
     head.position.set(0, deckAt(0.1) + depth * 1.5, zAt(0.07))
     // Dive platform off the transom.
     const platform = add(
       new THREE.Mesh(
-        new THREE.BoxGeometry(halfBeamAt(0.05) * 1.5, depth * 0.06, length * 0.07),
+        roundBox(halfBeamAt(0.05) * 1.5, depth * 0.06, length * 0.07),
         mats.panel
       )
     )
@@ -827,7 +1158,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
     for (const sx of [-1, 1]) {
       const bin = add(
         new THREE.Mesh(
-          new THREE.BoxGeometry(halfBeamAt(0.4) * 0.5, depth * 0.4, length * 0.16),
+          roundBox(halfBeamAt(0.4) * 0.5, depth * 0.4, length * 0.16),
           mats.radiator
         )
       )
@@ -849,7 +1180,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
 
       const house = add(
         new THREE.Mesh(
-          new THREE.BoxGeometry(beam * 0.34, depth * 0.42, length * 0.07),
+          roundBox(beam * 0.34, depth * 0.42, length * 0.07),
           mats.nacelle
         )
       )
@@ -858,7 +1189,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       // Jib, raked up and out over the transom where the work happens.
       const jibLen = length * 0.4
       const jib = add(
-        new THREE.Mesh(new THREE.BoxGeometry(beam * 0.1, beam * 0.1, jibLen), mats.accent)
+        new THREE.Mesh(roundBox(beam * 0.1, beam * 0.1, jibLen), mats.accent)
       )
       jib.position.set(0, base + depth * 1.05, zAt(cf) - jibLen * 0.38)
       jib.rotation.x = 0.34
@@ -866,7 +1197,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       for (let i = 0; i < 5; i++) {
         const brace = add(
           new THREE.Mesh(
-            new THREE.BoxGeometry(beam * 0.16, beam * 0.03, beam * 0.03),
+            roundBox(beam * 0.16, beam * 0.03, beam * 0.03),
             mats.antenna
           )
         )
@@ -885,7 +1216,7 @@ function addHullDetails(group, hull, mats, role = 'trader') {
       )
       fall.position.set(0, tipY - depth * 0.55, tipZ)
       const hook = add(
-        new THREE.Mesh(new THREE.BoxGeometry(beam * 0.11, depth * 0.16, beam * 0.11), mats.hardpoint)
+        new THREE.Mesh(roundBox(beam * 0.11, depth * 0.16, beam * 0.11), mats.hardpoint)
       )
       hook.position.set(0, tipY - depth * 1.1, tipZ)
     }
@@ -924,7 +1255,7 @@ function addLiteSuperstructure(group, hull, mats) {
   const houseH = depth * 1.05
   // Width uses half-beam * ~1.7 so the lite house stays inside the rails.
   const house = new THREE.Mesh(
-    new THREE.BoxGeometry(stationWidths[mid] * 1.7, houseH, length * 0.13),
+    roundBox(stationWidths[mid] * 1.7, houseH, length * 0.13),
     mats.structure
   )
   house.position.set(0, deck + houseH * 0.5, z)
@@ -932,7 +1263,7 @@ function addLiteSuperstructure(group, hull, mats) {
   group.add(house)
 
   const win = new THREE.Mesh(
-    new THREE.BoxGeometry(stationWidths[mid] * 2.0, houseH * 0.3, length * 0.012),
+    roundBox(stationWidths[mid] * 2.0, houseH * 0.3, length * 0.012),
     mats.window
   )
   win.position.set(0, deck + houseH * 0.72, z + length * 0.066)
@@ -952,6 +1283,102 @@ function addLiteSuperstructure(group, hull, mats) {
   )
   mast.position.set(0, deck + houseH + depth * 0.9, z + length * 0.05)
   group.add(mast)
+
+  // Soot cap on the stack, so the funnel is not a plain pipe at any range.
+  const cap = new THREE.Mesh(
+    new THREE.CylinderGeometry(depth * 0.18, depth * 0.18, depth * 0.08, 8),
+    mats.hardpoint
+  )
+  cap.position.set(0, deck + depth * 0.86, z - length * 0.1)
+  group.add(cap)
+
+  // Bulwarks. Two long slabs, one a side, tapered by scaling rather than by
+  // walking the stations — the deck edge standing proud of the water is the
+  // single silhouette cue that stops a distant contact reading as a raft, and
+  // at lite range nobody can tell it does not follow the sheer exactly.
+  const bulwarkH = depth * 0.32
+  for (const sx of [-1, 1]) {
+    const wall = new THREE.Mesh(
+      roundBox(Math.max(0.05, beam * 0.05), bulwarkH, length * 0.86, 0.02),
+      mats.panel
+    )
+    wall.position.set(sx * beam * 0.9, deck + bulwarkH * 0.45, length * 0.02)
+    wall.castShadow = true
+    group.add(wall)
+    const rail = new THREE.Mesh(
+      roundBox(beam * 0.075, depth * 0.05, length * 0.86, 0.015),
+      mats.trimSteel ?? mats.antenna
+    )
+    rail.position.set(sx * beam * 0.9, deck + bulwarkH * 0.95, length * 0.02)
+    group.add(rail)
+  }
+
+  // One piece of deck cargo, lashed down forward — breaks the empty-deck read.
+  const crate = new THREE.Mesh(
+    roundBox(beam * 0.7, depth * 0.45, length * 0.12, 0.04),
+    mats.panel
+  )
+  crate.position.set(0, deck + depth * 0.22, z + length * 0.24)
+  crate.castShadow = true
+  group.add(crate)
+}
+
+/**
+ * Name on the bow, registry number under it, draught marks at the stem.
+ *
+ * A hull with no lettering reads as a prop. These are alpha-cut quads laid on
+ * the topsides rather than geometry — at any range where you could read them
+ * you are close enough that a decal and a paint job are the same thing, and a
+ * quad costs two triangles.
+ */
+function addHullMarkings(group, shipClass, isPolice) {
+  const hull = shipClass.hull
+  const length = hull.length ?? 20
+  const widths = hull.stationWidths ?? [1.5]
+  const heights = hull.stationHeights ?? [1.2]
+  const h = hashString(shipClass.id)
+  const name = String(shipClass.name ?? shipClass.id).slice(0, 14)
+  const number = isPolice ? `P-${(h % 900) + 100}` : `${(h % 8999) + 1000}`
+  const map = getDecalMap(name, number)
+  if (!map) return
+  const mat = new THREE.MeshStandardMaterial({
+    map,
+    transparent: true,
+    alphaTest: 0.05,
+    roughness: 0.75,
+    metalness: 0.1,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    side: THREE.DoubleSide
+  })
+  const stationAt = (f) => Math.max(0, Math.min(widths.length - 1, Math.round(f * (widths.length - 1))))
+  const w = length * 0.22
+  for (const sx of [-1, 1]) {
+    const f = 0.76
+    const i = stationAt(f)
+    const oy = hull.stationOffsetsY?.[i] ?? 0
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 0.25), mat)
+    quad.position.set(
+      sx * widths[i] * 1.03,
+      oy + heights[i] * 0.42,
+      -length / 2 + f * length
+    )
+    quad.rotation.y = sx * Math.PI * 0.5
+    quad.renderOrder = 3
+    group.add(quad)
+  }
+  // Transom: home port and the number again, the way it is actually painted.
+  const stern = getDecalMap(name, '')
+  if (stern) {
+    const sm = mat.clone()
+    sm.map = stern
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(widths[0] * 1.5, widths[0] * 0.38), sm)
+    quad.position.set(0, (hull.stationOffsetsY?.[0] ?? 0) + heights[0] * 0.5, -length * 0.5 - 0.02)
+    quad.rotation.y = Math.PI
+    quad.renderOrder = 3
+    group.add(quad)
+  }
 }
 
 // Hull + EdgesGeometry are expensive (especially EdgesGeometry). Cache per class.
@@ -1008,13 +1435,13 @@ function addMinerDetails(group, hull, mats) {
   const scoopY = arch === 'silo' ? -peakH * 0.45 : arch === 'prospector' ? -peakH * 0.15 : -peakH * 0.25
   const scoopW = peakW * scoopScale
   const scoopH = peakH * (arch === 'strip' ? 0.35 : 0.55)
-  const scoop = new THREE.Mesh(new THREE.BoxGeometry(scoopW, scoopH, length * (0.08 + (kit % 4) * 0.015)), rust)
+  const scoop = new THREE.Mesh(roundBox(scoopW, scoopH, length * (0.08 + (kit % 4) * 0.015)), rust)
   scoop.position.set(0, scoopY, length * 0.42)
   group.add(scoop)
   // Jaw lips.
   for (const sy of [1, -1]) {
     const lip = new THREE.Mesh(
-      new THREE.BoxGeometry(scoopW * 1.05, peakH * 0.08, length * 0.04),
+      roundBox(scoopW * 1.05, peakH * 0.08, length * 0.04),
       mats.structure
     )
     lip.position.set(0, -peakH * 0.25 + sy * scoopH * 0.48, length * 0.48)
@@ -1023,7 +1450,7 @@ function addMinerDetails(group, hull, mats) {
   // Side scoop plates.
   for (const sx of [-1, 1]) {
     const plate = new THREE.Mesh(
-      new THREE.BoxGeometry(peakW * 0.12, scoopH * 0.9, length * 0.14),
+      roundBox(peakW * 0.12, scoopH * 0.9, length * 0.14),
       mats.panel
     )
     plate.position.set(sx * scoopW * 0.52, -peakH * 0.25, length * 0.42)
@@ -1053,7 +1480,7 @@ function addMinerDetails(group, hull, mats) {
   // Boom support struts.
   for (const sx of [-1, 1]) {
     const strut = new THREE.Mesh(
-      new THREE.BoxGeometry(peakW * 0.05, peakH * 0.35, peakW * 0.05),
+      roundBox(peakW * 0.05, peakH * 0.35, peakW * 0.05),
       mats.structure
     )
     strut.position.set(sx * peakW * 0.35, -peakH * 0.35, length * 0.22)
@@ -1069,7 +1496,7 @@ function addMinerDetails(group, hull, mats) {
     const hh = peakH * (0.55 + rng() * 0.25)
     const hl = length * (0.14 + rng() * 0.06)
     // Trapezoid hopper: wide box + tapered bottom dump.
-    const body = new THREE.Mesh(new THREE.BoxGeometry(hw, hh * 0.65, hl), oreDust)
+    const body = new THREE.Mesh(roundBox(hw, hh * 0.65, hl), oreDust)
     body.position.set(0, -peakH * 0.75, t * length)
     group.add(body)
     const dump = new THREE.Mesh(
@@ -1081,7 +1508,7 @@ function addMinerDetails(group, hull, mats) {
     // Clamp frames.
     for (const sx of [-1, 1]) {
       const frame = new THREE.Mesh(
-        new THREE.BoxGeometry(hw * 0.08, hh * 0.7, hl * 1.05),
+        roundBox(hw * 0.08, hh * 0.7, hl * 1.05),
         mats.structure
       )
       frame.position.set(sx * hw * 0.48, -peakH * 0.72, t * length)
@@ -1089,7 +1516,7 @@ function addMinerDetails(group, hull, mats) {
     }
     // Hazard band on hopper face.
     const band = new THREE.Mesh(
-      new THREE.BoxGeometry(hw * 0.92, hh * 0.08, hl * 0.08),
+      roundBox(hw * 0.92, hh * 0.08, hl * 0.08),
       hazard
     )
     band.position.set(0, -peakH * 0.55, t * length + hl * 0.48)
@@ -1164,13 +1591,13 @@ function addMinerDetails(group, hull, mats) {
   if (length >= 28) {
     const mastH = peakH * 1.4
     const mast = new THREE.Mesh(
-      new THREE.BoxGeometry(peakW * 0.1, mastH, peakW * 0.1),
+      roundBox(peakW * 0.1, mastH, peakW * 0.1),
       mats.structure
     )
     mast.position.set(peakW * 0.15, peakH * 0.9 + mastH * 0.35, -length * 0.05)
     group.add(mast)
     const jib = new THREE.Mesh(
-      new THREE.BoxGeometry(peakW * 0.08, peakW * 0.08, length * 0.32),
+      roundBox(peakW * 0.08, peakW * 0.08, length * 0.32),
       mats.structure
     )
     jib.position.set(peakW * 0.15, peakH * 0.9 + mastH * 0.7, length * 0.08)
@@ -1192,7 +1619,7 @@ function addMinerDetails(group, hull, mats) {
   for (const sx of [-1, 1]) {
     for (let i = 0; i < 5; i++) {
       const stripe = new THREE.Mesh(
-        new THREE.BoxGeometry(peakW * 0.04, peakH * 0.35, length * 0.04),
+        roundBox(peakW * 0.04, peakH * 0.35, length * 0.04),
         hazard
       )
       stripe.position.set(
@@ -1209,13 +1636,13 @@ function addMinerDetails(group, hull, mats) {
   for (const sx of [-1, 1]) {
     for (const zf of [-0.2, 0.15]) {
       const leg = new THREE.Mesh(
-        new THREE.BoxGeometry(peakW * 0.08, peakH * 0.5, peakW * 0.12),
+        roundBox(peakW * 0.08, peakH * 0.5, peakW * 0.12),
         mats.structure
       )
       leg.position.set(sx * peakW * 0.55, -peakH * 1.05, zf * length)
       group.add(leg)
       const pad = new THREE.Mesh(
-        new THREE.BoxGeometry(peakW * 0.28, peakH * 0.08, peakW * 0.35),
+        roundBox(peakW * 0.28, peakH * 0.08, peakW * 0.35),
         rust
       )
       pad.position.set(sx * peakW * 0.55, -peakH * 1.32, zf * length)
@@ -1353,7 +1780,7 @@ function addTurret(group, shipClass, mats) {
   // Gunhouse: a squat shield, flat-backed so the bearing is readable at a
   // glance from the chase camera.
   const house = new THREE.Mesh(
-    new THREE.BoxGeometry(ringR * 1.9, mount.height * 0.78, ringR * 2.1),
+    roundBox(ringR * 1.9, mount.height * 0.78, ringR * 2.1),
     mats.panel
   )
   house.position.y = mount.height * 0.62
@@ -1386,7 +1813,7 @@ function addTurret(group, shipClass, mats) {
 
   // Recoil cradle, so the barrel has something to pivot in.
   const cradle = new THREE.Mesh(
-    new THREE.BoxGeometry(barrelR * 4.2, barrelR * 3.4, mount.barrel * 0.3),
+    roundBox(barrelR * 4.2, barrelR * 3.4, mount.barrel * 0.3),
     mats.structure
   )
   cradle.position.z = mount.barrel * 0.12
@@ -1396,7 +1823,9 @@ function addTurret(group, shipClass, mats) {
   return group.userData.turret
 }
 
-// Shared nav-light materials (MeshBasic — no PointLights, so no material recompiles).
+// Shared nav-light materials (MeshBasic for the bulbs). Local glow is offered
+// each frame to the fixed areaLightPool — never add PointLights per ship (that
+// changes NUM_POINT_LIGHTS and freezes the title / combat when meshes stream).
 let _navMats = null
 function navLightMaterials() {
   if (_navMats) return _navMats
@@ -1431,68 +1860,48 @@ function navLightMaterials() {
 }
 
 /**
- * Soft searchlight volume material. A flat-opacity cylinder reads as a solid
- * cone; this fades along the beam and softens the silhouette so it glows.
+ * Soft searchlight volume material (WebGPU / TSL).
+ * A flat-opacity cylinder reads as a solid cone; this fades along UV.y so the
+ * beam dies toward the tip. Callers write `material.uniforms.uOpacity.value`.
  */
 export function makeSearchlightBeamMaterial(beamLen) {
-  return new THREE.ShaderMaterial({
-    uniforms: {
-      uColor: { value: new THREE.Color(0xfff2cc) },
-      uOpacity: { value: 0 },
-      uLen: { value: beamLen }
-    },
-    vertexShader: /* glsl */ `
-      uniform float uLen;
-      varying float vAlong;
-      varying vec3 vNormal;
-      varying vec3 vViewDir;
-      void main() {
-        // CylinderGeometry is Y-up; after mesh Rx(+π/2), +Y becomes +Z (forward).
-        // Bottom (y = −h/2) is the lamp; top is the far tip.
-        vAlong = clamp((position.y + uLen * 0.5) / uLen, 0.0, 1.0);
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        vNormal = normalize(normalMatrix * normal);
-        vViewDir = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv;
-      }
-    `,
-    fragmentShader: /* glsl */ `
-      uniform vec3 uColor;
-      uniform float uOpacity;
-      varying float vAlong;
-      varying vec3 vNormal;
-      varying vec3 vViewDir;
-      void main() {
-        // Bright near the lamp, dies out toward the tip.
-        // Smoothly roll the visual volume away before the mesh tip; the real
-        // SpotLight below keeps its existing range and throw unchanged.
-        float along = pow(1.0 - smoothstep(0.0, 1.0, vAlong), 1.15);
-        // Soften hard cone walls without killing the beam in chase cam
-        // (looking along +Z, walls are edge-on — keep a floor of haze).
-        float facing = abs(dot(normalize(vNormal), normalize(vViewDir)));
-        float soft = 0.4 + 0.6 * pow(facing, 0.7);
-        // Hot core near the source.
-        float core = mix(1.4, 0.7, vAlong);
-        float a = uOpacity * along * soft * core;
-        if (a < 0.001) discard;
-        gl_FragColor = vec4(uColor * (0.55 + 0.45 * along), a);
-      }
-    `,
+  const uColor = uniform(new THREE.Color(0xfff2cc))
+  const uOpacity = uniform(0)
+  const uLen = uniform(beamLen)
+
+  const mat = new MeshBasicNodeMaterial({
     transparent: true,
     depthWrite: false,
     depthTest: true,
     blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
-    toneMapped: false
+    toneMapped: false,
+    fog: false
   })
+  // Use local Y (cylinder height) so we do not depend on a UV attribute —
+  // some merged/trimmed hull bits strip UVs and crash AttributeNode on WebGPU.
+  mat.colorNode = Fn(() => {
+    const vAlong = positionLocal.y.div(uLen).add(0.5).clamp(0, 1)
+    const along = pow(float(1).sub(smoothstep(float(0), float(1), vAlong)), 1.15)
+    const core = mix(float(1.4), float(0.7), vAlong)
+    const a = uOpacity.mul(along).mul(core).mul(0.85)
+    const rgb = uColor.mul(float(0.55).add(along.mul(0.45)))
+    return vec4(rgb, a)
+  })()
+  mat.uniforms = { uColor, uOpacity, uLen }
+  return mat
 }
 
 /**
  * Coloured running lights — port red, starboard green, stern + masthead white.
- * Visible only at night (see updateShipNightLights). Pure emissive meshes.
+ * Visible only at night (see updateShipNightLights). Emissive bulbs + emitter
+ * descriptors for the shared area-light pool.
+ *
+ * @param {{ lite?: boolean }} [opts] lite NPCs get fewer pool offers (cost).
  */
-function addRunningLights(group, hull) {
+function addRunningLights(group, hull, opts = {}) {
   const mats = navLightMaterials()
+  const lite = !!opts.lite
   const length = hull?.length ?? 18
   const beam = Math.max(...(hull?.stationWidths ?? [2])) * 2
   const heights = hull?.stationHeights ?? [1.2]
@@ -1501,8 +1910,10 @@ function addRunningLights(group, hull) {
   const sternH = heights[0] ?? midH
   const r = Math.max(0.06, beam * 0.04)
   const meshes = []
+  /** @type {{ x: number, y: number, z: number, color: number, base: number, distance: number, priority: number }[]} */
+  const emitters = []
 
-  function lamp(mat, glowMat, x, y, z, scale = 1) {
+  function lamp(mat, glowMat, x, y, z, scale = 1, lightOpts = null) {
     const core = new THREE.Mesh(new THREE.SphereGeometry(r * scale, 8, 6), mat)
     core.position.set(x, y, z)
     const glow = new THREE.Mesh(new THREE.SphereGeometry(r * scale * 1.7, 8, 6), glowMat)
@@ -1511,19 +1922,62 @@ function addRunningLights(group, hull) {
     meshes.push(core, glow)
     core.visible = false
     glow.visible = false
+    if (lightOpts) {
+      emitters.push({
+        x,
+        y,
+        z,
+        color: lightOpts.color,
+        base: lightOpts.base,
+        distance: lightOpts.distance,
+        priority: lightOpts.priority ?? 2
+      })
+    }
   }
 
   // Port (left / −X) red, starboard (+X) green — midway along the sheer.
+  // Subtle: nav lights are markers, not floodlights.
   const sideY = midH * 0.55
   const sideZ = length * 0.08
-  lamp(mats.port, mats.portGlow, -beam * 0.52, sideY, sideZ, 1)
-  lamp(mats.starboard, mats.starboardGlow, beam * 0.52, sideY, sideZ, 1)
-  // Stern white.
-  lamp(mats.white, mats.whiteGlow, 0, sternH * 0.7, -length * 0.48, 0.95)
-  // Masthead / bow all-round white — high for range.
-  lamp(mats.white, mats.whiteGlow, 0, bowH * 1.35 + midH * 0.4, length * 0.22, 1.15)
+  const sideDist = 14 + beam * 0.8
+  const sideBase = lite ? 280 : 420
+  lamp(mats.port, mats.portGlow, -beam * 0.52, sideY, sideZ, 1, {
+    color: 0xff3030,
+    base: sideBase,
+    distance: sideDist,
+    priority: lite ? 1 : 2
+  })
+  lamp(mats.starboard, mats.starboardGlow, beam * 0.52, sideY, sideZ, 1, {
+    color: 0x30ff60,
+    base: sideBase,
+    distance: sideDist,
+    priority: lite ? 1 : 2
+  })
+  // Stern + masthead: full detail only (lite NPCs skip to cap pool pressure).
+  if (!lite) {
+    lamp(mats.white, mats.whiteGlow, 0, sternH * 0.7, -length * 0.48, 0.95, {
+      color: 0xfff0d8,
+      base: 360,
+      distance: 12 + beam * 0.5,
+      priority: 2
+    })
+    lamp(mats.white, mats.whiteGlow, 0, bowH * 1.35 + midH * 0.4, length * 0.22, 1.15, {
+      color: 0xfff5e8,
+      base: 520,
+      distance: 18 + length * 0.15,
+      priority: 2
+    })
+  } else {
+    // One all-round white so a distant contact still has a soft halo.
+    lamp(mats.white, mats.whiteGlow, 0, bowH * 1.35 + midH * 0.4, length * 0.22, 1.15, {
+      color: 0xfff5e8,
+      base: 300,
+      distance: 16,
+      priority: 1
+    })
+  }
 
-  group.userData.runningLights = { meshes, lastNight: -1 }
+  group.userData.runningLights = { meshes, emitters, lightLevel: 0, lastNight: -1 }
 }
 
 /**
@@ -1656,15 +2110,43 @@ export function toggleSearchlight(mesh) {
 export function updateShipNightLights(mesh, nightFactor) {
   if (!mesh) return
   const n = Math.min(1, Math.max(0, nightFactor))
-  // Quantise so we skip most frames.
+  // Quantise so we skip most frames for mesh visibility.
   const key = n < 0.06 ? 0 : n < 0.35 ? 1 : n < 0.7 ? 2 : 3
 
   const rl = mesh.userData.runningLights
-  if (rl && rl.lastNight !== key) {
+  if (!rl) return
+  if (rl.lastNight !== key) {
     rl.lastNight = key
     // Shared materials — only toggle visibility, never per-mesh opacity.
     const on = key > 0
     for (const m of rl.meshes) m.visible = on
+  }
+  // Continuous level for the area-light pool (twilight → full night).
+  rl.lightLevel = key === 0 ? 0 : key === 1 ? 0.35 : key === 2 ? 0.7 : 1
+}
+
+const _navWorld = new THREE.Vector3()
+
+/**
+ * Offer this ship's nav lamps to the shared area-light pool.
+ * @param {THREE.Object3D} mesh
+ * @param {{ offer: Function }} pool
+ */
+export function offerShipNavAreaLights(mesh, pool) {
+  const rl = mesh?.userData?.runningLights
+  if (!rl?.emitters?.length || !(rl.lightLevel > 0.02) || !pool) return
+  mesh.updateWorldMatrix(true, false)
+  for (const e of rl.emitters) {
+    _navWorld.set(e.x, e.y, e.z).applyMatrix4(mesh.matrixWorld)
+    pool.offer(
+      _navWorld.x,
+      _navWorld.y,
+      _navWorld.z,
+      e.color,
+      e.base * rl.lightLevel,
+      e.distance,
+      e.priority
+    )
   }
 }
 
@@ -1682,6 +2164,9 @@ export function buildShipMesh(shipClass, opts = {}) {
   const group = new THREE.Group()
   group.name = shipClass.id
   const lite = !!opts.lite
+  // Full-detail hulls (player, shipyard, berth) get wet clearcoat + stronger
+  // panel/edge wear. Lite NPCs stay MeshStandard + no EdgesGeometry hitches.
+  const premium = !lite
 
   const isPolice =
     shipClass.faction === 'police' || !!shipClass.hull?.style?.policeLivery
@@ -1705,30 +2190,40 @@ export function buildShipMesh(shipClass, opts = {}) {
   if (!isPolice && !isAlien) {
     baseColor.offsetHSL((wearRng() - 0.5) * 0.04, (wearRng() - 0.5) * 0.08, (wearRng() - 0.5) * 0.06)
   }
-  const mats = makeDetailMaterials(isPolice ? new THREE.Color(0x1a1c20) : baseColor)
+  const mats = makeDetailMaterials(isPolice ? new THREE.Color(0x1a1c20) : baseColor, {
+    premium
+  })
 
   if (isMiner && !isAlien) {
     // Ore-stained industrial plate — darker, rougher, more corrosion map.
-    mats.panel = new THREE.MeshStandardMaterial({
+    // Still wet at the waterline via a thin clearcoat so they don't read dry
+    // plastic next to a premium freighter.
+    mats.panel = new THREE.MeshPhysicalMaterial({
       color: baseColor.clone().multiplyScalar(0.62),
       metalness: 0.55,
-      roughness: 0.72,
-      envMapIntensity: 0.65,
-      ...shipArmorMaps(1.2)
+      roughness: premium ? 0.64 : 0.72,
+      envMapIntensity: premium ? 0.85 : 0.65,
+      clearcoat: premium ? 0.28 : 0.12,
+      clearcoatRoughness: 0.48,
+      ...shipArmorMaps(1.3)
     })
-    mats.structure = new THREE.MeshStandardMaterial({
+    mats.structure = new THREE.MeshPhysicalMaterial({
       color: baseColor.clone().offsetHSL(-0.02, -0.05, -0.08),
       metalness: 0.6,
-      roughness: 0.65,
-      envMapIntensity: 0.7,
-      ...shipStructureMaps(1.1)
+      roughness: premium ? 0.58 : 0.65,
+      envMapIntensity: premium ? 0.9 : 0.7,
+      clearcoat: premium ? 0.32 : 0.14,
+      clearcoatRoughness: 0.42,
+      ...shipStructureMaps(1.2)
     })
-    mats.accent = new THREE.MeshStandardMaterial({
+    mats.accent = new THREE.MeshPhysicalMaterial({
       color: 0xd09018,
       metalness: 0.35,
-      roughness: 0.58,
-      envMapIntensity: 0.7,
-      ...shipHullMaps(1.0)
+      roughness: 0.55,
+      envMapIntensity: premium ? 0.88 : 0.7,
+      clearcoat: premium ? 0.25 : 0.1,
+      clearcoatRoughness: 0.45,
+      ...shipHullMaps(1.1)
     })
   }
 
@@ -1740,13 +2235,15 @@ export function buildShipMesh(shipClass, opts = {}) {
       roughness: 0.62,
       emissive: baseColor.clone().multiplyScalar(0.12),
       emissiveIntensity: 0.35,
-      ...alienPlateMaps(0.9)
+      envMapIntensity: premium ? 0.9 : 0.7,
+      ...alienPlateMaps(0.95)
     })
     mats.structure = new THREE.MeshStandardMaterial({
       color: baseColor.clone().offsetHSL(0.05, 0.1, -0.1),
       metalness: 0.28,
       roughness: 0.7,
-      ...alienHullMaps(0.95)
+      envMapIntensity: premium ? 0.85 : 0.65,
+      ...alienHullMaps(1.0)
     })
     mats.engineGlow = new THREE.MeshBasicMaterial({
       color: 0x9bff4a,
@@ -1767,45 +2264,67 @@ export function buildShipMesh(shipClass, opts = {}) {
   }
 
   const { geometry, seams, rim: rimGeo } = getCachedHullGeometries(shipClass)
-  // Worn seagoing metal: mid metalness, high roughness. Jitter so fleet
-  // members of the same class still look individually weathered.
-  const metalJ = 0.48 + wearRng() * 0.18
-  const roughJ = 0.55 + wearRng() * 0.18
-  const material = isPolice
-    ? new THREE.MeshStandardMaterial({
-        color: baseColor,
-        side: THREE.DoubleSide,
-        metalness: 0.32,
-        roughness: 0.52,
-        envMapIntensity: 0.9,
-        // Light diamond plate under white so police are not flat plastic.
-        ...shipPaintMaps(0.85)
-      })
-    : isAlien
-      ? new THREE.MeshStandardMaterial({
-          color: baseColor,
-          side: THREE.DoubleSide,
-          metalness: 0.32,
-          roughness: 0.58,
-          emissive: baseColor.clone().multiplyScalar(0.08),
-          emissiveIntensity: 0.28,
-          envMapIntensity: 0.7,
-          ...alienHullMaps(0.95)
-        })
-      : new THREE.MeshStandardMaterial({
-          color: baseColor,
-          side: THREE.DoubleSide,
-          metalness: isMiner ? metalJ + 0.05 : metalJ,
-          roughness: isMiner ? Math.min(0.82, roughJ + 0.08) : roughJ,
-          envMapIntensity: isMiner ? 0.68 : 0.82,
-          ...mapsForWearKit(wearKit, isMiner ? 1.25 : 1.2)
-        })
+  // Lift the livery a touch so the plate albedo has something to tint (pure
+  // dark paint under high metalness reads black under soft overcast).
+  if (premium && !isAlien && !isPolice) {
+    baseColor.offsetHSL(0, -0.02, 0.055)
+  }
+
+  // Depth of the hull, used by the surface shader to size the boot-top band and
+  // the salt bloom. Same number the detail placement works from.
+  const hullDepth = Math.max(...(shipClass.hull.stationHeights ?? [1.2]))
+
+  let material
+  if (isPolice) {
+    // Authority white: fresh paint, so far less oxide, but still a boot-top and
+    // a salt line — a patrol boat lives in the same water as everyone else.
+    material = makeHullMaterial({
+      color: baseColor,
+      depth: hullDepth,
+      kind: 'super',
+      premium,
+      rust: 0.22,
+      fouling: 0.7,
+      metalness: 0.86,
+      antifouling: 0x2a2f36
+    })
+  } else if (isAlien) {
+    material = new THREE.MeshStandardMaterial({
+      color: baseColor,
+      side: THREE.DoubleSide,
+      metalness: 0.32,
+      roughness: 0.58,
+      emissive: baseColor.clone().multiplyScalar(0.08),
+      emissiveIntensity: 0.28,
+      envMapIntensity: premium ? 0.95 : 0.7,
+      ...alienHullMaps(premium ? 1.05 : 0.95)
+    })
+  } else {
+    // Working hull. How hard she has been used is per-class, so two green
+    // traders are not the same boat with a different name: the wear kit picks
+    // how much oxide has won, and antifouling is whatever was in the shed.
+    const rustAmt =
+      wearKit === 'dark' ? 1.15 : wearKit === 'paint' ? 0.45 : wearKit === 'metal' ? 0.75 : 0.95
+    material = makeHullMaterial({
+      color: baseColor,
+      depth: hullDepth,
+      kind: 'hull',
+      premium,
+      rust: (isMiner ? rustAmt * 1.2 : rustAmt) * (0.85 + wearRng() * 0.3),
+      fouling: 0.75 + wearRng() * 0.6,
+      metalness: 0.86 + wearRng() * 0.05,
+      antifouling: [0x53211a, 0x3a2118, 0x24302a, 0x4a1c2a][hashString(shipClass.id) % 4]
+    })
+  }
   const hullMesh = new THREE.Mesh(geometry, material)
   hullMesh.castShadow = true
   hullMesh.receiveShadow = true
+  hullMesh.name = 'hull-skin'
   group.add(hullMesh)
 
   // Edge overlays are cosmetic; skip for NPCs to avoid combat-spawn hitches.
+  // Keep rims dark and quiet — bright cyan LineBasic on a clearcoat hull reads
+  // as a neon outline (especially winged explorers like Far Reach).
   if (!lite) {
     group.add(
       new THREE.LineSegments(
@@ -1813,7 +2332,7 @@ export function buildShipMesh(shipClass, opts = {}) {
         new THREE.LineBasicMaterial({
           color: isPolice ? 0x1a2030 : isAlien ? 0x1a3020 : isMiner ? 0x1a1208 : 0x0a0c10,
           transparent: true,
-          opacity: isPolice ? 0.55 : isAlien ? 0.45 : isMiner ? 0.5 : 0.35
+          opacity: isPolice ? 0.55 : isAlien ? 0.45 : isMiner ? 0.5 : 0.38
         })
       )
     )
@@ -1821,9 +2340,9 @@ export function buildShipMesh(shipClass, opts = {}) {
       new THREE.LineSegments(
         rimGeo,
         new THREE.LineBasicMaterial({
-          color: isPolice ? 0xc8d4e8 : isAlien ? 0x7fff6a : isMiner ? 0xc4a060 : 0x6a8aaa,
+          color: isPolice ? 0xb8c4d4 : isAlien ? 0x4a8a48 : isMiner ? 0x8a7048 : 0x4a5a68,
           transparent: true,
-          opacity: isPolice ? 0.35 : isAlien ? 0.28 : isMiner ? 0.22 : 0.16
+          opacity: isPolice ? 0.28 : isAlien ? 0.18 : isMiner ? 0.16 : 0.12
         })
       )
     )
@@ -1873,7 +2392,9 @@ export function buildShipMesh(shipClass, opts = {}) {
   const turret = addTurret(group, shipClass, mats)
 
   // Nav lights on every hull; player gets a fixed bow searchlight (L key).
-  addRunningLights(group, shipClass.hull)
+  if (!lite && !isAlien) addHullMarkings(group, shipClass, isPolice)
+
+  addRunningLights(group, shipClass.hull, { lite })
   if (opts.searchlight) addSearchlight(group, shipClass.hull, { withSpot: true })
 
   // Police: bold black/white livery + red/blue emergency flashers.
@@ -1881,7 +2402,9 @@ export function buildShipMesh(shipClass, opts = {}) {
     addPoliceDetails(group, shipClass.hull, geometry)
   }
 
-  retileShipUVs(group)
+  // Premium hulls get slightly denser plating so panel lines hold up closer;
+  // lite NPCs keep coarser tiles (cheaper mips, still reads as metal at range).
+  retileShipUVs(group, premium ? 0.85 : 1.05)
   // The hull is the main receiver; fittings and superstructure must both cast
   // and receive too or the ship reads as a uniformly lit cut-out.
   group.traverse((object) => {
@@ -1892,6 +2415,7 @@ export function buildShipMesh(shipClass, opts = {}) {
       object.receiveShadow = true
     }
   })
+  group.userData.premiumHull = premium
   return group
 }
 
@@ -1911,15 +2435,21 @@ export function buildShipMesh(shipClass, opts = {}) {
  * Skips anything without a colour map: canopies, engine glow and other emissive
  * bits are untextured and only pay the cost.
  */
-function retileShipUVs(group) {
+function retileShipUVs(group, tileWorld = 0.85) {
   group.traverse((o) => {
     if (!o.isMesh || !o.geometry) return
     if (o.geometry.userData.shipRetiled) return
     const mats = Array.isArray(o.material) ? o.material : [o.material]
-    if (!mats.some((m) => m?.map)) return
-    // Larger tiles (~2 world units) so armor/rust photos read as plate sheets
-    // from chase-cam range instead of a fine noise field.
-    const retiled = retileUVsTriplanar(o.geometry, 1.85)
+    // The hull material samples the plate maps inside its node graph and never
+    // sets `.map`, so ask the material whether it is textured rather than
+    // sniffing for a slot that will never be filled.
+    if (!mats.some((m) => m?.map || m?.userData?.shipTextured)) return
+    // Shell plating is authored at ship-strake size (~2.4 m per tile) so seams
+    // and butt joints land where a real plate boundary would. Fittings are an
+    // order of magnitude smaller and need a correspondingly tighter tile or
+    // every bollard carries one giant plate seam across it.
+    const dens = o.name === 'hull-skin' ? 0.4 : tileWorld
+    const retiled = retileUVsTriplanar(o.geometry, dens)
     retiled.userData.shipRetiled = true
     o.geometry = retiled
   })
@@ -1993,7 +2523,7 @@ function addPoliceDetails(group, hull, hullGeometry) {
 
   // Wide dorsal black racing stripe (nose → tail).
   const dorsal = new THREE.Mesh(
-    new THREE.BoxGeometry(Math.max(0.55, width * 0.14), Math.max(0.18, height * 0.08), len * 0.72),
+    roundBox(Math.max(0.55, width * 0.14), Math.max(0.18, height * 0.08), len * 0.72),
     mats.black
   )
   dorsal.position.set(center.x, topY + height * 0.04, center.z * 0.15)
@@ -2001,7 +2531,7 @@ function addPoliceDetails(group, hull, hullGeometry) {
 
   // Nose cone black cap.
   const nose = new THREE.Mesh(
-    new THREE.BoxGeometry(width * 0.55, height * 0.55, len * 0.12),
+    roundBox(width * 0.55, height * 0.55, len * 0.12),
     mats.black
   )
   nose.position.set(center.x, center.y * 0.3, box.max.z - len * 0.04)
@@ -2009,7 +2539,7 @@ function addPoliceDetails(group, hull, hullGeometry) {
 
   // Rear black band.
   const tail = new THREE.Mesh(
-    new THREE.BoxGeometry(width * 0.7, height * 0.5, len * 0.1),
+    roundBox(width * 0.7, height * 0.5, len * 0.1),
     mats.black
   )
   tail.position.set(center.x, center.y * 0.2, box.min.z + len * 0.05)
@@ -2018,14 +2548,14 @@ function addPoliceDetails(group, hull, hullGeometry) {
   // Side black panels + wing tips.
   for (const side of [-1, 1]) {
     const sidePanel = new THREE.Mesh(
-      new THREE.BoxGeometry(Math.max(0.2, width * 0.06), height * 0.45, len * 0.4),
+      roundBox(Math.max(0.2, width * 0.06), height * 0.45, len * 0.4),
       mats.black
     )
     sidePanel.position.set(side * width * 0.42, center.y * 0.15, center.z)
     group.add(sidePanel)
 
     const tip = new THREE.Mesh(
-      new THREE.BoxGeometry(width * 0.22, height * 0.12, len * 0.14),
+      roundBox(width * 0.22, height * 0.12, len * 0.14),
       mats.black
     )
     tip.position.set(side * width * 0.55, center.y * 0.1, center.z - len * 0.05)
@@ -2035,7 +2565,7 @@ function addPoliceDetails(group, hull, hullGeometry) {
   // Checker-style mid-hull blocks.
   for (let i = 0; i < 3; i++) {
     const block = new THREE.Mesh(
-      new THREE.BoxGeometry(width * 0.18, height * 0.14, len * 0.08),
+      roundBox(width * 0.18, height * 0.14, len * 0.08),
       i % 2 === 0 ? mats.black : mats.white
     )
     block.position.set(
@@ -2050,7 +2580,7 @@ function addPoliceDetails(group, hull, hullGeometry) {
   const barY = topY + height * 0.12
   const barZ = center.z + len * 0.08
   const housing = new THREE.Mesh(
-    new THREE.BoxGeometry(width * 0.42, height * 0.1, len * 0.1),
+    roundBox(width * 0.42, height * 0.1, len * 0.1),
     mats.black
   )
   housing.position.set(center.x, barY, barZ)

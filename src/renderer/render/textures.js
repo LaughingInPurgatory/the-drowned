@@ -111,14 +111,33 @@ function loadMap(url, opts = {}) {
     undefined,
     () => console.warn('[textures] failed to load', resolved)
   )
+  // WebGPU Textures.updateTexture crashes on Texture.DEFAULT_IMAGE (null) when
+  // version > 0 — Texture's constructor always bumps version once. Hold the
+  // GPU upload until the JPEG lands (configureMap sets needsUpdate then).
+  tex.version = 0
   tex.userData = tex.userData ?? {}
   tex.userData._mapClones = []
   tex.userData._srcUrl = resolved
   return applyMapSettings(tex, opts, false)
 }
 
+// Which ambientCG sets actually ship a `_metalness.jpg`. Asking for one that
+// does not exist (rock, used by the `rubble` station role) 404s on every load
+// and leaves a permanently image-less texture bound to the material.
+const METALNESS_SETS = new Set([
+  'alienbio',
+  'alienplate',
+  'armor',
+  'darkmetal',
+  'painted',
+  'plates',
+  'shipmetal',
+  'trim'
+])
+
 function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {}) {
-  const key = `${prefix}|${repeatU}x${repeatV}|m${withMetalness ? 1 : 0}`
+  const wantMetal = withMetalness && METALNESS_SETS.has(prefix)
+  const key = `${prefix}|${repeatU}x${repeatV}|m${wantMetal ? 1 : 0}`
   if (cache[key]) return cache[key]
   // Headless (node --test): there is no image pipeline to load into. Return no
   // maps rather than throwing, so mesh builders stay callable in tests.
@@ -131,7 +150,9 @@ function loadSet(prefix, { repeatU = 4, repeatV = 2, withMetalness = false } = {
   const normalMap = loadMap(`textures/${prefix}_normal.jpg`, opts)
   const roughnessMap = loadMap(`textures/${prefix}_roughness.jpg`, opts)
   const set = { map, normalMap, roughnessMap }
-  if (withMetalness) {
+  // Only bind metalness when the set actually ships a map — otherwise rock/grass
+  // etc. 404 forever and leave an empty texture bound to the material.
+  if (wantMetal) {
     set.metalnessMap = loadMap(`textures/${prefix}_metalness.jpg`, opts)
   }
   cache[key] = set
@@ -213,6 +234,635 @@ export function getPlantTextures(kind) {
   }
   if (kind === 'bark' || kind === 'trunk') return getPropTextures('bark')
   return undefined
+}
+
+// ── Procedural terrain layers ───────────────────────────────────────────────
+//
+// Four tileable PBR layers the island shader splats between (render/
+// terrainMaterial.js). Generated here rather than loaded, so there is one set
+// for the whole world — ~170 islands share these nine textures and allocate
+// nothing per body.
+//
+// Two maps per layer, four channels of data each, so the shader gets
+// everything it needs in two fetches per plane:
+//
+//   map        RGB albedo (sRGB)          A  roughness
+//   normalMap  RGB tangent normal (GL)    A  height
+//
+// The height in the normal map's alpha is the important one: it drives the
+// height-blend mask, which is what makes gravel poke through sand along a
+// ragged natural edge instead of the two cross-fading like a slide dissolve.
+
+/** Layer tile resolution. At the ~5.5 m world tile this is ~1 cm / texel. */
+const TERRAIN_LAYER_SIZE = 512
+/** Micro-detail normal — tiled far denser, so it can be smaller. */
+const TERRAIN_DETAIL_SIZE = 256
+
+function makeCanvas(w, h) {
+  if (typeof document !== 'undefined' && typeof document.createElement === 'function') {
+    const c = document.createElement('canvas')
+    c.width = w
+    c.height = h
+    return c
+  }
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h)
+  return null
+}
+
+/**
+ * Seamless value noise on an integer lattice.
+ *
+ * Every octave wraps its lattice at its own frequency, so the result tiles
+ * exactly at UV 1.0 — which is the whole point, since these maps repeat every
+ * few metres of coastline and any seam would draw a grid across the island.
+ */
+function makeTileableNoise(seed) {
+  // Periods are per-axis. A single shared period silently breaks the seam on
+  // any anisotropic noise — which is most of them here, since bedding planes
+  // and grass blades are exactly the case where the two axes differ.
+  const hash = (ix, iy, perX, perY) => {
+    const x = ((ix % perX) + perX) % perX
+    const y = ((iy % perY) + perY) % perY
+    let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 2654435761)
+    h = Math.imul(h ^ (h >>> 13), 1274126177)
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296
+  }
+  const value = (x, y, perX, perY) => {
+    const x0 = Math.floor(x)
+    const y0 = Math.floor(y)
+    const fx = x - x0
+    const fy = y - y0
+    const u = fx * fx * (3 - 2 * fx)
+    const v = fy * fy * (3 - 2 * fy)
+    const a = hash(x0, y0, perX, perY)
+    const b = hash(x0 + 1, y0, perX, perY)
+    const c = hash(x0, y0 + 1, perX, perY)
+    const d = hash(x0 + 1, y0 + 1, perX, perY)
+    return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+  }
+  /** @param bx,by integer lattice cells across the tile (keeps octaves tileable) */
+  const fbm = (x, y, bx, by, octaves, gain = 0.5) => {
+    let amp = 1
+    let sum = 0
+    let norm = 0
+    let fx = bx
+    let fy = by
+    for (let i = 0; i < octaves; i++) {
+      sum += value(x * fx, y * fy, fx, fy) * amp
+      norm += amp
+      amp *= gain
+      fx *= 2
+      fy *= 2
+    }
+    return sum / norm
+  }
+  /** Sharp creases — cracks, fracture lines, blade edges. */
+  const ridged = (x, y, bx, by, octaves, gain = 0.5) => {
+    let amp = 1
+    let sum = 0
+    let norm = 0
+    let fx = bx
+    let fy = by
+    for (let i = 0; i < octaves; i++) {
+      const v = 1 - Math.abs(value(x * fx, y * fy, fx, fy) * 2 - 1)
+      sum += v * v * amp
+      norm += amp
+      amp *= gain
+      fx *= 2
+      fy *= 2
+    }
+    return sum / norm
+  }
+  /**
+   * Tileable Worley. Pebbles and rock cells need real cell boundaries;
+   * thresholded fbm gives blobs, not stones. `id` is a stable per-cell random
+   * so every cobble can be a different stone rather than the same grey dome.
+   */
+  const worley = (x, y, cellsX, cellsY = cellsX) => {
+    const cx = Math.floor(x * cellsX)
+    const cy = Math.floor(y * cellsY)
+    let f1 = 9
+    let f2 = 9
+    let id = 0
+    for (let j = -1; j <= 1; j++) {
+      for (let i = -1; i <= 1; i++) {
+        const gx = cx + i
+        const gy = cy + j
+        const jx = hash(gx, gy, cellsX, cellsY)
+        const jy = hash(gx + 71, gy + 33, cellsX, cellsY)
+        const dx = x - (gx + jx) / cellsX
+        const dy = y - (gy + jy) / cellsY
+        const d = Math.hypot(dx * cellsX, dy * cellsY)
+        if (d < f1) {
+          f2 = f1
+          f1 = d
+          id = hash(gx + 17, gy + 91, cellsX, cellsY)
+        } else if (d < f2) {
+          f2 = d
+        }
+      }
+    }
+    return { f1, f2, id }
+  }
+  return { hash, value, fbm, ridged, worley }
+}
+
+/**
+ * Turn a height function + a shading function into the packed map pair.
+ *
+ * The normal is derived from the same height field the shader later blends on,
+ * so a chip in the albedo, the bump you see, and the mask that decides whether
+ * gravel wins over sand there are all the same feature.
+ */
+/**
+ * Wrap-aware separable box blur, run twice so the kernel is roughly Gaussian.
+ * A single box leaves its own square footprint in the result, which on a
+ * tiling map is another artefact to explain. Running sums, so O(texels).
+ */
+function blurWrap(src, size, radius) {
+  const n = size * size
+  const w = radius * 2 + 1
+  // One padded line, wrapped at both ends, so the running sum never needs a
+  // modulo in the inner loop. These maps are 512² × 5 channels × 5 layers and
+  // this runs on the main thread at first landfall.
+  const line = new Float32Array(size + 2 * radius + 1)
+  let a = src
+  let b = new Float32Array(n)
+  for (let pass = 0; pass < 4; pass++) {
+    const stride = pass % 2 === 0 ? 1 : size
+    const step = pass % 2 === 0 ? size : 1
+    for (let j = 0; j < size; j++) {
+      const base = j * step
+      for (let k = 0; k < line.length; k++) {
+        line[k] = a[base + ((k - radius + size) % size) * stride]
+      }
+      let sum = 0
+      for (let k = 0; k < w; k++) sum += line[k]
+      for (let k = 0; k < size; k++) {
+        b[base + k * stride] = sum / w
+        sum += line[k + w] - line[k]
+      }
+    }
+    const t = a
+    a = b
+    b = t === src ? new Float32Array(n) : t
+  }
+  return a
+}
+
+/**
+ * Take everything slower than a few cycles per tile out of a tiling map.
+ *
+ * A tiling texture has to be *flat at its own tile size*. Any structure as
+ * large as the tile survives every mip level, so every copy carries the same
+ * blob in the same place, and a blob on a grid is wallpaper — this is what
+ * wrapped every hillside in fish scales, and it is not fixable in the shader:
+ * a single planar fetch of one of these tiles latticed on its own, with no
+ * triplanar and no domain warp involved.
+ *
+ * Subtracting the tile's own low-pass keeps every crack, blade and cobble and
+ * throws away the patch they sat in. Large-scale variation is not lost, it
+ * moves to where it belongs — `terrainMaterial.js` puts it back from macro
+ * noise measured in tens of metres, which is not on a grid.
+ */
+function flattenTile(buf, size, strength = 0.92) {
+  // size/16 puts the cutoff at roughly six cycles per tile. Measured, not
+  // guessed: a 2.6 m tile at the distance the repeat was still visible covers
+  // 26 screen pixels, which is mip level four or five, and what survives at
+  // that mip is the five-to-eight-cycle band. A gentler cutoff (size/8) left
+  // exactly that band intact and the repeat with it.
+  const radius = Math.max(2, Math.round(size / 16))
+  const lp = blurWrap(buf, size, radius)
+  let mean = 0
+  for (let i = 0; i < buf.length; i++) mean += buf[i]
+  mean /= buf.length
+  for (let i = 0; i < buf.length; i++) buf[i] -= (lp[i] - mean) * strength
+}
+
+/** Rescale in place to 0..1. */
+function normalise01(buf) {
+  let lo = Infinity
+  let hi = -Infinity
+  for (let i = 0; i < buf.length; i++) {
+    if (buf[i] < lo) lo = buf[i]
+    if (buf[i] > hi) hi = buf[i]
+  }
+  const span = hi - lo || 1
+  for (let i = 0; i < buf.length; i++) buf[i] = (buf[i] - lo) / span
+}
+
+function encodeTerrainLayer(size, heightFn, shadeFn, bump) {
+  const albedoCanvas = makeCanvas(size, size)
+  const normalCanvas = makeCanvas(size, size)
+  if (!albedoCanvas || !normalCanvas) return null
+  const actx = albedoCanvas.getContext('2d', { willReadFrequently: true })
+  const nctx = normalCanvas.getContext('2d', { willReadFrequently: true })
+  if (!actx || !nctx) return null
+
+  const px = size * size
+  const H = new Float32Array(px)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) H[y * size + x] = heightFn(x / size, y / size)
+  }
+  normalise01(H)
+  // Relief is flattened too, not just colour: a metre-wide swell in the height
+  // map is a metre-wide swell in the normal map and in the splat mask, and it
+  // tiles just as visibly as a colour patch does.
+  flattenTile(H, size)
+  normalise01(H)
+
+  // Shade into float channels first so the same high-pass can be applied to
+  // albedo and roughness before anything is quantised to 8 bits.
+  const chan = [new Float32Array(px), new Float32Array(px), new Float32Array(px), new Float32Array(px)]
+  const rgba = [0, 0, 0, 0]
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x
+      shadeFn(H[i], x / size, y / size, rgba)
+      for (let c = 0; c < 4; c++) chan[c][i] = rgba[c]
+    }
+  }
+  for (let c = 0; c < 4; c++) flattenTile(chan[c], size)
+
+  const aimg = actx.createImageData(size, size)
+  const nimg = nctx.createImageData(size, size)
+  const ad = aimg.data
+  const nd = nimg.data
+  const at = (x, y) => H[(((y % size) + size) % size) * size + ((((x % size) + size) % size))]
+  // Running mean, in the linear space the sampler returns — this is the colour
+  // the layer resolves to once it is too far away to see any of its detail.
+  // Without it, terrain a few hundred metres out still draws a metre-scale tile
+  // at full strength and the repeat reads as woven wallpaper. See
+  // terrainMaterial.js `far`.
+  const toLinear = (c) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4))
+  const sum = [0, 0, 0, 0]
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = y * size + x
+      const o = i * 4
+      const h = H[i]
+      for (let c = 0; c < 4; c++) rgba[c] = Math.max(0, Math.min(1, chan[c][i]))
+      for (let c = 0; c < 3; c++) sum[c] += toLinear(rgba[c])
+      sum[3] += rgba[3]
+      ad[o] = Math.round(rgba[0] * 255)
+      ad[o + 1] = Math.round(rgba[1] * 255)
+      ad[o + 2] = Math.round(rgba[2] * 255)
+      ad[o + 3] = Math.round(rgba[3] * 255)
+
+      // Sobel on the wrapped height field — a central difference alone leaves a
+      // visible ridge of noise on grainy layers like sand.
+      const gx =
+        at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1) -
+        at(x - 1, y - 1) - 2 * at(x - 1, y) - at(x - 1, y + 1)
+      const gy =
+        at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1) -
+        at(x - 1, y - 1) - 2 * at(x, y - 1) - at(x + 1, y - 1)
+      let nx = -gx * bump
+      let ny = -gy * bump
+      let nz = 1
+      const len = Math.hypot(nx, ny, nz) || 1
+      nx /= len
+      ny /= len
+      nz /= len
+      nd[o] = Math.round((nx * 0.5 + 0.5) * 255)
+      nd[o + 1] = Math.round((ny * 0.5 + 0.5) * 255)
+      nd[o + 2] = Math.round((nz * 0.5 + 0.5) * 255)
+      nd[o + 3] = Math.round(h * 255)
+    }
+  }
+  actx.putImageData(aimg, 0, 0)
+  nctx.putImageData(nimg, 0, 0)
+
+  const wrap = (canvasEl, srgb) => {
+    const tex = new THREE.CanvasTexture(canvasEl)
+    if (srgb) tex.colorSpace = THREE.SRGBColorSpace
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping
+    tex.anisotropy = 16
+    tex.minFilter = THREE.LinearMipmapLinearFilter
+    tex.magFilter = THREE.LinearFilter
+    tex.generateMipmaps = true
+    tex.needsUpdate = true
+    return tex
+  }
+  return {
+    map: wrap(albedoCanvas, true),
+    normalMap: wrap(normalCanvas, false),
+    mean: [sum[0] / px, sum[1] / px, sum[2] / px],
+    meanRough: sum[3] / px
+  }
+}
+
+const mixc = (a, b, t) => a + (b - a) * t
+const sstep = (e0, e1, x) => {
+  const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0 || 1e-6)))
+  return t * t * (3 - 2 * t)
+}
+
+/**
+ * Weathered sedimentary rock — the cliff layer.
+ *
+ * Bedding planes are the primary structure, not a fracture honeycomb: a
+ * drowned coastline exposes strata, and horizontal banding is the single
+ * strongest cue that a face is rock and not a brown hill. Cross-fracture,
+ * spall and grain sit on top of it.
+ */
+function makeRockLayer() {
+  const n = makeTileableNoise(1471)
+
+  // Bedding warp — geology, not corduroy. Kept shallow: a warp of a tenth of
+  // the tile turns strata into a churned swirl.
+  const bedU = (x, y) => y + n.fbm(x, y, 3, 2, 3) * 0.055 + n.fbm(x, y, 9, 7, 3) * 0.018
+  /** Which bed a texel belongs to, and how hard that bed is. */
+  const bed = (x, y) => {
+    const u = bedU(x, y)
+    const coarse = n.value(x * 5, u * 17, 5, 17)
+    const fine = n.value(x * 9, u * 41, 9, 41)
+    return { coarse, fine }
+  }
+
+  /**
+   * Two scales of fracture. Rock breaks into blocks along its joints and then
+   * the blocks spall at their corners, and having both is the difference
+   * between a stone face and a crazed pot.
+   */
+  const joints = (x, y) => {
+    const a = n.worley(x, y, 23, 18)
+    const b = n.worley(x + 0.37, y + 0.62, 51, 43)
+    return {
+      wide: 1 - sstep(0, 0.15, a.f2 - a.f1),
+      tight: 1 - sstep(0, 0.24, b.f2 - b.f1),
+      idA: a.id,
+      idB: b.id,
+      domeA: Math.min(1, a.f1),
+      domeB: Math.min(1, b.f1)
+    }
+  }
+
+  const heightFn = (x, y) => {
+    const b = bed(x, y)
+    const j = joints(x, y)
+    // Differential erosion between beds — a 15 cm step at the world tile, not
+    // a shelf you could stand on.
+    const shelf = (sstep(0.36, 0.56, b.coarse) * 0.55 + sstep(0.5, 0.72, b.fine) * 0.45) * 0.3
+    // Blocks stand very slightly proud of their own joints.
+    const block = (1 - j.domeA) * 0.09 + (1 - j.domeB) * 0.06
+    const spall = n.ridged(x, y, 57, 49, 3) * 0.26
+    const chip = n.ridged(x + 1.3, y - 0.7, 127, 111, 2) * 0.13
+    const grain = n.fbm(x, y, 211, 187, 2) * 0.15
+    return shelf + block + spall + chip + grain - j.wide * 0.2 - j.tight * 0.09
+  }
+
+  const shadeFn = (h, x, y, out) => {
+    const b = bed(x, y)
+    const j = joints(x, y)
+    // Per-block tone. A face that spalled recently is paler and cooler than the
+    // weathered rock around it, and that facet-to-facet variation is most of
+    // what reads as stone rather than as brown paint.
+    const tone = j.idA * 0.55 + j.idB * 0.45
+    const iron = n.fbm(x + 0.31, y - 0.17, 13, 10, 3)
+    const lich = sstep(0.6, 0.87, n.fbm(x + 4.1, y - 2.7, 19, 17, 4)) * sstep(0.4, 0.82, h)
+    const soot = sstep(0.42, 0.82, n.fbm(x - 1.9, y + 3.3, 7, 21, 3))
+    const grit = sstep(0.68, 0.94, n.fbm(x + 2.2, y + 5.1, 205, 183, 2))
+    // Wide grey range: crushed dark in the joints, bright quartzy on lit faces.
+    const v = mixc(0.1, 0.64, h * h * 0.5 + h * 0.5) * mixc(0.84, 1.15, tone)
+    // Beds alternate warm buff and cool grey — that alternation is what reads
+    // as strata from a boat, long after the relief has mipped away.
+    let r = v * mixc(0.88, 1.14, b.coarse)
+    let g = v * mixc(0.95, 1.02, b.coarse)
+    let bl = v * mixc(1.1, 0.87, b.coarse)
+    const rust = sstep(0.6, 0.88, iron) * (1 - h * 0.45)
+    r = mixc(r, r * 1.5 + 0.09, rust * 0.55)
+    g = mixc(g, g * 1.07 + 0.02, rust * 0.55)
+    bl = mixc(bl, bl * 0.64, rust * 0.55)
+    // Water-streaked staining down the face.
+    r *= mixc(1, 0.74, soot * 0.45)
+    g *= mixc(1, 0.76, soot * 0.45)
+    bl *= mixc(1, 0.79, soot * 0.45)
+    // Quartz grit catching the light on the exposed grain.
+    r += grit * 0.09
+    g += grit * 0.09
+    bl += grit * 0.085
+    r = mixc(r, 0.26, lich * 0.5)
+    g = mixc(g, 0.31, lich * 0.5)
+    bl = mixc(bl, 0.19, lich * 0.5)
+    out[0] = r
+    out[1] = g
+    out[2] = bl
+    // Sheltered joints stay damp and glossier; exposed faces are chalk-matte.
+    out[3] = mixc(0.6, 0.96, h) - lich * 0.08
+  }
+  return encodeTerrainLayer(TERRAIN_LAYER_SIZE, heightFn, shadeFn, 2.2)
+}
+
+/** Beach sand: wind ripples, grain, shell fleck, the odd buried pebble. */
+function makeSandLayer() {
+  const n = makeTileableNoise(9137)
+  const heightFn = (x, y) => {
+    const warp = n.fbm(x, y, 3, 3, 3) * 0.5
+    // Ripple crests run across the prevailing wind and wander with it.
+    const ripple = Math.sin((x * 2 + y * 1 + warp) * Math.PI * 2 * 5) * 0.5 + 0.5
+    const ripple2 = Math.sin((x * 1 - y * 2 + warp * 1.4) * Math.PI * 2 * 7) * 0.5 + 0.5
+    const drift = n.fbm(x, y, 5, 5, 4)
+    const grain = n.fbm(x, y, 96, 96, 2)
+    const pebble = Math.max(0, 1 - n.worley(x + 0.4, y + 0.7, 7, 7).f1 * 2.6)
+    return (
+      ripple * 0.28 * sstep(0.3, 0.8, drift) +
+      ripple2 * 0.12 +
+      drift * 0.3 +
+      grain * 0.1 +
+      pebble * pebble * 0.3
+    )
+  }
+  const shadeFn = (h, x, y, out) => {
+    const grain = n.fbm(x + 1.7, y - 0.9, 128, 128, 2)
+    const patch = n.fbm(x, y, 4, 4, 3)
+    const dark = n.fbm(x + 5.5, y + 2.2, 24, 24, 3)
+    // Pale warm quartz, darker mineral streaks, bright shell grit on the crests.
+    let r = mixc(0.44, 0.87, h) * mixc(0.92, 1.07, patch)
+    let g = mixc(0.37, 0.79, h) * mixc(0.94, 1.05, patch)
+    let b = mixc(0.27, 0.62, h) * mixc(1.0, 0.98, patch)
+    const speck = sstep(0.74, 0.96, grain)
+    r = mixc(r, 0.95, speck * 0.5)
+    g = mixc(g, 0.92, speck * 0.5)
+    b = mixc(b, 0.85, speck * 0.5)
+    const heavy = sstep(0.62, 0.88, dark)
+    r = mixc(r, r * 0.5, heavy * 0.5)
+    g = mixc(g, g * 0.5, heavy * 0.5)
+    b = mixc(b, b * 0.58, heavy * 0.5)
+    out[0] = r
+    out[1] = g
+    out[2] = b
+    out[3] = 0.93 - speck * 0.12
+  }
+  return encodeTerrainLayer(TERRAIN_LAYER_SIZE, heightFn, shadeFn, 1.5)
+}
+
+/** Shingle: rounded storm-beach cobbles, wet-dark grit in the gaps between. */
+function makeShingleLayer() {
+  const n = makeTileableNoise(5521)
+  /** Nearest cobble at a given cobble scale: dome height + which stone it is. */
+  const stone = (x, y, cells, offX, offY) => {
+    const c = n.worley(x + offX, y + offY, cells, cells)
+    // Per-stone radius so the beach is not a lattice of identical marbles.
+    const rad = 0.42 + c.id * 0.34
+    const d = Math.min(1, c.f1 / rad)
+    return { h: Math.sqrt(Math.max(0, 1 - d * d)), id: c.id, edge: d }
+  }
+  /** Whichever cobble scale wins here — that stone owns the pixel's colour. */
+  const top = (x, y) => {
+    const a = stone(x, y, 7, 0, 0)
+    const b = stone(x, y, 12, 0.37, 0.11)
+    const c = stone(x, y, 20, 0.71, 0.53)
+    a.h *= 1.0
+    b.h *= 0.74
+    c.h *= 0.5
+    let best = a
+    if (b.h > best.h) best = b
+    if (c.h > best.h) best = c
+    return best
+  }
+  const heightFn = (x, y) => {
+    const t = top(x, y)
+    const grit = n.fbm(x, y, 70, 70, 3) * 0.1
+    // Cube the dome so stones sit on a floor of grit rather than merging into
+    // one lumpy sheet — the gaps are what makes shingle read as loose stones.
+    return t.h * t.h * 0.9 + grit
+  }
+  const shadeFn = (h, x, y, out) => {
+    const t = top(x, y)
+    const id = t.id
+    const streak = n.fbm(x + 2.2, y, 30, 26, 3)
+    const grit = n.fbm(x, y, 70, 70, 3)
+    // Flint, granite, sandstone, slate — sampled per stone.
+    let r
+    let g
+    let b
+    if (id < 0.3) {
+      r = 0.2 + id * 0.5
+      g = 0.19 + id * 0.45
+      b = 0.19 + id * 0.4
+    } else if (id < 0.62) {
+      r = 0.42 + (id - 0.3) * 1.1
+      g = 0.4 + (id - 0.3) * 1.0
+      b = 0.36 + (id - 0.3) * 0.85
+    } else if (id < 0.85) {
+      r = 0.5 + (id - 0.62) * 0.9
+      g = 0.42 + (id - 0.62) * 0.75
+      b = 0.3 + (id - 0.62) * 0.5
+    } else {
+      r = 0.22
+      g = 0.25
+      b = 0.29
+    }
+    // Light falls off toward the stone's edge — a lit dome, not a flat disc.
+    const lit = mixc(0.5, 1.18, t.h)
+    r *= lit
+    g *= lit
+    b *= lit
+    const vein = sstep(0.66, 0.9, streak) * t.h
+    r = mixc(r, r * 1.4 + 0.14, vein * 0.5)
+    g = mixc(g, g * 1.38 + 0.13, vein * 0.5)
+    b = mixc(b, b * 1.3 + 0.11, vein * 0.5)
+    // Wet dark grit packed into the gaps between the cobbles.
+    const gap = 1 - sstep(0.02, 0.4, h)
+    r = mixc(r, 0.11 + grit * 0.1, gap * 0.85)
+    g = mixc(g, 0.11 + grit * 0.1, gap * 0.85)
+    b = mixc(b, 0.12 + grit * 0.1, gap * 0.85)
+    out[0] = r
+    out[1] = g
+    out[2] = b
+    // Water sits in the gaps between cobbles — glossier down there.
+    out[3] = mixc(0.42, 0.9, h)
+  }
+  return encodeTerrainLayer(TERRAIN_LAYER_SIZE, heightFn, shadeFn, 3.0)
+}
+
+/** Coastal turf: blade clumps, bare soil scars, dead thatch, moss. */
+function makeGrassLayer() {
+  const n = makeTileableNoise(3313)
+  const bareAt = (x, y) => sstep(0.55, 0.84, n.fbm(x + 3.1, y - 1.4, 3, 3, 3))
+  const heightFn = (x, y) => {
+    // Clumps first, then individual blades inside them. Blades are strongly
+    // anisotropic — isotropic ridged noise reads as lichen, not grass.
+    const clump = n.fbm(x, y, 6, 6, 3)
+    const lean = n.fbm(x, y, 4, 4, 2) * 0.1
+    const blade = n.ridged(x + lean, y, 90, 22, 3, 0.42)
+    const blade2 = n.ridged(x - lean * 1.4 + 0.31, y + 0.17, 54, 14, 2, 0.4)
+    const fine = n.ridged(x, y, 160, 40, 2)
+    return (
+      (clump * 0.3 + blade * 0.32 + blade2 * 0.24 + fine * 0.14) * (1 - bareAt(x, y) * 0.8)
+    )
+  }
+  const shadeFn = (h, x, y, out) => {
+    const bare = bareAt(x, y)
+    const dry = n.fbm(x - 2.3, y + 4.7, 5, 5, 4)
+    const moss = sstep(0.7, 0.93, n.fbm(x, y + 6.1, 14, 14, 3))
+    // Deep shadowed litter at the base of the clump, lit blade tips above.
+    let r = mixc(0.035, 0.3, h)
+    let g = mixc(0.06, 0.42, h)
+    let b = mixc(0.025, 0.14, h)
+    // Sun-bleached straw. Coastal turf is never one saturated green, and a
+    // saturated green terrain layer is exactly what reads as plastic.
+    const bleach = sstep(0.34, 0.8, dry)
+    r = mixc(r, mixc(0.13, 0.66, h), bleach)
+    g = mixc(g, mixc(0.12, 0.58, h), bleach)
+    b = mixc(b, mixc(0.05, 0.25, h), bleach)
+    r = mixc(r, 0.04, moss * 0.4)
+    g = mixc(g, 0.19, moss * 0.4)
+    b = mixc(b, 0.05, moss * 0.4)
+    // Soil scars — dry earth showing through, not a darker green.
+    const soilN = n.fbm(x, y + 8.3, 30, 30, 3)
+    const grit = sstep(0.72, 0.95, n.fbm(x + 6.7, y, 90, 90, 2))
+    r = mixc(r, mixc(0.16, 0.36, soilN) + grit * 0.2, bare)
+    g = mixc(g, mixc(0.11, 0.26, soilN) + grit * 0.18, bare)
+    b = mixc(b, mixc(0.07, 0.17, soilN) + grit * 0.14, bare)
+    out[0] = r
+    out[1] = g
+    out[2] = b
+    out[3] = mixc(0.99, 0.84, h) - bleach * 0.06
+  }
+  return encodeTerrainLayer(TERRAIN_LAYER_SIZE, heightFn, shadeFn, 2.4)
+}
+
+/**
+ * Micro-detail normal. Tiled ~40× denser than the layers so the ground still
+ * has surface under your feet at a metre; faded out with distance by the
+ * shader so it never becomes a shimmering noise field on a far headland.
+ */
+function makeDetailNormal() {
+  const n = makeTileableNoise(7717)
+  const heightFn = (x, y) =>
+    n.fbm(x, y, 12, 12, 4) * 0.5 + n.ridged(x, y, 30, 30, 3) * 0.3 + n.fbm(x, y, 80, 80, 2) * 0.2
+  const shadeFn = (h, x, y, out) => {
+    out[0] = out[1] = out[2] = h
+    out[3] = 1
+  }
+  const pair = encodeTerrainLayer(TERRAIN_DETAIL_SIZE, heightFn, shadeFn, 2.2)
+  return pair?.normalMap ?? null
+}
+
+/**
+ * The island splat set. Built once, shared by every island in the world.
+ * Returns undefined headless (node --test has no canvas).
+ */
+export function getTerrainLayerMaps() {
+  const key = 'terrainLayers|proc|v1'
+  if (cache[key] !== undefined) return cache[key]
+  if (typeof document === 'undefined' && typeof OffscreenCanvas === 'undefined') {
+    cache[key] = undefined
+    return undefined
+  }
+  const rock = makeRockLayer()
+  const sand = makeSandLayer()
+  const shingle = makeShingleLayer()
+  const grass = makeGrassLayer()
+  if (!rock || !sand || !shingle || !grass) {
+    cache[key] = undefined
+    return undefined
+  }
+  const set = { rock, sand, shingle, grass, detailNormal: makeDetailNormal() }
+  cache[key] = set
+  return set
 }
 
 /**
@@ -370,12 +1020,14 @@ const STATION_ROLE = {
   // Ship hulls — neutral/grey photo metals that tint cleanly with class color.
   // `painted` is baked bright orange and muddies every tint; rust-streaked
   // armor / freckled shipmetal / mottled darkmetal read as worn plate instead.
-  shipHull: { prefix: 'armor', repeatU: 3.0, repeatV: 2.2 },
-  shipStructure: { prefix: 'shipmetal', repeatU: 2.6, repeatV: 1.9 },
-  shipArmor: { prefix: 'darkmetal', repeatU: 2.4, repeatV: 1.8 },
-  shipTrim: { prefix: 'trim', repeatU: 2.8, repeatV: 2.0 },
+  // Slightly denser repeats so panel seams / plate freckles read from chase-cam
+  // range without turning into a fine noise field.
+  shipHull: { prefix: 'armor', repeatU: 3.6, repeatV: 2.6 },
+  shipStructure: { prefix: 'shipmetal', repeatU: 3.2, repeatV: 2.3 },
+  shipArmor: { prefix: 'darkmetal', repeatU: 2.9, repeatV: 2.15 },
+  shipTrim: { prefix: 'trim', repeatU: 3.2, repeatV: 2.3 },
   // Cleaner plate for police / fresher paint jobs.
-  shipPaint: { prefix: 'plates', repeatU: 2.8, repeatV: 2.0 },
+  shipPaint: { prefix: 'plates', repeatU: 3.3, repeatV: 2.4 },
   // Alien hulls — ambientCG Rock035 (organic) + MetalPlates006 (chitin plates), CC0.
   alienHull: { prefix: 'alienbio', repeatU: 1.8, repeatV: 1.4 },
   alienPlate: { prefix: 'alienplate', repeatU: 2.2, repeatV: 1.6 }
@@ -598,6 +1250,7 @@ export function preloadCommonTextures() {
     getPlantTextures('foliage')
     getWaterNormalMap()
     getAlgaeAlbedoMap()
+    getTerrainLayerMaps()
   } catch {
     /* */
   }
@@ -653,6 +1306,8 @@ export function cloneStationMaps(maps, { offsetU = 0, offsetV = 0, rot = 0 } = {
       c.needsUpdate = true
     } else {
       // Load still in flight — queue for the original's onLoad to configure us.
+      // version=0: WebGPU must not try to upload DEFAULT_IMAGE (null).
+      c.version = 0
       tex.userData = tex.userData ?? {}
       tex.userData._mapClones = tex.userData._mapClones ?? []
       tex.userData._mapClones.push(c)
@@ -712,13 +1367,15 @@ export function shipMaterialMaps(role, normalStrength = 1.15) {
   const t = getStationTextures(role)
   if (!t?.map && !t?.normalMap) return {}
   const wear = getStationWearTextures()
+  // Stronger AO grime in panel recesses + punchier normals so edge wear and
+  // rivet rows read through class colour tint and wet clearcoat.
   return {
     map: t.map,
     normalMap: t.normalMap,
     roughnessMap: t.roughnessMap,
     metalnessMap: t.metalnessMap,
     aoMap: wear?.aoMap ?? wear?.map,
-    aoMapIntensity: wear?.aoMap || wear?.map ? 0.45 : undefined,
+    aoMapIntensity: wear?.aoMap || wear?.map ? 0.62 : undefined,
     normalScale: new THREE.Vector2(normalStrength, normalStrength)
   }
 }

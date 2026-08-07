@@ -26,8 +26,12 @@ const STRAFE_ACCEL_MULTIPLIER = 1.6
 // Sideways way bleeds off fast — a hull has enormous lateral resistance.
 const STRAFE_DAMPING_PER_SECOND = 0.02
 // How much of the wave normal the hull adopts. Full normal is far too lively —
-// a hull spans several metres and averages the slope it sits across.
-const WAVE_TILT = 0.7
+// a hull spans many metres and averages the slope it sits across. sea.js also
+// fades short chop from waveNormal; this is the second stage of calm.
+const WAVE_TILT = 0.48
+// Temporal blend on the adopted up-vector so a single sharp crest cannot snap
+// the whole superstructure over in one frame.
+const WAVE_UP_SMOOTH = 5.5
 const MAX_BANK = 0.42 // radians of heel into a hard turn
 const BANK_PER_TURN_RATE = 0.55 // heel per radian/sec of yaw
 const BANK_SMOOTHING = 3.5 // per-second approach rate toward target heel
@@ -77,13 +81,30 @@ export function headingOf(shipState) {
  * slope, heeled into the turn, trimmed bow-up under power. Written back to
  * `shipState.quaternion` so every downstream consumer — mesh sync, chase
  * camera, muzzle offsets, radar — keeps reading the same field it always did.
+ *
+ * Optional 4th time-delta (seconds) enables up-vector smoothing. Call sites
+ * that omit it still get the damped WAVE_TILT sample, just without the filter.
  */
-export function applySeaAttitude(shipState, heading, t, bank = 0, trim = 0) {
+export function applySeaAttitude(shipState, heading, t, bank = 0, trim = 0, dt = 0) {
   const pos = shipState.position
   const n = waveNormal(pos[0], pos[2], t)
   // Blend toward world up: the hull averages the slope it spans, and the full
   // normal makes small craft twitch on the short chop.
   _up.set(n.x * WAVE_TILT, n.y * WAVE_TILT + (1 - WAVE_TILT), n.z * WAVE_TILT).normalize()
+  // Smooth the adopted up across frames when we know dt (player + NPC tick).
+  if (dt > 0) {
+    const prev = shipState._seaUp
+    if (prev && prev.length === 3) {
+      const k = 1 - Math.exp(-WAVE_UP_SMOOTH * dt)
+      _up.x += (prev[0] - _up.x) * (1 - k)
+      _up.y += (prev[1] - _up.y) * (1 - k)
+      _up.z += (prev[2] - _up.z) * (1 - k)
+      // Re-normalize after the blend (prev was unit, target is unit).
+      const inv = 1 / (Math.hypot(_up.x, _up.y, _up.z) || 1)
+      _up.multiplyScalar(inv)
+    }
+    shipState._seaUp = [_up.x, _up.y, _up.z]
+  }
   _fwd.set(Math.sin(heading), 0, Math.cos(heading))
   // Orthogonalize the heading against the tilted up so the basis stays rigid.
   _fwd.addScaledVector(_up, -_fwd.dot(_up))
@@ -207,7 +228,14 @@ export function updateFlight(shipState, shipClass, keys, dt, skillOpts = null, t
   )
   shipState.bank ??= 0
   shipState.bank += (targetBank - shipState.bank) * Math.min(1, BANK_SMOOTHING * dt)
-  applySeaAttitude(shipState, heading, t, shipState.bank, TRIM_PITCH * Math.max(0, shipState.throttle))
+  applySeaAttitude(
+    shipState,
+    heading,
+    t,
+    shipState.bank,
+    TRIM_PITCH * Math.max(0, shipState.throttle),
+    dt
+  )
 
   // Exposed for wake/spray VFX + SFX (main.js).
   shipState.strafeX = strafe

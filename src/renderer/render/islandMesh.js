@@ -1,6 +1,25 @@
 import * as THREE from 'three'
+import { MeshStandardNodeMaterial } from 'three/webgpu'
+import {
+  texture,
+  attribute,
+  uv,
+  mix,
+  Fn,
+  float,
+  vec2,
+  vec3,
+  positionLocal,
+  fract,
+  sin,
+  floor,
+  smoothstep,
+  clamp,
+  dot
+} from 'three/tsl'
 import { mulberry32, range, pick } from '../procgen/prng.js'
 import { getSurfaceTextures, getPropTextures, getPlantTextures, retileUVsTriplanar } from './textures.js'
+import { getTerrainMaterial, getRockPropMaterial } from './terrainMaterial.js'
 import { planetArchetypeForBody } from '../game/probe.js'
 import { SEA_MAX_AMPLITUDE } from '../world/sea.js'
 import {
@@ -43,8 +62,10 @@ const SURFACES = {
   shingle: { color: 0xe4ddd4, tex: 'shingle', rough: 0.95, metal: 0.01 },
   rock: { color: 0xe2ddd6, tex: 'rocky', rough: 0.94, metal: 0.02 },
   darkRock: { color: 0xc8c2ba, tex: 'rocky', rough: 0.95, metal: 0.02 },
-  grass: { color: 0xd8e4b8, tex: 'grass', rough: 0.92, metal: 0.0 },
-  scrub: { color: 0xd4d4b0, tex: 'grass', rough: 0.93, metal: 0.0 },
+  // Slightly less pure lime so meadow does not read as a plastic green slab
+  // under noon key light; soil/dry variation lives in the blend shader.
+  grass: { color: 0xd2d6a8, tex: 'grass', rough: 0.93, metal: 0.0 },
+  scrub: { color: 0xcfc8a0, tex: 'grass', rough: 0.94, metal: 0.0 },
   ash: { color: 0xb8b0aa, tex: 'ash', rough: 0.97, metal: 0.03 },
   // Concrete / weathered masonry albedo (ambientCG Concrete034 via textures.js).
   ruin: { color: 0xd8d6d0, tex: 'concrete', rough: 0.92, metal: 0.04 },
@@ -66,9 +87,15 @@ const ARCHETYPE_SURFACES = {
 }
 
 /** Wet rock at the waterline, under whatever the shore is made of. */
-const TIDE_COLOR = new THREE.Color(0x4a4740)
+const TIDE_COLOR = new THREE.Color(0x343c34)
+/** Dark algae-stained rock just above the splash — reads as a wet band. */
+const WET_BAND_COLOR = new THREE.Color(0x252e26)
 /** Bare rock on anything too steep to hold soil, sand or anything else. */
 const CLIFF_COLOR = new THREE.Color(0x6b6660)
+/** Damp sand just above the tide — cooler/darker than dry beach. */
+const WET_SAND_COLOR = new THREE.Color(0xb8a888)
+/** Dry beach sand — warm and pale so the shore separates from meadow. */
+const DRY_SAND_COLOR = new THREE.Color(0xf2e6c8)
 
 /** Common landforms — equal weight. Spire is rolled separately (rare). */
 const LANDFORMS = ['dome', 'ridge', 'mesa', 'stack', 'atoll', 'cluster']
@@ -90,8 +117,12 @@ const HAVEN_HEIGHT_SCALE = 0.65
 /** Chance a substantial island is a mountain spire (not a common pick). */
 const SPIRE_CHANCE = 0.048
 
-const RINGS = 52
-const SEGMENTS = 64
+// A 64-segment ring is a 5.6° step, which on an 800 m island is a 78 m chord —
+// that is the stair-stepped horizon silhouette, and no shader fixes it. At 192
+// the outline reads as a coastline. ~19k vertices per island; main.js keeps
+// about thirty resident, so this is well inside budget.
+const RINGS = 128
+const SEGMENTS = 256
 /** Rings of underwater shelf beyond the coast, so no edge stands proud. */
 const SHELF_RINGS = 6
 /**
@@ -115,6 +146,109 @@ const SKIRT_DEPTH = SEA_MAX_AMPLITUDE + 14
 const COAST_FOOT_Y = -SEA_MAX_AMPLITUDE - 2
 /** Outer land band (in ring parameter 0..1) forced into the steep coastal bank. */
 const COAST_BANK_FROM = 0.86
+
+/**
+ * Where a coastline sits between a shelving beach and a sheer cliff.
+ *
+ * This is the fiction doing geometry: the sea rose over an existing landscape,
+ * so what used to be a hillside is now a headland dropping straight into deep
+ * water, and what used to be a valley floor is now a bay with a beach in it.
+ * One island therefore wants both, on different bearings — a single radial
+ * falloff can only give you the same coast the whole way round.
+ *
+ * Returns `(theta) => 0..1`, 0 = beach, 1 = sheer.
+ */
+function makeCliffField(rng, landform, archetype) {
+  // Some landforms have already decided. A sea stack is all cliff; an atoll is
+  // a sand bar and cannot be anything else.
+  const bias =
+    landform === 'spire' ? 0.94
+    : landform === 'stack' ? 0.86
+    : landform === 'atoll' ? 0.04
+    : landform === 'mesa' ? range(rng, 0.42, 0.78)
+    : archetype === 'barren' ? range(rng, 0.34, 0.72)
+    : archetype === 'volcanic' ? range(rng, 0.4, 0.8)
+    : range(rng, 0.12, 0.55)
+  // Few, broad lobes: headlands and bays, not a scalloped edge.
+  const waves = []
+  const n = 2 + Math.floor(rng() * 3)
+  for (let i = 0; i < n; i++) {
+    waves.push({
+      freq: 1 + Math.floor(rng() * 4),
+      phase: rng() * Math.PI * 2,
+      amp: range(rng, 0.18, 0.48)
+    })
+  }
+  // Erosion: gullies, chimneys and notches cut into the face itself.
+  const notchSeed = rng() * 100
+  const notchAmp = landform === 'atoll' ? 0 : range(rng, 0.5, 1)
+  const field = (theta) => {
+    let v = bias
+    for (const w of waves) v += w.amp * Math.sin(theta * w.freq + w.phase)
+    return Math.max(0, Math.min(1, v))
+  }
+  field.notch = (theta) => {
+    // Sharp, irregular vertical cuts — sea caves and gullies rather than a
+    // smooth wall. Only bites where there is a cliff to bite into.
+    //
+    // Every bearing harmonic in this file is capped by the mesh. SEGMENTS is
+    // 192, so a term in sin(theta * k) gets 192/k samples per cycle and needs
+    // eight of them to survive. k = 41 got 4.7 — the field was aliasing, and
+    // since this term is applied in the coastal bank where the rings pack
+    // tightest, what it produced was a band of alternating triangles round the
+    // waterline of every island. Nothing shaded it; it was the shape.
+    const a = Math.sin(theta * 17 + notchSeed)
+    const b = Math.sin(theta * 23 - notchSeed * 1.7)
+    const c = Math.sin(theta * 7 + notchSeed * 0.3)
+    const v = a * 0.5 + b * 0.32 + c * 0.18
+    // Smooth onset, not a clamped subtraction. `max(0, v - 0.45)` starts the
+    // cut at full gradient the instant it opens, and because the depth is then
+    // ramped linearly across the bank the result has two dead-straight edges —
+    // a machined wedge taken out of the cliff top. Eroded rock does not have
+    // straight edges, and a persistent axis-aligned notch in the same place in
+    // every frame reads as an authoring bug rather than as geology.
+    return smooth01(v, 0.32, 0.86) * 0.5 * notchAmp
+  }
+  return field
+}
+
+/**
+ * Height of one land vertex at ring parameter `t` on bearing `theta`,
+ * including the coastal bank.
+ *
+ * The single definition of where the land stops. The rendered mesh, the props
+ * that sit on it, the on-foot ground sample and the shoreline you run aground
+ * on all come through here, so "right up to the beach" means the beach you can
+ * actually see. Same rule as the sea: one definition, several consumers.
+ */
+function coastalGroundY(t, theta, height, heightAt, landform, cliffAt = heightAt?.coast) {
+  const rr = Math.min(1, Math.max(0, t))
+  const cliff = cliffAt ? cliffAt(theta) : landform === 'spire' ? 0.9 : 0.2
+  // A cliff holds its ground almost to the waterline; a beach starts shelving
+  // a long way out.
+  const base = landform === 'spire' ? 0.9 : COAST_BANK_FROM
+  const from = base + (0.972 - base) * cliff
+  let y = heightAt(rr, theta) * height
+  if (rr <= from || rr >= 1) {
+    return rr >= 1 ? COAST_FOOT_Y : y
+  }
+  const bank = (rr - from) / (1 - from)
+  const s = bank * bank * (3 - 2 * bank)
+  // Sheer coasts stay up, then go over the edge: the exponent is what turns a
+  // ramp into a face.
+  const bankW = Math.pow(s, 1 + cliff * 5.5)
+  const bankTop = heightAt(from, theta) * height
+  const hold = (landform === 'spire' ? 0.55 : 0.35) * (1 - cliff * 0.85)
+  const yField = Math.max(y, bankTop * Math.pow(1 - bank, hold))
+  y = yField * (1 - bankW) + COAST_FOOT_Y * bankW
+  // Erosion notches: cut into the top of the face so the silhouette is
+  // broken rather than a clean extruded outline.
+  if (cliffAt?.notch) {
+    const notch = cliffAt.notch(theta) * cliff
+    if (notch > 0) y -= notch * bankTop * 0.55 * (0.25 + s * 0.75)
+  }
+  return y
+}
 /**
  * World units per UV unit (before texture.repeat). Larger = coarser tiles that
  * still read from the title-screen orbit; too small mipmaps into plastic green.
@@ -346,7 +480,7 @@ function makeHeightField(rng, landform) {
  * bearings, and if the trace samples fewer, land can stand up between two of
  * them — visible ground with no collision behind it.
  */
-const SHORE_SAMPLES = 208
+const SHORE_SAMPLES = 512
 /** Radial steps per bearing. More is a tighter shoreline, at build cost only. */
 const SHORE_STEPS = 48
 /**
@@ -408,15 +542,75 @@ export function getIslandProfile(body) {
   const greenTerrain = archetype === 'scrub' || archetype === 'drowned'
   const reliefSeed = hashString(`${body?.id ?? 'island'}:rolling-ground`) * 0.001
   const roughnessSeed = hashString(`${body?.id ?? 'island'}:surface-roughness`) * 0.001
+  // Relief amplitude as a fraction of island height. The old values were a
+  // tenth of this and the mesh only had 52 rings to carry them, so every
+  // island rendered as one smooth dome whatever was in the field.
   const surfaceRoughness =
-    landform === 'atoll' ? 0.022
-    : landform === 'mesa' ? 0.038
-    : archetype === 'barren' || archetype === 'volcanic' ? 0.072
-    : 0.052
+    landform === 'atoll' ? 0.12
+    : landform === 'mesa' ? 0.24
+    : archetype === 'barren' || archetype === 'volcanic' ? 0.52
+    : 0.38
+
+  // ── Erosion relief ────────────────────────────────────────────────────────
+  // What turns a dome into a coastline. The terms below are the two things a
+  // radial falloff cannot give you, in the order they read from the water.
+  //
+  // **Terraces.** The sea did not stop where it is now. Every stillstand on the
+  // way up cut a bench into the slope, and a bench is a flat tread under a
+  // near-vertical riser. It is the strongest drowned-coastline cue there is,
+  // and it does the splat's job as a side effect: treads are flat enough to
+  // hold turf, risers are steep enough to stay bare rock, so the hillside stops
+  // being one uniform grey wash. Warped in bearing so they follow the rock
+  // instead of ringing the island like a contour line.
+  //
+  // **Tors.** A handful of resistant outcrops standing proud of the slope,
+  // because a skyline with nothing breaking it reads as geometry, not land.
+  //
+  // The ceiling on all of this is the mesh: RINGS × SEGMENTS puts a vertex
+  // every 6–10 m on a large island, so anything narrower than about 20 m cannot
+  // be represented and only aliases against the ring grid.
+  const reliefRng = mulberry32(seed ^ 0x9e3779b9)
+  const terraceSeed = hashString(`${body?.id ?? 'island'}:terraces`) * 0.001
+  // Steps across the island's full height. Few and tall on bare rock (big
+  // cliffs), more and shallower on soft green ground.
+  // Deliberately few. The mesh is the constraint again: a riser is only a
+  // cliff if the grid can put two vertices on it, and at fifteen steps across
+  // a 70 m island the riser was under ten metres of ground run — narrower than
+  // the vertex spacing, so `computeVertexNormals` averaged the whole staircase
+  // straight back into the smooth slope it was cut from. Half as many steps
+  // makes each one twice as tall and twice as wide, and it survives.
+  const terraceCount =
+    landform === 'atoll' ? 0
+    : archetype === 'barren' || archetype === 'volcanic' ? Math.round(range(reliefRng, 4, 7))
+    : Math.round(range(reliefRng, 5, 9))
+  // How much of the slope the terracing replaces. 1 would be a perfect
+  // staircase; leaving some of the smooth field in keeps the treads reading as
+  // ground rather than as a wedding cake.
+  const terraceBite =
+    landform === 'atoll' ? 0
+    : landform === 'spire' ? 0.42
+    : archetype === 'barren' || archetype === 'volcanic' ? 0.88
+    : 0.74
+  const tors = []
+  if (landform !== 'atoll' && landform !== 'stack' && landform !== 'spire') {
+    const n = 2 + Math.floor(reliefRng() * 4)
+    for (let i = 0; i < n; i++) {
+      tors.push({
+        r: range(reliefRng, 0.1, 0.74),
+        theta: reliefRng() * Math.PI * 2,
+        amp: range(reliefRng, 0.12, 0.34),
+        w: range(reliefRng, 0.08, 0.16)
+      })
+    }
+  }
+
   const rawHeight = (r, theta) => {
     const base = baseHeight(r, theta)
     const rr = Math.max(0, Math.min(1, r))
-    const envelope = Math.sin(Math.PI * rr) * Math.pow(Math.max(0, 1 - rr), 0.45)
+    // Relief has to survive out to the coast — the old envelope went to zero at
+    // both ends, so every gully died before it reached the sea and every island
+    // met the water as a clean unbroken curve.
+    const envelope = (0.34 + 0.66 * Math.sin(Math.PI * rr)) * Math.pow(Math.max(0, 1 - rr), 0.3)
     const px = rr * Math.cos(theta)
     const pz = rr * Math.sin(theta)
     let h = base
@@ -428,7 +622,63 @@ export function getIslandProfile(body) {
         Math.sin(px * 5.2 + roughnessSeed) * Math.cos(pz * 4.4 - roughnessSeed * 0.7) * 0.56 +
         Math.sin((px + pz) * 8.4 + roughnessSeed * 1.3) * 0.24 +
         Math.cos(theta * 15.0 + rr * 23.0 - roughnessSeed * 0.4) * 0.2
-      h += macro * surfaceRoughness * envelope
+      // Ridges and gullies. Ridged noise (1 - |sin|) cuts V-shaped valleys and
+      // leaves sharp spurs between them; plain sines only ever give you
+      // rolling swells, which is the shape that reads as a hill made of clay.
+      //
+      // `1 - |sin|` doubles the bearing frequency, so these are capped at 12,
+      // not 24: SEGMENTS is 192, |sin(theta * 12)| repeats every 8 samples, and
+      // anything faster only aliases into a zigzag along the ring grid. The old
+      // 27 was three and a half samples a cycle and got three times louder when
+      // the relief amplitude went up.
+      const spur = 1 - Math.abs(Math.sin(theta * 5 + roughnessSeed + rr * 3.1))
+      const gully = 1 - Math.abs(Math.sin(theta * 9 - roughnessSeed * 1.7 + rr * 6.4))
+      const fine = 1 - Math.abs(Math.sin(theta * 12 + roughnessSeed * 0.9 - rr * 11))
+      const cut = spur * spur * 0.55 + gully * gully * 0.3 + fine * fine * 0.15
+      // Weight the cuts toward the flanks: valleys run down to the sea, they
+      // do not carve through the summit.
+      const flank = Math.pow(rr, 0.6)
+      h += (macro * 0.7 - cut * 0.65 * flank) * surfaceRoughness * envelope
+      // Non-radial relief. The terms above are all functions of (r, theta), so
+      // whatever they do they do it symmetrically about the summit — which is
+      // exactly what makes an island read as a smooth dome from the water.
+      // `reliefFbm` is the only thing in the field that can put a shoulder on
+      // one side and a hollow on the other.
+      const fbm = reliefFbm(px * 1.9 + 3.7, pz * 1.9 - 1.3, roughnessSeed) - 0.5
+      // Ridged noise on top: sharp crests, rounded hollows. Squared so the
+      // crests stay narrow — plain fBm only ever gives rolling swells, which is
+      // the shape that reads as a hill made of clay.
+      const crest = 1 - Math.abs(reliefNoise(px * 3.4 + 8.1, pz * 3.4 - 5.2, roughnessSeed + 41) * 2 - 1)
+      h += (fbm * 1.15 + (crest * crest - 0.33) * 0.5) * surfaceRoughness * envelope
+    }
+    // Tors. Flat-topped rather than Gaussian — an outcrop is a block that
+    // resisted, not a mound that accumulated.
+    for (const tor of tors) {
+      const dx = px - tor.r * Math.cos(tor.theta)
+      const dz = pz - tor.r * Math.sin(tor.theta)
+      const d2 = dx * dx + dz * dz
+      const w2 = tor.w * tor.w
+      h += tor.amp * Math.exp(-(d2 * d2) / (2 * w2 * w2)) * Math.pow(Math.max(0, 1 - rr), 0.5)
+    }
+    // Terraces. `smooth01(f, 0.72, 1)` is the whole trick: seven tenths of each
+    // step is a level tread and the last three tenths carries the entire rise,
+    // so the riser is roughly three and a half times the slope it was cut into
+    // — a cliff on a hillside, not a gentler hillside.
+    if (terraceCount > 0 && h > 0.03) {
+      const warp =
+        Math.sin(theta * 3 + terraceSeed) * 0.34 +
+        Math.sin(theta * 7 - terraceSeed * 1.7) * 0.19 +
+        Math.sin(px * 6.1 + pz * 4.7 + terraceSeed) * 0.15
+      const t = h * terraceCount + warp
+      const k = Math.floor(t)
+      // 86% level tread, 14% riser — the riser is therefore about seven times
+      // the slope it replaced. At 0.78 it was four and a half, which on a
+      // 1-in-6 hillside is a 37° bank, i.e. a slightly steeper hillside.
+      const stepped = (k + smooth01(t - k, 0.86, 1)) / terraceCount
+      // Little bite at the summit (a plateau does not need cutting), full bite
+      // on the flanks where the sea actually worked.
+      const bite = terraceBite * (0.3 + 0.7 * Math.min(1, rr * 1.7))
+      h = h * (1 - bite) + Math.max(0, stepped) * bite
     }
     if (greenTerrain && landform !== 'spire' && landform !== 'stack') {
       // Grassy islands also get broader meadow folds so their surface does
@@ -513,12 +763,27 @@ export function getIslandProfile(body) {
     return h
   }
 
+  // Which bearings are cliff and which are bay. Its own stream, so changing
+  // the summit shape does not reshuffle the coast.
+  const cliffAt = makeCliffField(mulberry32(seed ^ 0x9e3779b9), landform, archetype)
+  // The coast field rides on the height field rather than being threaded
+  // through ten prop-placement signatures. They are one description of the
+  // island's shape and every ground sample needs both, so they travel
+  // together — see `coastalGroundY`, which defaults to picking it up here.
+  heightAt.coast = cliffAt
+
   // Trace the coastline: per bearing, the furthest point still standing above
   // the waterline. Everything beyond that is open water you can sail into —
   // which for a sea stack or a broken atoll is most of the disc.
+  //
+  // Tested against the *banked* ground, not the raw height field: a cliff
+  // bearing carries its height a long way further out than the field alone
+  // says, and grounding on the field would let a hull sail into a visible
+  // headland.
   const shore = new Float32Array(SHORE_SAMPLES)
   let maxShore = 0
-  const isLand = (r, theta) => heightAt(r, theta) * height > GROUNDING_HEIGHT
+  const isLand = (r, theta) =>
+    coastalGroundY(r, theta, height, heightAt, landform, cliffAt) > GROUNDING_HEIGHT
   for (let i = 0; i < SHORE_SAMPLES; i++) {
     const theta = (i / SHORE_SAMPLES) * Math.PI * 2
     // Coarse scan inward for the outermost step that is still land...
@@ -550,7 +815,7 @@ export function getIslandProfile(body) {
 
   // No live rng on the profile — mesh props re-seed from body id so rebuilds
   // (title → game, collision probe → mesh) stay bit-identical.
-  const profile = { archetype, surfaces, landform, radius, height, heightAt, shore, maxShore }
+  const profile = { archetype, surfaces, landform, radius, height, heightAt, cliffAt, shore, maxShore }
   // A WeakMap, not a field on the body. The world is structured-cloned to the
   // main process on every save, and this profile holds closures — parking it on
   // the body made saving throw "object could not be cloned".
@@ -581,92 +846,338 @@ export function islandMaxShoreline(body) {
   return getIslandProfile(body).maxShore + SHORE_KEEP_OUT
 }
 
+const terrainHash = Fn(([p]) => {
+  const n = p.dot(vec2(127.1, 311.7))
+  return fract(sin(n).mul(43758.5453))
+})
+
+const terrainNoise = Fn(([p]) => {
+  const i = floor(p)
+  const f = fract(p)
+  const u = f.mul(f).mul(float(3).sub(f.mul(2)))
+  const a = terrainHash(i)
+  const b = terrainHash(i.add(vec2(1, 0)))
+  const c = terrainHash(i.add(vec2(0, 1)))
+  const d = terrainHash(i.add(vec2(1, 1)))
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y)
+})
+
 /**
- * Blend two texture sets across the surface using a per-vertex weight.
+ * WebGPU island surface: MeshStandardNodeMaterial with dual-map blend + meadow
+ * detail (replaces onBeforeCompile GLSL which WebGPU cannot run).
  *
- * MeshStandardMaterial only takes one map, so the second is injected with
- * `onBeforeCompile` — that keeps all of three's lighting, shadows and fog and
- * costs one extra sample. Without it every island is one material, and a rocky
- * headland with a sandy beach is not expressible.
+ * Vertex `aBlend` weight mixes shore sand over body; meadow islands also get
+ * multi-scale soil/dry patches that stay off the beach band.
  */
-function applyBlendShader(material, accentMaps, terrainMaps = null) {
+function createIslandSurfaceMaterial(baseMaps, accentMaps, terrainMaps, meadowSurface) {
   const hasAccent = Boolean(accentMaps?.map)
   const hasTerrain = Boolean(terrainMaps?.map)
+  const baseMap = baseMaps?.map ?? null
+  const normalMap = baseMaps?.normalMap ?? null
+
+  const material = new MeshStandardNodeMaterial({
+    map: hasAccent || hasTerrain ? null : baseMap,
+    normalMap: normalMap,
+    roughnessMap: null,
+    vertexColors: true,
+    roughness: 0.94,
+    metalness: 0,
+    envMapIntensity: 0.06,
+    normalScale: new THREE.Vector2(meadowSurface ? 1.55 : 1.25, meadowSurface ? 1.55 : 1.25)
+  })
+
   if (!hasAccent && !hasTerrain) return material
-  material.onBeforeCompile = (shader) => {
-    if (hasAccent) shader.uniforms.uAccentMap = { value: accentMaps.map }
-    if (hasTerrain) shader.uniforms.uTerrainRockMap = { value: terrainMaps.map }
-    const vertexDecl = [
-      hasAccent ? 'attribute float aBlend;\nvarying float vBlend;' : '',
-      hasTerrain ? 'varying vec3 vTerrainPosition;' : ''
-    ].filter(Boolean).join('\n')
-    const vertexAssign = [
-      hasAccent ? 'vBlend = aBlend;' : '',
-      hasTerrain ? 'vTerrainPosition = transformed;' : ''
-    ].filter(Boolean).join('\n')
-    const fragmentDecl = [
-      hasAccent ? 'uniform sampler2D uAccentMap;\nvarying float vBlend;' : '',
-      hasTerrain
-        ? `uniform sampler2D uTerrainRockMap;
-varying vec3 vTerrainPosition;
-float terrainHash(vec2 p) {
-  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
-}
-float terrainNoise(vec2 p) {
-  vec2 i = floor(p);
-  vec2 f = fract(p);
-  f = f * f * (3.0 - 2.0 * f);
-  float a = terrainHash(i);
-  float b = terrainHash(i + vec2(1.0, 0.0));
-  float c = terrainHash(i + vec2(0.0, 1.0));
-  float d = terrainHash(i + vec2(1.0, 1.0));
-  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
-}`
-        : ''
-    ].filter(Boolean).join('\n')
-    const surfaceCode = [
-      hasAccent
-        ? `{
-          // Accent (shore sand etc.) already in linear via SRGBColorSpace.
-          // Mix full accent albedo, then let color_fragment tint both layers.
-          vec4 accent = texture2D(uAccentMap, vMapUv);
-          diffuseColor.rgb = mix(diffuseColor.rgb, accent.rgb, clamp(vBlend, 0.0, 1.0));
-        }`
-        : '',
-      hasTerrain
-        ? `{
-          // The grass photo map is useful up close but averages to one green
-          // plane at range. Keep the broad texture, then layer a second
-          // sampling scale and exposed-soil patches over it. This is cheap
-          // fragment work and costs no additional terrain geometry.
-          vec2 detailUv = vMapUv * 3.2 + vec2(7.31, -11.17);
-          vec3 closeGrass = texture2D(map, detailUv).rgb;
-          float broad = terrainNoise(vTerrainPosition.xz * 0.0024 + vec2(3.0, 8.0));
-          float medium = terrainNoise(vTerrainPosition.xz * 0.008 + vec2(-4.0, 2.0));
-          float patchNoise = broad * 0.72 + medium * 0.28;
-          float exposedSoil = smoothstep(0.48, 0.72, patchNoise);
-          vec3 rock = texture2D(uTerrainRockMap, vMapUv * 0.72 + vec2(-4.0, 5.0)).rgb;
-          vec3 soil = mix(rock * vec3(0.88, 0.9, 0.86), vec3(0.24, 0.16, 0.075), 0.62);
-          vec3 grass = mix(diffuseColor.rgb, diffuseColor.rgb * (0.62 + closeGrass * 0.94), 0.46);
-          grass *= mix(vec3(0.7, 0.77, 0.48), vec3(1.12, 1.06, 0.76), medium * 0.9);
-          diffuseColor.rgb = mix(grass, soil, exposedSoil * 0.7);
-        }`
-        : ''
-    ].filter(Boolean).join('\n')
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${vertexDecl}`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${vertexAssign}`)
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${fragmentDecl}`)
-      .replace('#include <map_fragment>', `#include <map_fragment>\n${surfaceCode}`)
-  }
-  // Unique key so three doesn't reuse an un-patched program.
-  material.customProgramCacheKey = () => `islandBlend_v3_${hasAccent ? 1 : 0}_${hasTerrain ? 1 : 0}`
+
+  // Manual albedo: base + optional shore accent + optional meadow rock patches.
+  // Vertex colours still multiply via NodeMaterial setupDiffuseColor.
+  const aBlend = attribute('aBlend', 'float')
+  const uv0 = uv()
+  const pos = positionLocal
+
+  material.colorNode = Fn(() => {
+    let body = baseMap ? texture(baseMap, uv0).rgb : vec3(1, 1, 1)
+    const shoreMask = hasAccent ? clamp(aBlend, float(0), float(1)) : float(0)
+    const accent = hasAccent ? texture(accentMaps.map, uv0).rgb : body
+
+    if (hasTerrain) {
+      // Meadow detail inland — never overwrites pure beach sand.
+      const detailUv = uv0.mul(3.2).add(vec2(7.31, -11.17))
+      const closeGrass = baseMap ? texture(baseMap, detailUv).rgb : body
+      const xz = vec2(pos.x, pos.z)
+      const broad = terrainNoise(xz.mul(0.0024).add(vec2(3.0, 8.0)))
+      const medium = terrainNoise(xz.mul(0.008).add(vec2(-4.0, 2.0)))
+      const fine = terrainNoise(xz.mul(0.022).add(vec2(9.0, -3.0)))
+      const patchNoise = broad.mul(0.55).add(medium.mul(0.3)).add(fine.mul(0.15))
+      const exposedSoil = smoothstep(float(0.42), float(0.68), patchNoise)
+      const dryPatch = smoothstep(float(0.28), float(0.5), float(1).sub(patchNoise)).mul(
+        float(1).sub(exposedSoil)
+      )
+      const rock = texture(terrainMaps.map, uv0.mul(0.72).add(vec2(-4.0, 5.0))).rgb
+      const soil = mix(rock.mul(vec3(0.88, 0.9, 0.86)), vec3(0.28, 0.18, 0.09), 0.68)
+      const dry = mix(vec3(0.42, 0.38, 0.22), rock.mul(vec3(0.95, 0.92, 0.8)), 0.35)
+      const luma = closeGrass.dot(vec3(0.3, 0.5, 0.2))
+      const closeTint = mix(closeGrass, vec3(luma), 0.22)
+      let grass = mix(body, body.mul(float(0.55).add(closeTint.mul(0.9))), 0.52)
+      grass = grass.mul(
+        mix(vec3(0.62, 0.68, 0.42), vec3(1.05, 1.02, 0.72), medium.mul(0.85).add(fine.mul(0.2)))
+      )
+      grass = mix(grass, dry, dryPatch.mul(0.55))
+      body = mix(grass, soil, exposedSoil.mul(0.78))
+    }
+
+    // Shore sand wins on beach vertices (aBlend high).
+    return mix(body, accent, shoreMask)
+  })()
+
   return material
 }
 
+/**
+ * Per-archetype palette tint. Deliberately close to white: the layers carry
+ * the look, and this only says which island you are standing on.
+ */
+const ARCHETYPE_TINT = {
+  barren: [1.0, 0.98, 0.94],
+  scrub: [0.99, 1.0, 0.95],
+  drowned: [0.95, 0.99, 0.95],
+  industrial: [1.06, 0.97, 0.87],
+  volcanic: [0.72, 0.7, 0.72]
+}
+
+/**
+ * Author the splat weights the shared terrain material blends between, plus
+ * the island's palette tint.
+ *
+ * This is the terrain logic — the shader only executes it. Sand collects where
+ * it is low and flat, shingle where the wash reaches but sand cannot hold,
+ * turf where soil could survive, rock everywhere too steep for any of it.
+ * Getting this wrong shows up as grass growing on a vertical cliff.
+ */
+function paintTerrainWeights({
+  geometry,
+  heights,
+  positions,
+  radius,
+  height,
+  landform,
+  archetype,
+  meadowSurface,
+  seed
+}) {
+  const normal = geometry.getAttribute('normal')
+  const color = geometry.getAttribute('color')
+  const terrain = geometry.getAttribute('aTerrain')
+
+  // How much green this island could support at all. Bare rock islands must
+  // not sprout turf just because a slope happens to be gentle.
+  const vegetation =
+    landform === 'spire' || landform === 'stack' ? 0.02
+    : archetype === 'volcanic' ? 0.1
+    : archetype === 'barren' ? 0.28
+    : archetype === 'industrial' ? 0.5
+    : meadowSurface ? 1
+    : 0.72
+  // Sand needs somewhere to accumulate. A sea stack has nowhere.
+  const sandiness =
+    landform === 'spire' || landform === 'stack' ? 0.05
+    : landform === 'atoll' ? 1.2
+    : archetype === 'volcanic' ? 0.35
+    : 0.9
+
+  // Beach band scales with the island, floored above the swell so a wave
+  // trough never exposes dry sand below the waterline.
+  // Capped in absolute metres, not just as a fraction of the island. A beach is
+  // a few metres of vertical range whatever the hill behind it is doing, and
+  // `height * 0.05` on a 400 m island put dry sand 20 m up the slope and the
+  // storm beach at 50 — which is why a coast read as a desert dune rolling into
+  // the sea rather than as a shoreline.
+  const beachTop = Math.min(7, Math.max(SEA_MAX_AMPLITUDE * 1.35, height * 0.04))
+  // A storm beach is the line of shingle the biggest sea of the year throws up.
+  // It is a couple of metres above the tide, not fourteen: at 2.6× a 5.4 m
+  // beach the cobbles reached 14 m, and 14 m of vertical range on a coastal
+  // bank that is nearly edge-on from the water is most of the island you can
+  // actually see — which is why every island had a wide pale collar round it.
+  const stormTop = beachTop * 1.75
+
+  const s0 = (seed % 997) * 0.031
+  const s1 = ((seed >> 7) % 991) * 0.017
+  const tintBase = ARCHETYPE_TINT[archetype] ?? ARCHETYPE_TINT.barren
+  // Per-island hue jitter so two scrub islands are not the same green.
+  const jr = 0.94 + ((seed % 89) / 89) * 0.14
+  const jg = 0.94 + (((seed >> 5) % 83) / 83) * 0.14
+  const jb = 0.94 + (((seed >> 11) % 79) / 79) * 0.14
+
+  for (let i = 0; i < terrain.count; i++) {
+    const y = heights[i]
+    const px = positions[i * 3]
+    const pz = positions[i * 3 + 2]
+    const slope = Math.max(0, Math.min(1, 1 - normal.getY(i)))
+    const f = Math.max(0, Math.min(1, y / Math.max(1, height)))
+
+    // Cover patchiness on a scale of tens of metres. The shader adds its own
+    // macro noise on top; this one exists so the *logic* varies across the
+    // island rather than being a set of perfect contour bands.
+    //
+    // The four sines this replaces ran at 0.0042–0.024 rad/m — wavelengths of
+    // 260 m to 1.5 km. On a 400 m island that is less than one full cycle of
+    // the loudest term, so "multi-scale patchiness" evaluated to very nearly a
+    // single constant across the whole landform: whatever it decided, it
+    // decided for the entire island. That is most of why every island came out
+    // as one uniform wash of one colour.
+    const p = reliefFbm(px / 115 + s0, pz / 115 - s1, seed % 61)
+
+    // Rock: anything too steep to hold anything else, plus exposed summits.
+    // Underwater is rock too — sand under the sea is what made the old coasts
+    // read as pale shallows stretching to the horizon.
+    let rock = smooth01(slope, 0.12, 0.4)
+    rock = Math.max(rock, y < 0 ? 1 : 0)
+    rock = Math.max(rock, smooth01(f, 0.62, 0.95) * (1 - vegetation * 0.7))
+    // Bedrock breaking through the cover, on a scale of tens of metres and
+    // independent of slope. Without it an island is soil and turf all the way
+    // down and reads as parkland: the mesh on a large island is too coarse to
+    // carry a face steep enough for the slope rule alone to expose any stone,
+    // so the geology has to be stated rather than derived.
+    // Same wavelength bug as `patch`, same consequence: at 0.0083 rad/m one
+    // cycle is 757 m, so on most islands this was a constant and the island was
+    // either all bedrock or none. 60 m outcrops with 17 m detail on them is
+    // what a hillside actually shows, and the mesh carries it (a vertex every
+    // 6–13 m).
+    const bedrock = reliefFbm(px / 64 - s1, pz / 64 + s0, (seed >> 3) % 53)
+    rock = Math.max(
+      rock,
+      smooth01(bedrock, 0.5, 0.7) * smooth01(y, beachTop * 0.7, beachTop * 2) * (1 - vegetation * 0.35)
+    )
+
+    // Sand: low, flat, and only where there is a beach to be had.
+    const lowBand = 1 - smooth01(y, beachTop * 0.35, beachTop)
+    let sand = lowBand * (1 - smooth01(slope, 0.1, 0.3)) * sandiness
+    if (y < -1) sand *= 0.15 // a little bar just under the surface, then rock
+
+    // Shingle: the storm beach above the sand, and the wash on shores too
+    // steep for sand to stay on. It belongs to the coast and nowhere else —
+    // a general "scree on moderate slopes" term wraps the whole hill in
+    // cobbles, and because the shingle height field peaks at 1 on every stone
+    // it then wins the height blend everywhere it is allowed to exist.
+    const stormBand =
+      smooth01(y, beachTop * 0.2, beachTop * 0.8) * (1 - smooth01(y, beachTop, stormTop))
+    let shingle = stormBand * (1 - smooth01(slope, 0.3, 0.62))
+    shingle = Math.max(shingle, lowBand * smooth01(slope, 0.12, 0.4) * 0.9)
+
+    // Turf: above the wash, off the cliffs, and thicker in the sheltered
+    // patches than on the exposed ones.
+    let grass =
+      vegetation *
+      smooth01(y, beachTop * 0.7, beachTop * 2.2) *
+      (1 - smooth01(slope, 0.24, 0.55)) *
+      (0.45 + p * 0.75)
+    // Thin out toward an exposed summit — wind kills cover before altitude does.
+    grass *= 1 - smooth01(f, 0.55, 0.92) * 0.75
+
+    // Rock wins outright where it is genuinely steep; nothing else clings on.
+    const bare = smooth01(slope, 0.42, 0.68)
+    sand *= 1 - bare
+    shingle *= 1 - bare * 0.85
+    grass *= 1 - bare
+
+    // Sharpen before normalising. A vertex is mostly made of one thing; the
+    // raw terms above all stay slightly nonzero everywhere, and four slightly
+    // nonzero weights is four textures averaged together, which is beige. Cubed
+    // and renormalised, 0.40/0.30/0.20/0.10 becomes 0.64/0.27/0.08/0.01 — the
+    // dominant layer actually wins and the second is still there to blend
+    // against. This is what "hard transitions" means on the CPU side; the
+    // shader's macro noise is what stops those transitions following the mesh
+    // rings.
+    const k3 = (v) => v * v * v
+    const cs = k3(sand)
+    const ch = k3(shingle)
+    const cg = k3(grass)
+    const cr = k3(rock)
+    const sum = cs + ch + cg + cr || 1
+    terrain.setXYZW(i, cs / sum, ch / sum, cg / sum, cr / sum)
+
+    // Tint: archetype base, jittered per island, with a slight extra darkening
+    // in the low ground so hollows read as damper than the ridges.
+    // Macro value drift baked into the vertex tint. This is the one variation
+    // that cannot be smeared by grazing incidence or dissolved by a distance
+    // fade, because it is interpolated across the mesh rather than sampled from
+    // a texture — so it is the right place to carry "drier crest, greener
+    // hollow" over a whole hillside. 0.16 was too narrow to see.
+    const shade = 0.84 + p * 0.3
+    color.setXYZ(
+      i,
+      Math.min(1.4, tintBase[0] * jr * shade),
+      Math.min(1.4, tintBase[1] * jg * shade),
+      Math.min(1.4, tintBase[2] * jb * shade)
+    )
+  }
+  terrain.needsUpdate = true
+  color.needsUpdate = true
+}
+
+/**
+ * Value noise in island-local, normalised coordinates.
+ *
+ * Everything else in the height field is a function of `(r, theta)`, and that
+ * is why an island reads as a lathe-turned dome however many harmonics are
+ * stacked on it: a radial field has no way to put a spur here and a hollow
+ * twenty metres to the left of it. This is the cheapest thing that does.
+ *
+ * Arguments stay inside about ±13 (the disc is ±1.2 and the top octave scales
+ * by ~11), so the sine hash has plenty of fractional phase left — unlike the
+ * shader-side hashes, which had to be wrapped because world XZ reaches 2e4.
+ */
+function reliefHash(x, y, s) {
+  const v = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453
+  return v - Math.floor(v)
+}
+
+function reliefNoise(x, y, s) {
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  const fx = x - ix
+  const fy = y - iy
+  const ux = fx * fx * (3 - 2 * fx)
+  const uy = fy * fy * (3 - 2 * fy)
+  const a = reliefHash(ix, iy, s)
+  const b = reliefHash(ix + 1, iy, s)
+  const c = reliefHash(ix, iy + 1, s)
+  const d = reliefHash(ix + 1, iy + 1, s)
+  return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy
+}
+
+/**
+ * Multi-octave value noise, 0..1.
+ *
+ * The frequency ceiling is the mesh, not taste. SEGMENTS is 192, so the
+ * coarsest vertex spacing — angular, at the rim — is 2π/192 ≈ 0.033 of the
+ * radius. Three octaves at lacunarity 1.85 from a base of 1.9 puts the top
+ * octave at 6.5 cycles per radius, i.e. a 0.154 wavelength and four and a half
+ * samples across it. Anything faster stops being relief and becomes a zigzag
+ * along the ring grid — the same failure that put a band of bright diamonds
+ * round every waterline when a bearing harmonic went to 41.
+ */
+function reliefFbm(x, y, s, octaves = 3) {
+  let f = 1
+  let amp = 1
+  let sum = 0
+  let norm = 0
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * reliefNoise(x * f, y * f, s + o * 17.3)
+    norm += amp
+    f *= 1.85
+    amp *= 0.52
+  }
+  return sum / norm
+}
+
+/** smoothstep, clamped. */
+function smooth01(x, a, b) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a || 1e-6)))
+  return t * t * (3 - 2 * t)
+}
+
 export function buildIslandMesh(body) {
-  const { archetype, surfaces, landform, radius, height, heightAt } = getIslandProfile(body)
+  const { archetype, surfaces, landform, radius, height, heightAt, cliffAt } = getIslandProfile(body)
   // Fresh stream per build, keyed only by the island — vegetation/ruins must
   // match whether this mesh is for the title orbit or the sailing world.
   const rng = mulberry32(hashString(`${body?.id ?? body?.name ?? 'island'}:props`))
@@ -675,16 +1186,9 @@ export function buildIslandMesh(body) {
   const uvs = []
   const colors = []
   const blends = []
-  const shore = new THREE.Color(surfaces.shore.color)
-  const mid = new THREE.Color(surfaces.body.color)
-  const high = new THREE.Color(surfaces.crown.color)
-  const tmp = new THREE.Color()
+  const terrain = []
   const meadowSurface =
     archetype === 'scrub' || surfaces.body.tex === 'grass' || surfaces.crown.tex === 'grass'
-  const meadowDry = new THREE.Color(0x817548)
-  const meadowSoil = new THREE.Color(0x6b4f2e)
-  const meadowFresh = new THREE.Color(0x9eaa58)
-  const meadowSeed = hashString(`${body?.id ?? 'island'}:meadow-colour`) * 0.001
 
   // Land rings are denser near the coast (nonlinear t) so the bank that waves
   // actually hit is not a handful of huge flat triangles. Outer land is forced
@@ -696,7 +1200,6 @@ export function buildIslandMesh(body) {
   // from the abyss rather than sitting on a shallow shelf.
   const skirtDepth = landform === 'spire' ? SKIRT_DEPTH + 90 : SKIRT_DEPTH
   const shelfReach = landform === 'spire' ? SHELF_REACH * 0.55 : SHELF_REACH
-  const coastBankFrom = landform === 'spire' ? 0.9 : COAST_BANK_FROM
   const texScale =
     landform === 'spire' ? TEXTURE_SCALE * 0.72 : meadowSurface ? TEXTURE_SCALE * 0.62 : TEXTURE_SCALE
   const heights = []
@@ -711,20 +1214,7 @@ export function buildIslandMesh(body) {
       const theta = (s / SEGMENTS) * Math.PI * 2
       const x = Math.cos(theta) * radius * rr
       const z = Math.sin(theta) * radius * rr
-      let y = heightAt(Math.min(1, t), theta) * height
-      if (onLand && t > coastBankFrom) {
-        // Steep bank into a submerged foot — swell always covers the edge so
-        // lapping does not leave a dry polygonal sand apron.
-        const bank = (t - coastBankFrom) / (1 - coastBankFrom)
-        const bankW = bank * bank * (3 - 2 * bank) // smoothstep
-        // Sample inland height at the bank start so we drop from a real bank,
-        // not from whatever the rim fade already crushed to zero.
-        const bankTop = heightAt(coastBankFrom, theta) * height
-        // Spires hold cliff height longer before the final plunge.
-        const hold = landform === 'spire' ? 0.55 : 0.35
-        const yField = Math.max(y, bankTop * Math.pow(1 - bank, hold))
-        y = yField * (1 - bankW) + COAST_FOOT_Y * bankW
-      }
+      let y = coastalGroundY(Math.min(1, t), theta, height, heightAt, landform, cliffAt)
       if (!onLand) {
         // First shelf ring already under the swell; dive hard to the skirt floor.
         // Spires dive faster so walls continue down into the dark.
@@ -737,8 +1227,9 @@ export function buildIslandMesh(body) {
       // point at the centre and stretched the outer rings, so the same rock
       // texture read as smeared paint on anything but a mid-size island.
       uvs.push(x / texScale, z / texScale)
-      colors.push(0, 0, 0) // filled below, once slopes are known
+      colors.push(1, 1, 1) // island tint, filled below
       blends.push(0)
+      terrain.push(0, 0, 0, 0) // splat weights, filled below once slopes exist
     }
   }
 
@@ -763,113 +1254,45 @@ export function buildIslandMesh(body) {
   geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
   geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
   geometry.setAttribute('aBlend', new THREE.Float32BufferAttribute(blends, 1))
+  geometry.setAttribute('aTerrain', new THREE.Float32BufferAttribute(terrain, 4))
   geometry.setIndex(indices)
   geometry.computeVertexNormals()
 
-  // Colour and texture-blend by height *and* slope, now that normals exist.
-  // Slope is what sells it: soil and sand sit on the flats, bare rock shows
-  // wherever it is steep, and everything within reach of the swell is wet.
-  const normal = geometry.getAttribute('normal')
-  const color = geometry.getAttribute('color')
-  const blend = geometry.getAttribute('aBlend')
-  // Beach band is intentionally thin — a wide band painted sand under the
-  // waterline is what made coasts look like endless pale shallows.
-  // Spires barely have a beach — wet rock climbs almost to the cliff.
-  const beachTop =
-    landform === 'spire'
-      ? Math.max(SEA_MAX_AMPLITUDE * 0.6, height * 0.012)
-      : Math.max(SEA_MAX_AMPLITUDE * 0.9, height * 0.035)
-  const tideBand = Math.max(SEA_MAX_AMPLITUDE * 0.55, height * 0.018)
-  // Wet zone extends slightly above mean water so the lapping band is dark rock
-  // even when a crest has just fallen away.
-  const wetAbove = SEA_MAX_AMPLITUDE * 0.35
-  for (let i = 0; i < color.count; i++) {
-    const y = heights[i]
-    const steep = 1 - Math.max(0, normal.getY(i))
-
-    // Shore → body → crown, by height.
-    let accent = 0
-    if (y < wetAbove) {
-      // Submerged + splash zone: wet rock only — never dry sand under the sea.
-      const under = y < 0 ? 1 : 1 - y / Math.max(1e-3, wetAbove)
-      tmp.copy(TIDE_COLOR).lerp(CLIFF_COLOR, Math.min(1, steep * 1.2) * 0.65)
-      tmp.multiplyScalar(0.72 + 0.28 * (1 - under))
-      accent = 0
-    } else if (y < beachTop) {
-      const k = (y - wetAbove) / Math.max(1e-3, beachTop - wetAbove)
-      tmp.copy(shore).lerp(mid, k)
-      // Beach only on ground flat enough to hold sand (almost never on spires).
-      const sandOk = landform === 'spire' ? 0.15 : 1
-      accent = (1 - k) * Math.max(0, 1 - steep * 4.0) * sandOk
-    } else {
-      const f = Math.max(0, Math.min(1, (y - beachTop) / Math.max(1e-3, height - beachTop)))
-      if (f < 0.55) tmp.copy(mid).lerp(high, f / 0.55)
-      else tmp.copy(high)
-      accent = 0
-    }
-
-    if (y >= wetAbove && steep > 0.25) {
-      const cliff = Math.min(1, (steep - 0.25) / 0.35)
-      tmp.lerp(CLIFF_COLOR, cliff * 0.85)
-      accent *= 1 - cliff
-    }
-    if (y >= wetAbove && y < tideBand) {
-      tmp.lerp(TIDE_COLOR, 1 - (y - wetAbove) / Math.max(1e-3, tideBand - wetAbove))
-    }
-
-    if (meadowSurface && y >= wetAbove && steep < 0.82) {
-      const px = positions[i * 3]
-      const pz = positions[i * 3 + 2]
-      const signal =
-        Math.sin(px * 0.0042 + meadowSeed) * 0.5 +
-        Math.cos(pz * 0.0051 - meadowSeed * 0.8) * 0.3 +
-        Math.sin((px - pz) * 0.008 + meadowSeed * 1.7) * 0.2
-      const patch = Math.max(0, Math.min(1, signal * 0.5 + 0.5))
-      tmp.multiplyScalar(0.72 + patch * 0.46)
-      if (patch < 0.34) tmp.lerp(meadowDry, (0.34 - patch) * 0.38)
-      else if (patch > 0.86) tmp.lerp(meadowFresh, (patch - 0.86) * 0.5)
-      else if (patch > 0.68) tmp.lerp(meadowSoil, (patch - 0.68) * 0.72)
-    }
-
-    // Keep enough of the terrain palette for broad meadow/soil variation to
-    // survive distance lighting; the texture shader supplies the fine grain.
-    const paletteLift = meadowSurface ? 0.42 : 0.52
-    tmp.r = paletteLift + tmp.r * (1 - paletteLift)
-    tmp.g = paletteLift + tmp.g * (1 - paletteLift)
-    tmp.b = paletteLift + tmp.b * (1 - paletteLift)
-    color.setXYZ(i, tmp.r, tmp.g, tmp.b)
-    blend.setX(i, Math.max(0, Math.min(1, accent)))
-  }
-  color.needsUpdate = true
-  blend.needsUpdate = true
+  paintTerrainWeights({
+    geometry,
+    heights,
+    positions,
+    radius,
+    height,
+    landform,
+    archetype,
+    meadowSurface,
+    seed: hashString(`${body?.id ?? 'island'}:cover`)
+  })
   geometry.computeBoundingSphere()
 
-  // Body texture is the base; the shore's is blended in over the beach.
-  const baseMaps = getSurfaceTextures(surfaces.body.tex) ?? {}
-  const shoreMaps = getSurfaceTextures(surfaces.shore.tex) ?? {}
-  const terrainMaps = meadowSurface ? getSurfaceTextures('rocky') : null
-  const material = applyBlendShader(
-    new THREE.MeshStandardMaterial({
-      map: baseMaps.map ?? null,
-      normalMap: baseMaps.normalMap ?? null,
-      // Skip roughnessMap — dark patches in ambientCG maps were reading as
-      // wet specular flecks under the sky env map.
-      roughnessMap: null,
-      vertexColors: true,
-      // Dead matte ground — no glitter / wet-plastic specular.
-      roughness: 0.97,
-      metalness: 0,
-      envMapIntensity: 0.02,
-      normalScale: new THREE.Vector2(meadowSurface ? 1.45 : 1.15, meadowSurface ? 1.45 : 1.15)
-    }),
-    surfaces.shore.tex === surfaces.body.tex ? null : shoreMaps,
-    terrainMaps
-  )
+  // One material for the whole world (render/terrainMaterial.js). The old
+  // per-island dual-map blend is kept only as the headless fallback — node
+  // --test has no canvas, so the procedural layers do not exist there.
+  const material =
+    getTerrainMaterial() ??
+    createIslandSurfaceMaterial(
+      getSurfaceTextures(surfaces.body.tex) ?? {},
+      surfaces.shore.tex === surfaces.body.tex ? null : getSurfaceTextures(surfaces.shore.tex) ?? {},
+      meadowSurface ? getSurfaceTextures('rocky') : null,
+      meadowSurface
+    )
 
   const mesh = new THREE.Mesh(geometry, material)
   mesh.castShadow = true
+  // Terrain has to receive. With this off nothing on an island cast a shadow
+  // onto the island — no tree, no ruin, no boulder, and no part of the land
+  // onto another part of it — which is most of why a hillside read as painted
+  // rather than lit. `scene.js` derives `normalBias` from the shadow texel
+  // footprint, so the usual reason to switch it off (acne across a 5× range of
+  // ortho box sizes) no longer applies.
   mesh.receiveShadow = true
-  mesh.userData.kind = 'island'
+  mesh.userData.kind = "island"
   mesh.userData.archetype = archetype
   mesh.userData.landform = landform
 
@@ -884,7 +1307,116 @@ export function buildIslandMesh(body) {
   if (landform === 'stack' || landform === 'mesa' || landform === 'spire' || rng() < 0.5) {
     mesh.add(buildTalus(rng, radius, height, heightAt, surfaces.body, landform))
   }
+  mesh.add(buildSeaStacks(rng, radius, height, heightAt, landform, cliffAt))
   return mesh
+}
+
+/**
+ * Sea stacks — the pillars a collapsing cliff leaves standing offshore.
+ *
+ * They are the cheapest silhouette in the whole scene: a headland that ends in
+ * a clean curve reads as a hill, and the same headland with three broken
+ * columns off its point reads as a coast that the sea has been working on.
+ * Placed only off cliff bearings, because that is the only place they form.
+ */
+function buildSeaStacks(rng, radius, height, heightAt, landform, cliffAt) {
+  const group = new THREE.Group()
+  group.name = 'seaStacks'
+  if (landform === 'atoll' || radius < 150) return group
+  const mat = getRockPropMaterial() ?? propMaterials().boulder
+  const count = 2 + Math.floor(rng() * 4)
+  let placed = 0
+  for (let attempt = 0; attempt < count * 8 && placed < count; attempt++) {
+    const theta = rng() * Math.PI * 2
+    const cliff = cliffAt ? cliffAt(theta) : 0.3
+    // Stacks are eroded cliff. No cliff, no stack.
+    if (cliff < 0.45 || rng() > cliff) continue
+    // Just off the coast, standing in water.
+    const r = range(rng, 1.005, 1.055)
+    const x = Math.cos(theta) * radius * r
+    const z = Math.sin(theta) * radius * r
+    const localCliffTop = Math.max(
+      10,
+      coastalGroundY(0.95, theta, height, heightAt, landform, cliffAt)
+    )
+    const h = range(rng, 0.35, 1.05) * Math.min(localCliffTop * 1.3, height * 0.55) + 8
+    const w = h * range(rng, 0.16, 0.42)
+    const stack = new THREE.Mesh(stackGeometry(rng, w, h), mat)
+    // Foot buried well under the swell so no stack shows a flat cut base.
+    stack.position.set(x, -SEA_MAX_AMPLITUDE - 6, z)
+    stack.rotation.y = rng() * Math.PI * 2
+    // A slight lean; a plumb column reads as a placed prop.
+    stack.rotation.z = range(rng, -0.09, 0.09)
+    stack.castShadow = true
+    stack.receiveShadow = true
+    group.add(stack)
+    placed++
+  }
+  return group
+}
+
+/**
+ * One eroded rock column: tapered, bitten into at the waterline where the sea
+ * has been undercutting it, and stepped where harder beds have resisted.
+ * Sits with its base at y = 0 so the caller only has to sink the foot.
+ */
+function stackGeometry(rng, width, height) {
+  const sides = 9 + Math.floor(rng() * 5)
+  const rings = 12
+  const lean = range(rng, 0.02, 0.12)
+  const leanDir = rng() * Math.PI * 2
+  // Per-bearing profile so the column is not a lathe.
+  const lobes = []
+  for (let i = 0; i < 3; i++) {
+    lobes.push({ freq: 1 + Math.floor(rng() * 3), phase: rng() * Math.PI * 2, amp: range(rng, 0.1, 0.3) })
+  }
+  // Per-bed radius so harder layers stand proud.
+  const beds = []
+  for (let i = 0; i <= rings; i++) beds.push(range(rng, 0.86, 1.14))
+
+  const positions = []
+  const indices = []
+  for (let i = 0; i <= rings; i++) {
+    const v = i / rings
+    // Taper, with an undercut notch where the swell works at it.
+    const taper = 1 - Math.pow(v, 1.6) * range(rng, 0.35, 0.7)
+    const undercut = 1 - 0.3 * Math.exp(-Math.pow((v - 0.08) / 0.07, 2))
+    const y = v * height
+    const cx = Math.cos(leanDir) * lean * height * v * v
+    const cz = Math.sin(leanDir) * lean * height * v * v
+    for (let s = 0; s <= sides; s++) {
+      const theta = (s / sides) * Math.PI * 2
+      let k = 1
+      for (const l of lobes) k += l.amp * Math.sin(theta * l.freq + l.phase + v * 1.5)
+      const r = width * taper * undercut * beds[i] * Math.max(0.35, k)
+      positions.push(cx + Math.cos(theta) * r, y, cz + Math.sin(theta) * r)
+    }
+  }
+  // Cap the top so the silhouette does not end in an open tube.
+  const apex = positions.length / 3
+  positions.push(
+    Math.cos(leanDir) * lean * height,
+    height * 1.04,
+    Math.sin(leanDir) * lean * height
+  )
+  const row = sides + 1
+  for (let i = 0; i < rings; i++) {
+    for (let s = 0; s < sides; s++) {
+      const a = i * row + s
+      const b = a + row
+      indices.push(a, b, a + 1)
+      indices.push(a + 1, b, b + 1)
+    }
+  }
+  for (let s = 0; s < sides; s++) {
+    indices.push(rings * row + s, rings * row + s + 1, apex)
+  }
+  const geo = new THREE.BufferGeometry()
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geo.setIndex(indices)
+  geo.computeVertexNormals()
+  geo.computeBoundingSphere()
+  return geo
 }
 
 // ── Shared low-poly props (one set for every island) ─────────────────────────
@@ -1022,18 +1554,7 @@ function propMinGround() {
 
 /** Height of one rendered land vertex, including the final coastal bank. */
 function meshVertexGroundY(t, theta, height, heightAt, landform = 'dome') {
-  const rr = Math.min(1, Math.max(0, t))
-  const coastBankFrom = landform === 'spire' ? 0.9 : COAST_BANK_FROM
-  let y = heightAt(rr, theta) * height
-  if (rr > coastBankFrom && rr < 1) {
-    const bank = (rr - coastBankFrom) / (1 - coastBankFrom)
-    const bankW = bank * bank * (3 - 2 * bank) // smoothstep
-    const bankTop = heightAt(coastBankFrom, theta) * height
-    const hold = landform === 'spire' ? 0.55 : 0.35
-    const yField = Math.max(y, bankTop * Math.pow(1 - bank, hold))
-    y = yField * (1 - bankW) + COAST_FOOT_Y * bankW
-  }
-  return y
+  return coastalGroundY(t, theta, height, heightAt, landform)
 }
 
 function triangleHeightAt(px, pz, a, b, c, ya, yb, yc) {
@@ -1177,27 +1698,27 @@ function rollVegetationCover(rng, archetype, landform) {
   if (landform === 'spire') return rng() < 0.12 ? range(rng, 0.08, 0.22) : 0
   // Base chance of having any trees/scrub at all.
   let bareChance =
-    archetype === 'volcanic' ? 0.55
-    : archetype === 'barren' ? 0.4
-    : archetype === 'industrial' ? 0.28
-    : archetype === 'scrub' ? 0.08
-    : archetype === 'drowned' ? 0.12
-    : 0.2
-  if (landform === 'atoll') bareChance += 0.1
+    archetype === 'volcanic' ? 0.5
+    : archetype === 'barren' ? 0.35
+    : archetype === 'industrial' ? 0.24
+    : archetype === 'scrub' ? 0.05
+    : archetype === 'drowned' ? 0.09
+    : 0.14
+  if (landform === 'atoll') bareChance += 0.08
   if (rng() < bareChance) return 0
 
   // Among vegetated islands: sparse → medium → lush.
   const u = rng()
   if (archetype === 'scrub' || archetype === 'drowned') {
-    if (u < 0.2) return range(rng, 0.2, 0.4)
-    if (u < 0.55) return range(rng, 0.45, 0.7)
-    return range(rng, 0.75, 1)
+    if (u < 0.15) return range(rng, 0.28, 0.48)
+    if (u < 0.5) return range(rng, 0.5, 0.75)
+    return range(rng, 0.8, 1)
   }
   if (archetype === 'volcanic' || archetype === 'barren') {
-    return range(rng, 0.12, 0.45)
+    return range(rng, 0.14, 0.5)
   }
-  if (archetype === 'industrial') return range(rng, 0.15, 0.55)
-  return range(rng, 0.25, 0.75)
+  if (archetype === 'industrial') return range(rng, 0.18, 0.58)
+  return range(rng, 0.32, 0.85)
 }
 
 /**
@@ -1239,9 +1760,9 @@ function propAreaScale(radius) {
 // only 50% more than the old per-layer ceiling as a memory/draw-call budget
 // (the home island gets the full twofold ceiling). Grass stays instanced, and
 // hero trees keep their separate small cap below.
-const VEGETATION_DENSITY_MULTIPLIER = 2
-const VEGETATION_CAP_HEADROOM = 1.5
-const VEGETATION_HOME_CAP_HEADROOM = 2
+const VEGETATION_DENSITY_MULTIPLIER = 2.35
+const VEGETATION_CAP_HEADROOM = 1.65
+const VEGETATION_HOME_CAP_HEADROOM = 2.1
 const vegetationCap = (oldCap, isHome = false) =>
   Math.ceil(oldCap * (isHome ? VEGETATION_HOME_CAP_HEADROOM : VEGETATION_CAP_HEADROOM))
 
@@ -1327,7 +1848,11 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
 
   // Per-island growth character: some shores are scrub, some carry tall timber.
   const islandTreeBias = range(rng, 0.7, 1.45)
-  const rTreeMax = landform === 'atoll' ? 0.88 : 0.72
+  // Trees used to stop at 0.72 of the radius, which on a landform whose whole
+  // seaward face lives between 0.8 and 1.0 meant every tree on the island was
+  // hidden behind the ridge: from the water the place read as bare. The slope
+  // reject in `placeTreeAt` still keeps them off the cliffs.
+  const rTreeMax = landform === 'atoll' ? 0.9 : 0.87
 
   const rollTreeHeight = () => {
     const u = rng()
@@ -1341,7 +1866,7 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
     const ground = groundAtXZ(x, z, radius, height, heightAt, landform)
     if (ground < propMinGround()) return false
     const rLocal = Math.hypot(x, z) / Math.max(1, radius)
-    if (rLocal < 0.12 || rLocal > (landform === 'atoll' ? 0.92 : 0.78)) return false
+    if (rLocal < 0.12 || rLocal > (landform === 'atoll' ? 0.94 : 0.92)) return false
     // Slope check at this exact seat.
     const theta = Math.atan2(z, x)
     const g2 = meshGroundY(Math.min(0.98, rLocal + 0.04), theta, height, heightAt, landform)
@@ -1485,8 +2010,12 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
       // Plants/flowers sit lower than bulky bushes (all protos baked ~1.2 tall).
       // ~2× prior heights so scrub reads next to the larger trees.
       const short = proto.radius < 0.45 || proto.height < 0.9
+      // Scrub reads as dirt on the lens below about six screen pixels, and from
+      // a boat three hundred metres off a 1.6 m plant is three. Sized up so the
+      // undergrowth resolves as vegetation at the range you actually see an
+      // island from — gorse and marram on an exposed coast run this big anyway.
       const targetH =
-        range(rng, short ? 1.6 : 3.2, short ? 4.5 : 8.5) * sizeK * (dry ? 0.75 : 1)
+        range(rng, short ? 2.2 : 4.2, short ? 5.4 : 10.5) * sizeK * (dry ? 0.75 : 1)
       const scale = targetH / Math.max(0.15, proto.height)
       const y = seatPlantY(spot.y, targetH)
       group.add(placePlantClone(proto, spot.x, y, spot.z, scale, yaw, { dry }))
@@ -1533,7 +2062,7 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
           }))
           if (!spot) continue
           // Larger clumps so they read from a boat (was 0.35–1.7 m).
-          const targetH = range(rng, 1.4, 4.2) * sizeK
+          const targetH = range(rng, 2.0, 5.4) * sizeK
           const sc = targetH / Math.max(0.05, gd.height)
           const y = seatPlantY(spot.y, targetH)
           _p.set(spot.x, y, spot.z)
@@ -1577,7 +2106,7 @@ function buildVegetation(rng, radius, height, heightAt, archetype, landform, isH
         }))
         if (!spot) continue
         const proto = pick(rng, grassProtos)
-        const targetH = range(rng, 1.6, 3.8) * sizeK
+        const targetH = range(rng, 2.2, 5.0) * sizeK
         const scale = targetH / Math.max(0.08, proto.height)
         const yaw = rng() * Math.PI * 2
         const y = seatPlantY(spot.y, targetH)
@@ -1972,14 +2501,21 @@ function buildRuins(rng, radius, height, heightAt, archetype, landform, isHome =
 function buildTalus(rng, radius, height, heightAt, surface, landform = 'dome') {
   const group = new THREE.Group()
   group.name = 'talus'
-  const mats = propMaterials()
   const geos = boulderGeometries()
-  // Tint slightly toward the island body colour so ash/volcanic shores match.
-  const tint = new THREE.Color(surface?.color ?? 0xc4beb4)
-  const matLight = mats.boulder.clone()
-  const matDark = mats.boulderDark.clone()
-  matLight.color.multiply(tint.clone().multiplyScalar(0.55).addScalar(0.45))
-  matDark.color.multiply(tint.clone().multiplyScalar(0.5).addScalar(0.4))
+  // Loose rock takes the same shared rock material as the ground, so a boulder
+  // in the wash is wet in the same band the beach behind it is. One material
+  // for every island's talus — never a clone per island.
+  const rockMat = getRockPropMaterial()
+  let matLight = rockMat
+  let matDark = rockMat
+  if (!rockMat) {
+    const mats = propMaterials()
+    const tint = new THREE.Color(surface?.color ?? 0xc4beb4)
+    matLight = mats.boulder.clone()
+    matDark = mats.boulderDark.clone()
+    matLight.color.multiply(tint.clone().multiplyScalar(0.55).addScalar(0.45))
+    matDark.color.multiply(tint.clone().multiplyScalar(0.5).addScalar(0.4))
+  }
 
   // Human-scale boulders on the shore — not radius×0.05 megaton slabs.
   const sizeK = propSizeScale(radius)

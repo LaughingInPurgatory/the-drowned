@@ -4,8 +4,45 @@
  * These used to draw engine plumes. Boats leave a wake instead
  * (render/wake.js), but damage smoke, torpedo trails and the salvage scoop are
  * all built from the same two pieces, so they live here.
+ *
+ * `createPuffEmitter` used to be a `THREE.Points`. On WebGPU that is
+ * `GPUPrimitiveTopology.PointList`, whose primitives are **always one pixel** —
+ * `size`, `sizeAttenuation` and the glow map were all silently discarded, so
+ * every puff this emitter has ever drawn was a single pixel. It now runs on the
+ * instanced billboard pool in `vfxParticles.js`; the API is unchanged so callers
+ * did not have to move.
  */
 import * as THREE from 'three'
+import { createSpriteField, createSpriteMaterial, puffMask } from './vfxParticles.js'
+import { float, vec4, smoothstep, mix, pow } from 'three/tsl'
+
+/**
+ * Puff materials are shared across every emitter — colour is per-particle
+ * (`iTint`), so the only thing that actually varies is the blend mode. Two
+ * materials for the whole game instead of three per damaged hull.
+ */
+const _puffMats = new Map()
+export function puffMaterial(additive) {
+  const key = additive ? 'add' : 'normal'
+  let m = _puffMats.get(key)
+  if (m) return m
+  m = createSpriteMaterial({
+    blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+    fog: true,
+    shade: ({ q, life: k, seed, tint }) => {
+      // Erode the puff from the outside in as it ages, so it shreds rather than
+      // fading as a disc.
+      const mask = puffMask(q, seed, k.mul(0.5))
+      const birth = smoothstep(float(0), float(0.09), k)
+      const decay = pow(float(1).sub(k), float(1.7))
+      // Hot cores cool as they expand — smoke greys out, flame drops to ember.
+      const col = mix(tint.mul(1.35), tint.mul(0.55), pow(k, float(0.7)))
+      return vec4(col, mask.mul(birth).mul(decay).mul(0.85))
+    }
+  })
+  _puffMats.set(key, m)
+  return m
+}
 
 // Soft glowing sprite (no image asset). Shared by thrusters + damage FX.
 export function buildGlowTexture() {
@@ -32,115 +69,88 @@ const _spreadJitter = new THREE.Vector3()
  * life is in seconds; keep rear exhaust well under ~0.2s so plumes die
  * before the chase-cam radar band.
  */
-export function createPuffEmitter(count, color, size, texture, { life = 0.28 } = {}) {
-  const geometry = new THREE.BufferGeometry()
-  const positions = new Float32Array(count * 3)
-  const ages = new Float32Array(count)
-  // Start "dead" so idle particles aren't visible as a cloud at world origin.
-  ages.fill(life + 1)
-  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
-  const material = new THREE.PointsMaterial({
-    map: texture,
-    color,
-    size,
-    transparent: true,
-    opacity: 0.9,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    sizeAttenuation: true
+export function createPuffEmitter(
+  count,
+  color,
+  size,
+  texture,
+  { life = 0.28, additive = true, gravity = 0, buoyancy = 0, wind = 0, drag = 4.2, grow = 1.4 } = {}
+) {
+  void texture // procedural now — the glow map only existed to shape a point sprite
+  const field = createSpriteField({
+    capacity: count,
+    material: puffMaterial(additive),
+    renderOrder: 3,
+    name: 'puff-emitter'
   })
-  const points = new THREE.Points(geometry, material)
-  points.visible = false
-  points.frustumCulled = false
 
-  const velocities = Array.from({ length: count }, () => new THREE.Vector3())
-  let nextIndex = 0
+  const dir = new THREE.Vector3()
   let spawnAccumulator = 0
   let nozzleCursor = 0
-  const baseSize = size
   const maxLife = life
 
+  function spawnAt(origin, dirWorld, speed, spread, jitterPos) {
+    dir
+      .copy(dirWorld)
+      .multiplyScalar(speed * (0.75 + Math.random() * 0.5))
+      .add(
+        _spreadJitter.set(
+          (Math.random() - 0.5) * spread,
+          (Math.random() - 0.5) * spread,
+          (Math.random() - 0.5) * spread
+        )
+      )
+    field.emit({
+      position: [
+        origin.x + (jitterPos ? (Math.random() - 0.5) * spread : 0),
+        origin.y + (jitterPos ? (Math.random() - 0.5) * spread : 0),
+        origin.z + (jitterPos ? (Math.random() - 0.5) * spread : 0)
+      ],
+      velocity: [dir.x, dir.y, dir.z],
+      size: size * (0.55 + Math.random() * 0.6),
+      grow: size * grow,
+      life: maxLife * (0.75 + Math.random() * 0.5),
+      tint: color,
+      drag,
+      gravity,
+      buoyancy,
+      wind
+    })
+  }
+
   return {
-    mesh: points,
+    mesh: field.mesh,
     /**
      * @param {THREE.Vector3|THREE.Vector3[]} originWorld single origin or multi-nozzle list
      */
     update(dt, active, originWorld, dirWorld, spawnRate, speed, spread) {
       const origins = Array.isArray(originWorld) ? originWorld : null
-      const single = origins ? null : originWorld
-
       if (active) {
-        points.visible = true
         spawnAccumulator += dt * spawnRate
         while (spawnAccumulator >= 1) {
           spawnAccumulator -= 1
-          const i = nextIndex
-          nextIndex = (nextIndex + 1) % count
-          const origin = origins
-            ? origins[nozzleCursor++ % origins.length]
-            : single
-          positions[i * 3] = origin.x
-          positions[i * 3 + 1] = origin.y
-          positions[i * 3 + 2] = origin.z
-          ages[i] = 0
-          _spreadJitter.set(
-            (Math.random() - 0.5) * spread,
-            (Math.random() - 0.5) * spread,
-            (Math.random() - 0.5) * spread
+          spawnAt(
+            origins ? origins[nozzleCursor++ % origins.length] : originWorld,
+            dirWorld,
+            speed,
+            spread,
+            false
           )
-          velocities[i].copy(dirWorld).multiplyScalar(speed * (0.75 + Math.random() * 0.5)).add(_spreadJitter)
         }
+      } else {
+        spawnAccumulator = 0
       }
-
-      let anyAlive = false
-      let maxOpacity = 0
-      for (let i = 0; i < count; i++) {
-        ages[i] += dt
-        if (ages[i] > maxLife) {
-          // Park dead particles far away so they don't stack at origin.
-          positions[i * 3] = 0
-          positions[i * 3 + 1] = 1e6
-          positions[i * 3 + 2] = 0
-          continue
-        }
-        anyAlive = true
-        // Drag: exhaust quickly loses energy (realistic short plume).
-        velocities[i].multiplyScalar(Math.max(0.02, 1 - 4.2 * dt))
-        positions[i * 3] += velocities[i].x * dt
-        positions[i * 3 + 1] += velocities[i].y * dt
-        positions[i * 3 + 2] += velocities[i].z * dt
-        const u = ages[i] / maxLife
-        // Bright near nozzle, then hard falloff — dies before bottom HUD.
-        const a = u < 0.08 ? u / 0.08 : Math.pow(1 - (u - 0.08) / 0.92, 2.4)
-        if (a > maxOpacity) maxOpacity = a
-      }
-      // One material opacity for the batch — driven by the brightest living particle.
-      material.opacity = active ? 0.45 + 0.4 * maxOpacity : maxOpacity * 0.45
-      material.size = baseSize * (0.5 + 0.5 * maxOpacity)
-      geometry.attributes.position.needsUpdate = true
-      if (!active && !anyAlive) points.visible = false
+      field.update(dt, this.env || null)
     },
+    /** Ambient wind / sea clearance for the next update — see createSpriteField. */
+    env: null,
     burst(originWorld, dirWorld, countBurst, speed, spread) {
-      points.visible = true
       for (let n = 0; n < countBurst; n++) {
-        const i = nextIndex
-        nextIndex = (nextIndex + 1) % count
-        positions[i * 3] = originWorld.x + (Math.random() - 0.5) * spread
-        positions[i * 3 + 1] = originWorld.y + (Math.random() - 0.5) * spread
-        positions[i * 3 + 2] = originWorld.z + (Math.random() - 0.5) * spread
-        ages[i] = 0
-        _spreadJitter.set(
-          (Math.random() - 0.5) * spread * 2,
-          (Math.random() - 0.5) * spread * 2,
-          (Math.random() - 0.5) * spread * 2
-        )
-        velocities[i]
-          .copy(dirWorld)
-          .multiplyScalar(speed * (0.5 + Math.random()))
-          .add(_spreadJitter)
+        spawnAt(originWorld, dirWorld, speed * (0.5 + Math.random()), spread * 2, true)
       }
-      geometry.attributes.position.needsUpdate = true
-    }
+    },
+    reset: field.reset,
+    dispose: field.dispose
   }
 }
 
