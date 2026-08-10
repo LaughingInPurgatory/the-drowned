@@ -491,6 +491,13 @@ export function formatDeathCause(cause) {
   return String(cause)
 }
 
+export function describeOnFootDeath(killer) {
+  const ship = killer?.shipName
+  if (ship && ship !== 'Unknown vessel') return `Killed ashore by naval gunfire from ${ship}`
+  if (killer?.method === 'fire') return 'Killed ashore by unidentified naval gunfire'
+  return 'Died from injuries sustained while ashore'
+}
+
 export function shouldShowDeathContact(cause) {
   return cause !== 'Killed by acidic seawater' && cause !== 'Acidic seawater exposure'
 }

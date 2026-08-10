@@ -1,7 +1,7 @@
 {
   "name": "the-drowned",
   "productName": "The Drowned",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Procedurally generated open-world ocean trading/combat game set on a flooded Earth",
   "main": "./out/main/index.js",
   "author": "Laughing In Purgatory",
@@ -83,7 +83,7 @@
     "afterSign": "scripts/afterSignAdHoc.cjs"
   },
   "allowScripts": {
-    "electron@32.3.3": true,
-    "esbuild@0.21.5": true
+    "electron": true,
+    "esbuild": true
   }
 }

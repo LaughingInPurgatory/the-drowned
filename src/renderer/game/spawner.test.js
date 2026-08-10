@@ -5,6 +5,9 @@ import {
   positionOverlapsBodies,
   spawnPointNearBody,
   spawnNpcWithClass,
+  spawnAmbientTraffic,
+  replenishAmbientTraffic,
+  AMBIENT_TRAFFIC_COUNT,
   NPC_SPAWN_SHIP_RADIUS,
   NPC_SPAWN_CLEARANCE
 } from './spawner.js'
@@ -84,4 +87,32 @@ test('wreck fields are not solid, so nothing is pushed out of one', () => {
   const field = { kind: 'wreckField', id: 'wf1', position: [0, 0, 0], radius: 300 }
   assert.equal(positionOverlapsBodies([0, 0, 0], [field]), false)
   assert.deepEqual(clearPositionOfBodies([0, 0, 0], [field]), [0, 0, 0])
+})
+
+test('ambient traffic is spread across open water and given hub destinations', () => {
+  const bodies = [
+    { kind: 'port', id: 'port-a', position: [0, 0, 0], radius: null },
+    { kind: 'outpost', id: 'outpost-b', position: [4000, 0, -2500], radius: null },
+    island('island-a', [1200, 0, 900], 500)
+  ]
+  const traffic = spawnAmbientTraffic(mulberry32(11), bodies, 40)
+  assert.equal(traffic.length, 40)
+  assert.ok(traffic.every((npc) => npc.ambientTraffic && npc.faction === 'trader'))
+  assert.ok(traffic.every((npc) => ['port-a', 'outpost-b'].includes(npc.tradeDestinationId)))
+  assert.ok(traffic.every((npc) => !positionOverlapsBodies(npc.position, bodies)))
+  assert.ok(new Set(traffic.map((npc) => `${npc.position[0]}:${npc.position[2]}`)).size > 35)
+})
+
+test('ambient traffic replenishes only the civilian population shortfall', () => {
+  const bodies = [
+    { kind: 'port', id: 'port-a', position: [0, 0, 0], radius: null },
+    { kind: 'outpost', id: 'outpost-b', position: [4000, 0, -2500], radius: null }
+  ]
+  const traffic = spawnAmbientTraffic(mulberry32(12), bodies, 5)
+  traffic[0].destroyed = true
+  const gameState = { npcs: traffic }
+  const added = replenishAmbientTraffic(mulberry32(13), gameState, bodies, 5)
+  assert.equal(added.length, 1)
+  assert.equal(gameState.npcs.filter((npc) => npc.ambientTraffic && !npc.destroyed).length, 5)
+  assert.equal(AMBIENT_TRAFFIC_COUNT, 400)
 })

@@ -10,148 +10,136 @@ import { getWeapon, BASE_WEAPON_ID } from '../data/weapons.js'
 // which is the only part of real gunfire you can actually see in flight.
 
 /**
- * Procedural missile: tube body, nose cone, cruciform fins, nozzle + glow.
- * Length along local +Z (same convention as ship forward / laser bolts).
+ * Procedural guided ordnance. Everything points along local +Z, but each
+ * launcher now has a readable silhouette: warhead, guidance collar, swept
+ * tail fins, engine nozzle, and (for torpedoes) a propeller.
  */
 function buildMissileModel(weapon) {
   // A depth charge is not a missile — it is a drum of explosive rolled off the
-  // stern. No nose, no fins, nothing that steers.
+  // stern. No nose, fins, or steering surfaces.
   if (weapon.tracer === 'drum') return buildDepthCharge(weapon)
-  const dmg = weapon.damage ?? 30
-  // Scale by tier: rocket_pod ~30, seeker ~42, torpedo ~65
-  const tier = Math.min(1.35, 0.75 + dmg / 80)
-  const bodyLen = (2.4 + dmg * 0.028) * tier
-  const bodyR = (0.18 + dmg * 0.004) * tier
-  const noseLen = bodyLen * 0.32
-  const finSpan = bodyR * 2.8
+
+  const damage = Number(weapon.damage) || 30
+  const torpedo = weapon.tracer === 'torpedo'
+  const longRange = weapon.id === 'seeker_missile' || weapon.id === 'singularity_seed'
+  const bodyLen = torpedo ? 4.4 + damage * 0.016 : longRange ? 4.0 + damage * 0.014 : 3.2 + damage * 0.016
+  // Generous game-scale diameter: real ordnance vanishes at chase-camera
+  // distance, while these still need to read as physical bodies in flight.
+  const bodyR = torpedo ? 0.38 + damage * 0.0028 : 0.31 + damage * 0.0028
+  const noseLen = torpedo ? bodyR * 1.65 : bodyLen * 0.3
+  const finSpan = bodyR * (torpedo ? 1.75 : 2.1)
+  const finLen = bodyLen * (torpedo ? 0.22 : 0.27)
   const color = new THREE.Color(weapon.color ?? 0xff8a3d)
-  const hull = color.clone().lerp(new THREE.Color(0x2a2e34), 0.55)
-  const trim = color.clone().lerp(new THREE.Color(0xffffff), 0.15)
+  const hull = color.clone().lerp(new THREE.Color(0x26313a), 0.38)
+  const noseColor = color.clone().lerp(new THREE.Color(0x141a20), 0.16)
+  const trim = color.clone().lerp(new THREE.Color(0xe5e7dc), 0.3)
+  const dark = new THREE.MeshStandardMaterial({ color: 0x151a1e, metalness: 0.88, roughness: 0.28 })
+  const hullMat = new THREE.MeshStandardMaterial({
+    color: hull,
+    metalness: torpedo ? 0.58 : 0.2,
+    roughness: torpedo ? 0.4 : 0.5,
+    envMapIntensity: 0.55
+  })
+  const noseMat = new THREE.MeshStandardMaterial({
+    color: noseColor,
+    metalness: torpedo ? 0.48 : 0.16,
+    roughness: 0.42,
+    envMapIntensity: 0.5
+  })
+  const trimMat = new THREE.MeshStandardMaterial({ color: trim, metalness: 0.5, roughness: 0.4 })
+  const finMat = new THREE.MeshStandardMaterial({
+    color: hull.clone().offsetHSL(0, 0, -0.1),
+    metalness: 0.68,
+    roughness: 0.38,
+    side: THREE.DoubleSide
+  })
 
   const group = new THREE.Group()
   group.frustumCulled = false
 
-  // --- Main body (cylinder along +Z) ---
-  const bodyGeo = new THREE.CylinderGeometry(bodyR * 0.92, bodyR, bodyLen, 10)
-  bodyGeo.rotateX(Math.PI / 2)
-  bodyGeo.translate(0, 0, bodyLen * 0.5)
-  const bodyMat = new THREE.MeshStandardMaterial({
-    color: hull,
-    metalness: 0.65,
-    roughness: 0.35,
-    flatShading: false
-  })
-  group.add(new THREE.Mesh(bodyGeo, bodyMat))
+  // CylinderGeometry is Y-aligned; rotate it so every component shares +Z.
+  const addCylinder = (frontRadius, rearRadius, depth, z, material, radial = 18) => {
+    const geometry = new THREE.CylinderGeometry(frontRadius, rearRadius, depth, radial)
+    geometry.rotateX(Math.PI / 2)
+    geometry.translate(0, 0, z + depth * 0.5)
+    const mesh = new THREE.Mesh(geometry, material)
+    group.add(mesh)
+    return mesh
+  }
 
-  // Accent band near mid-body (warhead ring)
-  const bandGeo = new THREE.CylinderGeometry(bodyR * 1.06, bodyR * 1.06, bodyLen * 0.12, 10)
-  bandGeo.rotateX(Math.PI / 2)
-  bandGeo.translate(0, 0, bodyLen * 0.55)
-  const bandMat = new THREE.MeshStandardMaterial({
-    color: trim,
-    metalness: 0.5,
-    roughness: 0.4
-  })
-  group.add(new THREE.Mesh(bandGeo, bandMat))
+  // Pressure hull and contrasting warhead collar.
+  addCylinder(bodyR * 0.96, bodyR, bodyLen, 0, hullMat)
+  addCylinder(bodyR * 1.04, bodyR * 1.04, bodyLen * 0.075, bodyLen * 0.58, trimMat)
+  addCylinder(bodyR * 1.02, bodyR * 1.02, bodyLen * 0.055, bodyLen * 0.14, dark)
 
-  // --- Nose cone (point toward +Z) ---
-  const noseGeo = new THREE.ConeGeometry(bodyR * 0.95, noseLen, 10)
-  noseGeo.rotateX(Math.PI / 2)
-  noseGeo.translate(0, 0, bodyLen + noseLen * 0.5)
-  const noseMat = new THREE.MeshStandardMaterial({
-    color: color.clone().lerp(new THREE.Color(0x111111), 0.25),
-    metalness: 0.4,
-    roughness: 0.45
-  })
-  group.add(new THREE.Mesh(noseGeo, noseMat))
-
-  // Tip highlight
-  const tipGeo = new THREE.SphereGeometry(bodyR * 0.28, 8, 6)
-  tipGeo.translate(0, 0, bodyLen + noseLen * 0.92)
-  group.add(
-    new THREE.Mesh(
-      tipGeo,
-      new THREE.MeshStandardMaterial({ color: 0x9aa0a6, metalness: 0.9, roughness: 0.25 })
+  if (torpedo) {
+    // Rounded naval-torpedo nose: a hemisphere, not a blunt cone.
+    const nose = new THREE.SphereGeometry(bodyR * 1.01, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2)
+    nose.rotateX(Math.PI / 2)
+    nose.translate(0, 0, bodyLen)
+    group.add(new THREE.Mesh(nose, noseMat))
+  } else {
+    // Guided rocket/harpoon nose: a tapered ogive with a small sensor cap.
+    addCylinder(bodyR * 0.12, bodyR * 0.96, noseLen, bodyLen, noseMat)
+    const cap = new THREE.Mesh(
+      new THREE.SphereGeometry(bodyR * 0.15, 8, 6),
+      new THREE.MeshStandardMaterial({ color: 0xc5d3d5, metalness: 0.9, roughness: 0.2 })
     )
-  )
+    cap.position.z = bodyLen + noseLen
+    group.add(cap)
+  }
 
-  // --- Tail nozzle ---
-  const nozzleLen = bodyLen * 0.14
-  const nozzleGeo = new THREE.CylinderGeometry(bodyR * 0.7, bodyR * 1.05, nozzleLen, 10)
-  nozzleGeo.rotateX(Math.PI / 2)
-  nozzleGeo.translate(0, 0, -nozzleLen * 0.35)
-  group.add(
-    new THREE.Mesh(
-      nozzleGeo,
-      new THREE.MeshStandardMaterial({
-        color: 0x1a1a1e,
-        metalness: 0.8,
-        roughness: 0.3
-      })
-    )
+  // Rear engine and nozzle rim. The visible trail is supplied by missileTrailFx.
+  const nozzleDepth = torpedo ? bodyR * 1.1 : bodyR * 1.35
+  addCylinder(bodyR * 0.62, bodyR * 0.86, nozzleDepth, -nozzleDepth, dark, 10)
+  const rim = new THREE.Mesh(
+    new THREE.TorusGeometry(bodyR * 0.84, bodyR * 0.095, 6, 14),
+    trimMat
   )
+  rim.position.z = -nozzleDepth
+  group.add(rim)
 
-  // Prop wash, not rocket exhaust. A torpedo is screw-driven and leaves a
-  // bubble trail (missileTrailFx does that part) — nothing burns.
   const exhaust = new THREE.Mesh(
-    new THREE.ConeGeometry(bodyR * 0.8, bodyLen * 0.3, 8),
+    new THREE.ConeGeometry(bodyR * 0.66, bodyR * 0.7, 8),
     new THREE.MeshBasicMaterial({
-      color: 0xdfe8ea,
+      color: torpedo ? 0xdfe8ea : 0xffa43d,
       transparent: true,
-      opacity: 0.3,
-      depthWrite: false
+      opacity: torpedo ? 0.22 : 0.48,
+      depthWrite: false,
+      blending: torpedo ? THREE.NormalBlending : THREE.AdditiveBlending
     })
   )
   exhaust.rotation.x = -Math.PI / 2
-  exhaust.position.z = -bodyLen * 0.2
+  exhaust.position.z = -nozzleDepth - bodyR * 0.32
   group.add(exhaust)
 
-  // Counter-rotating screws: two small discs where the nozzle was.
-  const exhaustCore = new THREE.Mesh(
-    new THREE.CylinderGeometry(bodyR * 0.75, bodyR * 0.75, bodyR * 0.1, 8),
-    new THREE.MeshStandardMaterial({ color: 0x8a7c5e, metalness: 0.8, roughness: 0.4 })
-  )
-  exhaustCore.rotation.x = Math.PI / 2
-  exhaustCore.position.z = -bodyLen * 0.08
-  group.add(exhaustCore)
+  const exhaustCore = addCylinder(bodyR * 0.48, bodyR * 0.48, bodyR * 0.08, -nozzleDepth - bodyR * 0.12, trimMat, 10)
 
-  // --- Cruciform fins near the tail ---
-  const finMat = new THREE.MeshStandardMaterial({
-    color: hull.clone().offsetHSL(0, 0, -0.08),
-    metalness: 0.55,
-    roughness: 0.4,
-    side: THREE.DoubleSide
-  })
-  const finLen = bodyLen * 0.28
-  const finThick = bodyR * 0.18
+  // Four swept stabilisers give the projectile its unmistakable missile shape.
   for (let i = 0; i < 4; i++) {
-    const ang = (i / 4) * Math.PI * 2
+    const angle = i * Math.PI * 0.5
     const fin = new THREE.Mesh(
-      new THREE.BoxGeometry(finThick, finSpan, finLen),
+      new THREE.BoxGeometry(finSpan, bodyR * 0.22, finLen),
       finMat
     )
-    // Root of fin at body surface, extending outward.
     fin.position.set(
-      Math.cos(ang) * (bodyR + finSpan * 0.35),
-      Math.sin(ang) * (bodyR + finSpan * 0.35),
-      finLen * 0.35
+      Math.cos(angle) * (bodyR + finSpan * 0.46),
+      Math.sin(angle) * (bodyR + finSpan * 0.46),
+      bodyLen * 0.11
     )
-    fin.rotation.z = ang
-    // Slight rearward sweep
-    fin.rotation.y = Math.cos(ang) * 0.15
-    fin.rotation.x = Math.sin(ang) * 0.15
+    fin.rotation.set(0, torpedo ? 0.12 : 0.2, angle)
     group.add(fin)
   }
 
-  // Torpedo: extra thruster ring for bulk.
-  if (dmg >= 55) {
-    const ring = new THREE.Mesh(
-      new THREE.TorusGeometry(bodyR * 1.15, bodyR * 0.12, 6, 14),
-      new THREE.MeshStandardMaterial({ color: 0x444850, metalness: 0.7, roughness: 0.35 })
-    )
-    ring.rotation.y = Math.PI / 2
-    ring.position.z = bodyLen * 0.2
-    group.add(ring)
+  if (torpedo) {
+    // A torpedo's propeller is a useful silhouette cue at close range.
+    const propMat = new THREE.MeshStandardMaterial({ color: 0x9a8d70, metalness: 0.9, roughness: 0.28 })
+    for (let i = 0; i < 4; i++) {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(bodyR * 0.12, bodyR * 1.25, bodyR * 0.08), propMat)
+      blade.position.z = -nozzleDepth - bodyR * 0.18
+      blade.rotation.z = i * Math.PI * 0.5
+      group.add(blade)
+    }
   }
 
   group.userData.isMissile = true
@@ -191,6 +179,7 @@ function buildDepthCharge(weapon) {
 // Shared round geometry/materials — new shots clone the mesh, no per-shot alloc.
 const _laserTemplates = new Map()
 const _missileTemplates = new Map()
+const _onFootTemplates = new Map()
 let _flashGeo = null
 
 /**
@@ -207,6 +196,38 @@ function markWeaponPassThrough(root) {
       m.depthTest = false
       m.depthWrite = false
       m.needsUpdate = true
+    }
+  })
+  return root
+}
+
+/** Opaque launcher rounds obey world depth so they read as physical objects. */
+function markSolidOrdnance(root) {
+  root.traverse((obj) => {
+    obj.renderOrder = 0
+    obj.frustumCulled = false
+    if (!obj.material) return
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+    for (const material of mats) {
+      material.depthTest = true
+      material.depthWrite = !material.transparent
+      material.needsUpdate = true
+    }
+  })
+  return root
+}
+
+/** Handgun rounds use normal depth so the held pistol can occlude the shot. */
+function markOnFootRound(root) {
+  root.traverse((obj) => {
+    obj.renderOrder = 0
+    obj.frustumCulled = false
+    if (!obj.material) return
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material]
+    for (const material of mats) {
+      material.depthTest = true
+      material.depthWrite = false
+      material.needsUpdate = true
     }
   })
   return root
@@ -398,17 +419,68 @@ function missileTemplate(weapon) {
   const key = weapon.id
   let tpl = _missileTemplates.get(key)
   if (!tpl) {
-    tpl = markWeaponPassThrough(buildMissileModel(weapon))
+    tpl = markSolidOrdnance(buildMissileModel(weapon))
     _missileTemplates.set(key, tpl)
   }
   return tpl
 }
 
-export function buildProjectileMesh(weaponId, mountType = 'laser') {
+function onFootTemplate(weapon) {
+  const key = `${weapon.id}|on-foot`
+  let template = _onFootTemplates.get(key)
+  if (template) return template
+
+  // A real handgun bullet is too small and fast to read at game resolution.
+  // Keep a 9 mm-sized core, then add the short luminous streak that makes its
+  // flight legible without turning it into a ship-scale energy bolt.
+  const group = new THREE.Group()
+  group.frustumCulled = false
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.009, 8, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0xfff1bd,
+      depthWrite: false,
+      depthTest: true,
+      toneMapped: false
+    })
+  )
+  head.position.z = 0.015
+  head.renderOrder = 20
+  head.frustumCulled = false
+
+  const streak = (radius, length, opacity) => {
+    const geometry = new THREE.CylinderGeometry(radius * 0.45, radius, length, 6, 1, true)
+    geometry.rotateX(Math.PI / 2)
+    geometry.translate(0, 0, -length * 0.5)
+    return new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color: weapon.color ?? 0xffd9a0,
+        transparent: true,
+        opacity,
+        blending: THREE.AdditiveBlending,
+        depthTest: true,
+        depthWrite: false,
+        toneMapped: false
+      })
+    )
+  }
+  group.add(head, streak(0.014, 0.55, 0.9), streak(0.034, 0.82, 0.28))
+  group.userData.onFootProjectile = true
+  template = markOnFootRound(group)
+  _onFootTemplates.set(key, template)
+  return template
+}
+
+export function buildProjectileMesh(weaponId, mountType = 'laser', onFoot = false) {
   const weapon = getWeapon(weaponId ?? BASE_WEAPON_ID[mountType])
+  if (onFoot) {
+    const projectile = markOnFootRound(onFootTemplate(weapon).clone(true))
+    return projectile
+  }
   // Clone cached templates so combat open-fire does not rebuild geometry/materials.
   if (weapon.category === 'missile') {
-    return markWeaponPassThrough(missileTemplate(weapon).clone(true))
+    return markSolidOrdnance(missileTemplate(weapon).clone(true))
   }
   return markWeaponPassThrough(laserTemplate(weapon).clone(true))
 }
@@ -418,7 +490,8 @@ export function preloadProjectileMeshes(weaponIds = []) {
   for (const id of weaponIds) {
     try {
       const w = getWeapon(id)
-      if (w.category === 'missile') missileTemplate(w)
+      if (w.handheld) onFootTemplate(w)
+      else if (w.category === 'missile') missileTemplate(w)
       else laserTemplate(w)
     } catch {
       /* ignore unknown */
@@ -433,11 +506,13 @@ export function preloadProjectileMeshes(weaponIds = []) {
     'rapid_laser',
     'rocket_pod',
     'seeker_missile',
-    'torpedo'
+    'torpedo',
+    'fixo_pistol'
   ]) {
     try {
       const w = getWeapon(id)
-      if (w.category === 'missile') missileTemplate(w)
+      if (w.handheld) onFootTemplate(w)
+      else if (w.category === 'missile') missileTemplate(w)
       else laserTemplate(w)
     } catch {
       /* */

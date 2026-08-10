@@ -521,7 +521,11 @@ export const foamResponse = Fn(([viewDir, thickness]) => {
   // this floor the whole wake goes darker than the sea after sunset, which is
   // the one thing foam can never do.
   const floor = light.uSkyColor.mul(0.3).add(vec3(0.025, 0.035, 0.045))
-  return max(lit, floor)
+  // Foam remains visible under moonlight. This is a lighting floor only: the
+  // wake geometry, motion threshold, fade, and spray behavior stay unchanged.
+  const night = float(1).sub(smoothstep(float(0.2), float(0.85), light.uSunLevel))
+  const nightFloor = vec3(0.07, 0.09, 0.12).mul(night)
+  return max(lit, max(floor, nightFloor))
 })
 
 export { uv, positionWorld, cameraPosition, normalize, negate, min, max, abs, exp, cos, sin }

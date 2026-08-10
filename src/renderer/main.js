@@ -8,7 +8,8 @@ import {
   updateShipNightLights,
   nightLightFactorFromDay,
   toggleSearchlight,
-  offerShipNavAreaLights
+  offerShipNavAreaLights,
+  makeSearchlightCookie
 } from './render/shipMesh.js'
 import { buildHarbourMesh, updateHarbourMesh, offerHarbourAreaLights } from './render/harbourMesh.js'
 import { buildHarbourNpcGroup, updateHarbourNpcGroup } from './render/harbourNpcs.js'
@@ -24,6 +25,12 @@ import {
   updatePlayerAvatarMesh,
   PLAYER_AVATAR_HEIGHT
 } from './render/playerAvatarMesh.js'
+import {
+  buildFixoPistolViewModel,
+  FIXO_VIEWMODEL_LAYER,
+  kickFixoPistolViewModel,
+  updateFixoPistolViewModel
+} from './render/onFootWeapon.js'
 import { buildPlayerFlashlight, setPlayerFlashlightOn } from './render/playerFlashlight.js'
 import { preloadNatureModels, getGrassMeshData } from './render/natureModels.js'
 import { buildAsteroidFieldMesh, getAsteroidRocks } from './render/asteroidFieldMesh.js'
@@ -36,12 +43,20 @@ import { createLensFlare } from './render/lensFlare.js'
 import { daylightAt } from './render/sky.js'
 import { createGullFlock, tryHitGullFlock, updateGullFlock } from './render/seagullMesh.js'
 import {
+  buildWildlifeMesh,
+  createWildlifeBlood,
+  loadWildlifeModels,
+  updateWildlifeMesh,
+  wildlifeModelReady
+} from './render/wildlifeMesh.js'
+import {
   updateTurretAim,
   centreTurret,
   aimTurretAt,
   turretAimPoint,
   turretMuzzleWorld,
-  turretDirection
+  turretDirection,
+  crosshairSightlineEnd
 } from './game/turret.js'
 import {
   syncMeshToEntity,
@@ -76,12 +91,15 @@ import {
   updateOnFootMovement,
   startOnFootJump,
   updateOnFootJump,
+  updateOnFootFall,
+  onFootFallDamage,
   updateOnFootStamina,
   footstepSurfaceForIsland,
   advanceOnFootFootsteps,
   ON_FOOT_WALK_SPEED,
   ON_FOOT_RUN_SPEED,
   ON_FOOT_JUMP_TRAVEL_MULTIPLIER,
+  ON_FOOT_MAX_WALKABLE_SLOPE,
   boardingRangeForShip,
   withinBoardingRange
 } from './game/onFoot.js'
@@ -104,7 +122,10 @@ import {
   spawnEncounterNear,
   spawnPoliceResponse,
   ensureStationPolicePatrols,
-  spawnMiningPirateAmbush
+  spawnMiningPirateAmbush,
+  AMBIENT_TRAFFIC_COUNT,
+  spawnAmbientTraffic,
+  replenishAmbientTraffic
 } from './game/spawner.js'
 import { playerSkillBonuses, ensureSkills, getSkillDef } from './game/skills.js'
 import {
@@ -112,6 +133,7 @@ import {
   fireOnFootProjectile,
   updateProjectiles,
   updateNpcAI,
+  updateAmbientTrafficRoute,
   updateCombatFlag,
   prepareCombatFrame,
   getShipCollisionRadius,
@@ -121,6 +143,13 @@ import {
   playerFightingPirates,
   flushPendingLawPenalties
 } from './game/combat.js'
+import {
+  createWildlife,
+  hitWildlifeSegment,
+  respawnWildlife,
+  updateWildlife,
+  updateWildlifeDogAttacks
+} from './game/wildlife.js'
 import {
   ensureLawStanding,
   canDockWithLaw,
@@ -193,7 +222,7 @@ import { createDatacoreMinigame } from './ui/datacoreMinigame.js'
 import { createInventoryUI } from './ui/inventoryUI.js'
 import { createMissionsUI } from './ui/missionsUI.js'
 import { createCharacterUI } from './ui/characterUI.js'
-import { createDeathScreen } from './ui/deathScreen.js'
+import { createDeathScreen, describeOnFootDeath } from './ui/deathScreen.js'
 import {
   ensureSystemAnomalies,
   getAnomaly,
@@ -227,7 +256,6 @@ import {
   ensureDrones,
   summonDrones,
   recallDrones,
-  teleportDronesToBay,
   updateDrones,
   damageDrone,
   livingDeployedDrones,
@@ -272,17 +300,18 @@ const ON_FOOT_WATER_DAMAGE_PER_SECOND = 18
 const ON_FOOT_LANDING_INLAND = 8
 const ON_FOOT_DRY_LANDING_CLEARANCE = 0.6
 // The abandoned hull is a near-shore placeholder while the player explores.
-// Keep its centre just beyond the visible shoreline so boarding is possible
-// from the water's edge without letting the player walk into deep water.
-const DISEMBARK_SHORE_STANDOFF = 0.75
+// Keep the whole collision envelope offshore so the landing point cannot
+// spawn inside the visible hull geometry.
+const DISEMBARK_SHORE_CLEARANCE = 2.5
 // How far offshore a sounding still works an island / shows the survey panel.
 const PROBE_ORBIT_MARGIN = 500
 // Harbour meshes are built at roughly 34–52 local units across (see
 // render/harbourMesh.js). Half the former multiplier keeps quays and towers
 // substantial without making them dwarf the ships.
 const STATION_SCALE = 0.85
-// Outposts are a jetty and a shed — half the former settlement scale too.
-const SETTLEMENT_SCALE = 0.75
+// Outposts are still compact, but need to read as real settlements from the
+// water rather than a tiny prop beside the island.
+const SETTLEMENT_SCALE = 3
 // Surface standoff for sounding (P) and for the left-side survey readout.
 const PROBE_RANGE = 500
 const MINING_TOAST_DURATION_S = 1.6
@@ -387,6 +416,8 @@ function hideHudToast(el) {
 
 const AMBIENT_SPAWN_INTERVAL_S = 90
 const AMBIENT_NPC_CAP = 3
+const NPC_TRAFFIC_MESH_DISTANCE = 12000
+const NPC_TRAFFIC_COLLISION_DISTANCE = 3500
 // Ship/wreck/rock radar contacts (planets/waypoint may still paint farther).
 // 10 km (1 unit = 1 m).
 const RADAR_RANGE = 10000
@@ -439,6 +470,8 @@ function updateHailMessagePosition() {
 // Warp-gate jump: fly into origin aperture → spool/tunnel → emerge from dest aperture.
 /** Fixed chase FOV — same under helm and Cruise Control (no speed/mode zoom). */
 const BASE_FOV = 60
+const WORLD_CAMERA_NEAR = 0.5
+const ON_FOOT_CAMERA_NEAR = 0.05
 
 const CROSSHAIR_DISTANCE = 80
 
@@ -468,9 +501,47 @@ const SONAR_PING_COUNT = 4
 const SONAR_PING_INTERVAL_S = 1.55
 
 const appEl = document.getElementById('app')
+const sessionLoadingEl = document.createElement('div')
+sessionLoadingEl.id = 'session-loading'
+const sessionLoadingStyle = document.createElement('style')
+sessionLoadingStyle.textContent = `
+@keyframes session-loading-spin { to { transform: rotate(360deg); } }
+@keyframes session-loading-pulse {
+  0%, 100% { opacity: 0.28; transform: scale(0.82); }
+  50% { opacity: 1; transform: scale(1); }
+}
+`
+document.head.appendChild(sessionLoadingStyle)
+sessionLoadingEl.innerHTML = `
+  <div style="display:flex;flex-direction:column;align-items:center;gap:14px">
+    <div style="width:34px;height:34px;border:2px solid rgba(255,230,160,0.22);border-top-color:#ffe6a0;border-radius:50%;animation:session-loading-spin 0.9s linear infinite"></div>
+    <div>PREPARING WORLD<span style="display:inline-flex;gap:3px;margin-left:4px;vertical-align:middle">
+      <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:session-loading-pulse 1.05s ease-in-out infinite"></i>
+      <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:session-loading-pulse 1.05s ease-in-out 0.18s infinite"></i>
+      <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:session-loading-pulse 1.05s ease-in-out 0.36s infinite"></i>
+    </span></div>
+  </div>`
+sessionLoadingEl.style.cssText = [
+  'position:fixed',
+  'inset:0',
+  'display:none',
+  'place-items:center',
+  'background:rgba(3,8,15,0.9)',
+  'color:#ffe6a0',
+  'font:600 16px/1.2 monospace',
+  'letter-spacing:0.14em',
+  'z-index:2000',
+  'pointer-events:auto'
+].join(';')
+appEl.appendChild(sessionLoadingEl)
+function setSessionLoading(visible) {
+  sessionLoadingEl.style.display = visible ? 'grid' : 'none'
+}
 // WebGPU device init is async — top-level await (index.html is type=module).
 const { scene, camera, renderer, render, captureFrame, updateEnvironment, setPostOverlay, ocean, areaLights } =
   await createScene(appEl)
+renderer.domElement.tabIndex = 0
+renderer.domElement.setAttribute('aria-label', 'Game view')
 const playerFlashlight = buildPlayerFlashlight()
 scene.add(playerFlashlight.root)
 // Sonar rings — the boat sounds from where it is; there is nothing to launch.
@@ -659,17 +730,30 @@ function syncOceanSearchlight() {
   ocean.setSearchlight({
     position: _searchLightPos,
     direction: _searchLightDir,
-    intensity: 1.15,
-    range: 145,
+    intensity: 1.55,
+    range: 1000,
     angle: 0.15,
     penumbra: 0.55,
     color: 0xfff0d0
   })
 }
 setPostOverlay((r) => {
+  // First-person geometry is a camera-space overlay, not world geometry.
+  // Render it after clearing world depth so a nearby hillside cannot bury it;
+  // its own depth buffer still keeps the hand, pistol and flash ordered.
+  if (onFootWeapon?.visible && gameState?.player?.onFoot?.active && !deathOrbit) {
+    const previousLayerMask = camera.layers.mask
+    r.clearDepth()
+    camera.layers.set(FIXO_VIEWMODEL_LAYER)
+    try {
+      r.render(scene, camera)
+    } finally {
+      camera.layers.mask = previousLayerMask
+    }
+  }
   if (lensFlare.visible) r.render(lensFlare.scene, lensFlare.camera)
   if (spray.visible) r.render(spray.scene, spray.camera)
-  if (weatherFx.visible) r.render(weatherFx.scene, weatherFx.camera)
+  if (weatherFx.visible) weatherFx.render(r)
 })
 
 // Ortho HUD in NDC (-1..1). Circle must be scaled by aspect or it looks
@@ -717,6 +801,7 @@ let pointerLockRetryTimer = null
 // Slow camera orbit after death — must be set BEFORE unlock so pointerlockchange
 // / stale lock promises cannot re-arm flight or the full-screen bridge.
 let deathOrbit = null
+let deathFootBody = null
 
 const keys = createInputState()
 const mouseAim = createMouseAimState()
@@ -750,9 +835,31 @@ function canPlayerFire() {
 
 const _playerAimPoint = new THREE.Vector3()
 const _playerMuzzle = new THREE.Vector3()
+const _crosshairSightEnd = new THREE.Vector3()
 const _onFootShotDirection = new THREE.Vector3()
 const _onFootShotOrigin = new THREE.Vector3()
 const _onFootShotTarget = new THREE.Vector3()
+const _onFootImpactPosition = new THREE.Vector3()
+const _onFootImpactInbound = new THREE.Vector3()
+
+/**
+ * Converge a low weapon muzzle on the actual surface beneath its screen-space
+ * reticle. Without this, the distant aim point makes close shots land low.
+ */
+function snapAimPointToCrosshairSurface(aimPoint, maxDistance) {
+  crosshairSightlineEnd(camera.position, aimPoint, maxDistance, _crosshairSightEnd)
+  const impact = resolveProjectileWorldImpact({
+    from: camera.position.toArray(),
+    to: _crosshairSightEnd.toArray()
+  })
+  if (Array.isArray(impact?.position)) aimPoint.fromArray(impact.position)
+  return aimPoint
+}
+
+function triggerOnFootMuzzleFlash() {
+  if (!onFootWeapon?.visible) return
+  kickFixoPistolViewModel(onFootWeapon)
+}
 
 /** Fire once if allowed. Cooldowns live on the ship; safe to call every frame while held. */
 function tryPlayerFire(weaponTypeFilter) {
@@ -764,6 +871,7 @@ function tryPlayerFire(weaponTypeFilter) {
     // crosshair is the projection of this same point, so what you see is what
     // you hit. Never homes on a Tab-lock.
     turretAimPoint(gameState.player.ship, playerShipClass, _playerAimPoint)
+    snapAimPointToCrosshairSurface(_playerAimPoint, 2500)
     turretMuzzleWorld(gameState.player.ship, playerShipClass, _playerMuzzle)
     fireProjectile(
       gameState,
@@ -797,30 +905,42 @@ function canPlayerFireOnFoot() {
 }
 
 function tryOnFootFire() {
-  if (!canPlayerFireOnFoot()) return
+  if (!canPlayerFireOnFoot()) return false
   camera.getWorldDirection(_onFootShotDirection)
-  // Use the screen-centre ray as the target, but start at the visible weapon
-  // hand so the Fixo round travels out from the player's right hand.
+  // Use the screen-centre ray as the target, but start at the visible pistol
+  // muzzle so the Fixo round visibly leaves the weapon's tip.
   _onFootShotTarget.copy(camera.position).addScaledVector(_onFootShotDirection, 400)
-  // The avatar faces +Z, so its anatomical right side is local -X. The
-  // authored hand nodes use screen-side labels in the opposite convention;
-  // leftHand is the player's visible right hand from first person.
-  const hand = playerAvatarMesh?.getObjectByName('leftHand')
-  if (hand) {
-    playerAvatarMesh.updateWorldMatrix(true, true)
-    hand.getWorldPosition(_onFootShotOrigin)
+  snapAimPointToCrosshairSurface(_onFootShotTarget, 400)
+  camera.updateMatrixWorld(true)
+  const muzzle = onFootWeapon?.userData?.muzzle
+  if (muzzle && onFootWeapon.visible) {
+    muzzle.getWorldPosition(_onFootShotOrigin)
+    // The viewmodel is deliberately drawn over nearby terrain, but its camera-
+    // space muzzle can therefore sit physically inside a steep foreground
+    // slope. Preserve the real muzzle normally; if terrain crosses the short
+    // camera-to-barrel segment, start collision just beyond the near plane so
+    // the first projectile step enters the ground and produces its impact.
+    if (resolveProjectileWorldImpact({
+      from: camera.position.toArray(),
+      to: _onFootShotOrigin.toArray()
+    })) {
+      _onFootShotOrigin.copy(camera.position)
+        .addScaledVector(_onFootShotDirection, camera.near * 1.2)
+    }
   } else {
     _onFootShotOrigin.copy(camera.position)
   }
   _onFootShotDirection.subVectors(_onFootShotTarget, _onFootShotOrigin).normalize()
-  fireOnFootProjectile(
+  const fired = fireOnFootProjectile(
     gameState,
     gameState.player.onFoot,
     _onFootShotOrigin.toArray(),
     _onFootShotDirection.toArray(),
     onWeaponFired
   )
+  if (fired) triggerOnFootMuzzleFlash()
   syncProjectileMeshesNow()
+  return fired
 }
 
 /** Create meshes for any projectiles spawned after the mid-frame mesh pass. */
@@ -828,11 +948,12 @@ function syncProjectileMeshesNow() {
   for (const proj of gameState.projectiles) {
     let mesh = projectileMeshes.get(proj.id)
     if (!mesh) {
-      mesh = buildProjectileMesh(proj.weaponId, proj.weaponType)
+      mesh = buildProjectileMesh(proj.weaponId, proj.weaponType, !!proj.onFoot)
       projectileMeshes.set(proj.id, mesh)
       scene.add(mesh)
     }
-    mesh.scale.setScalar(proj.onFoot ? 0.5 : 1)
+    mesh.scale.setScalar(1)
+    mesh.visible = shouldShowProjectileMesh(proj)
     syncMeshToEntity(mesh, proj)
   }
   for (const [id, mesh] of projectileMeshes) {
@@ -1075,11 +1196,9 @@ function requestFlightPointerLock() {
   }
   let req
   try {
-    // Prefer unadjusted movement when available (raw mouse, less OS accel).
-    req = renderer.domElement.requestPointerLock?.({ unadjustedMovement: true })
-    if (req === undefined) {
-      req = renderer.domElement.requestPointerLock?.()
-    }
+    // The options form rejects on some Linux Chromium builds (notably inside
+    // AppImages). The basic API is the portable path and still locks the cursor.
+    req = renderer.domElement.requestPointerLock?.()
   } catch {
     try {
       req = renderer.domElement.requestPointerLock?.()
@@ -1536,7 +1655,13 @@ let nextGullCallAt = 0
 let playerShipClass = null
 let playerMesh = null
 let playerAvatarMesh = null
-const _flashlightHandPosition = new THREE.Vector3()
+let onFootWeapon = null
+let onFootWeaponPromise = null
+let onFootWeaponWarmPromise = null
+let sceneWarmPromise = null
+let sessionLoading = false
+const _flashlightAimDirection = new THREE.Vector3()
+const _flashlightAimPoint = new THREE.Vector3()
 let playerWake = null
 /** Ship-local engine nozzle points for multi-thruster exhaust (from hull layout). */
 let damageEffects = null
@@ -1606,8 +1731,13 @@ let dockEffect = null
 let dockedApproach = null
 let undockPauseSuppressTimer = null
 const npcMeshes = new Map()
+let npcTrafficMeshBuildsThisFrame = 0
 const bodyMeshes = new Map()
 const wreckMeshes = new Map()
+const wildlifeMeshes = new Map()
+const wildlifeBloodFx = []
+const WILDLIFE_STREAM_DISTANCE = 9000
+const WILDLIFE_MAX_ACTIVE = 84
 // On-foot grass is streamed around the survivor rather than baked into every
 // island. That gives the player a continuous grassy ground cover on large
 // islands without multiplying the already-loaded boat-view vegetation budget.
@@ -1746,6 +1876,11 @@ function addNpcMesh(npc) {
   if (!npc || npc.destroyed) return null
   let mesh = npcMeshes.get(npc.id)
   if (mesh) return mesh
+  // Traffic is populated in bulk at session start. Spread its first visible
+  // mesh builds over frames so a player entering a busy lane never pays for a
+  // whole group of procedural hulls in one render tick. Combat/patrol ships
+  // retain their immediate spawn visuals.
+  if (npc.ambientTraffic && npcTrafficMeshBuildsThisFrame >= 1) return null
   let shipClass
   try {
     shipClass = getShipClass(npc.shipClassId)
@@ -1773,7 +1908,20 @@ function addNpcMesh(npc) {
   }
   npcMeshes.set(npc.id, mesh)
   scene.add(mesh)
+  if (npc.ambientTraffic) npcTrafficMeshBuildsThisFrame++
   return mesh
+}
+
+function npcTrafficIsNearPlayer(npc, maxDistance = NPC_TRAFFIC_MESH_DISTANCE) {
+  if (!npc?.ambientTraffic) return true
+  const focus = gameState?.player?.onFoot?.active
+    ? gameState.player.onFoot.position
+    : gameState?.player?.ship?.position
+  if (!Array.isArray(focus)) return false
+  return Math.hypot(
+    (npc.position?.[0] ?? 0) - (focus[0] ?? 0),
+    (npc.position?.[2] ?? 0) - (focus[2] ?? 0)
+  ) <= maxDistance
 }
 
 function removeNpcMesh(npcId) {
@@ -1910,6 +2058,15 @@ const surfaceSettlements = new Map()
 const projectileMeshes = new Map()
 const rockExplosions = []
 const hitImpacts = []
+
+function shouldShowProjectileMesh(proj) {
+  if (!proj?.onFoot || !Array.isArray(proj.renderOrigin) || !Array.isArray(proj.position)) return true
+  const dx = Number(proj.position[0]) - Number(proj.renderOrigin[0])
+  const dy = Number(proj.position[1]) - Number(proj.renderOrigin[1])
+  const dz = Number(proj.position[2]) - Number(proj.renderOrigin[2])
+  const startDistance = Math.max(0, Number(proj.renderStartDistance) || 0)
+  return Math.hypot(dx, dy, dz) >= startDistance
+}
 
 function updateHitImpactEffects(dt) {
   for (let i = hitImpacts.length - 1; i >= 0; i--) {
@@ -2299,6 +2456,29 @@ let inventoryOpen = false
 let missionsOpen = false
 let characterOpen = false
 let cruising = false
+const PLAYER_HEALTH_REGEN_INTERVAL_S = 5
+const ON_FOOT_HEALTH_REGEN_PER_TICK = 1
+const SHIP_HEALTH_REGEN_PER_TICK = 10
+let playerHealthRegenElapsed = 0
+
+function updatePlayerHealthRegen(dt, inCombat = gameState?.inCombat) {
+  if (!gameState?.player?.onFoot) return
+  if (inCombat) {
+    playerHealthRegenElapsed = 0
+    return
+  }
+  playerHealthRegenElapsed += Math.max(0, Number(dt) || 0)
+  if (playerHealthRegenElapsed < PLAYER_HEALTH_REGEN_INTERVAL_S) return
+
+  const ticks = Math.floor(playerHealthRegenElapsed / PLAYER_HEALTH_REGEN_INTERVAL_S)
+  playerHealthRegenElapsed -= ticks * PLAYER_HEALTH_REGEN_INTERVAL_S
+  const onFoot = gameState.player.onFoot
+  const amount = ticks * (onFoot.active ? ON_FOOT_HEALTH_REGEN_PER_TICK : SHIP_HEALTH_REGEN_PER_TICK)
+  const previous = Math.max(0, Math.min(100, Number(onFoot.health) || 0))
+  onFoot.health = Math.min(100, previous + amount)
+  if (onFoot.active && onFoot.health !== previous) hud?.updateHealth?.(onFoot.health)
+}
+
 // Edge-detected in animate() to fire the autopilot engage/disengage voice
 // callout exactly once per transition, regardless of whether cruising flips
 // via the KeyC handler (manual) or the cruising block below (auto-arrival/
@@ -2325,7 +2505,9 @@ let menuWorld = null
 
 // The title view drifts over a randomly chosen island — the same sea the
 // player is about to sail, at the same scale, rather than a separate showpiece.
-const MENU_ORBIT_RADIUS = 2600
+// A little tighter than the gameplay fly-by, while retaining enough margin to
+// keep the full 1.4 km-radius home island inside the title framing.
+const MENU_ORBIT_RADIUS = 2450
 const MENU_ORBIT_HEIGHT = 190
 const MENU_ORBIT_PERIOD_S = 96
 const MENU_LOOK_AT = new THREE.Vector3(0, 0, 0)
@@ -2388,6 +2570,7 @@ function buildMenuLighthouse(portMesh, body) {
   root.add(beam)
 
   const spot = new THREE.SpotLight(0xffedbd, 420, 420, 0.13, 0.65, 1.4)
+  spot.map = makeSearchlightCookie()
   spot.position.set(0, 0, 0)
   spot.castShadow = false
   spot.target.position.set(0, 0, 260)
@@ -2664,11 +2847,41 @@ function onProjectileHit({
   ownerId,
   onFootImpact,
   worldImpact,
+  wildlifeImpact,
+  wildlifeKilled,
   waterImpact,
   silentImpact
 }) {
+  if (wildlifeImpact) {
+    // A small burst at the actual hit point, then the creature remains as a
+    // grounded corpse for the wildlife simulation's short harvest window.
+    spawnWildlifeBloodFx(position)
+    if (wildlifeKilled) spawnWildlifeBloodFx(position)
+    return
+  }
   if (onFootImpact) {
-    const hitFx = spawnHitImpact(position, 'laser', 0xffd9a0, { scale: 0.5 })
+    if (waterImpact) {
+      // Fixo rounds use the same water-column feedback as ship weapons. Keep
+      // this before the ordinary on-foot surface hit path: the projectile is
+      // still tagged on-foot, but its world impact is the sea surface.
+      const hitFx = spawnWaterColumn(position, gameState.simTime, 1)
+      scene.add(hitFx.group)
+      hitImpacts.push(hitFx)
+      try {
+        audio.playWaterImpact()
+      } catch {
+        /* */
+      }
+      return
+    }
+    _onFootImpactPosition.fromArray(position)
+    if (Array.isArray(inboundDir)) {
+      _onFootImpactInbound.fromArray(inboundDir)
+      if (_onFootImpactInbound.lengthSq() > 1e-8) {
+        _onFootImpactPosition.addScaledVector(_onFootImpactInbound.normalize(), 0.08)
+      }
+    }
+    const hitFx = spawnHitImpact(_onFootImpactPosition, 'laser', 0xffd9a0, { scale: 0.5 })
     scene.add(hitFx.group)
     hitImpacts.push(hitFx)
     try {
@@ -3277,6 +3490,14 @@ const menu = createMenu(appEl, {
 })
 
 function clearSession() {
+  sessionLoading = false
+  setSessionLoading(false)
+  sceneWarmPromise = null
+  playerHealthRegenElapsed = 0
+  if (camera.near !== WORLD_CAMERA_NEAR) {
+    camera.near = WORLD_CAMERA_NEAR
+    camera.updateProjectionMatrix()
+  }
   gullFlock.visible = false
   clearOnFootGrass()
   try {
@@ -3286,6 +3507,8 @@ function clearSession() {
   }
   _bodyStreamAcc = 0
   if (playerMesh) scene.remove(playerMesh)
+  clearDeathFootBody()
+  clearOnFootWeapon()
   if (playerAvatarMesh) scene.remove(playerAvatarMesh)
   playerAvatarMesh = null
   clearDroneMeshes()
@@ -3302,6 +3525,16 @@ function clearSession() {
     missileTrail = null
   }
   clearNpcMeshes()
+  for (const mesh of wildlifeMeshes.values()) scene.remove(mesh)
+  wildlifeMeshes.clear()
+  for (const fx of wildlifeBloodFx) {
+    scene.remove(fx.group)
+    fx.group.traverse((child) => {
+      child.geometry?.dispose?.()
+      child.material?.dispose?.()
+    })
+  }
+  wildlifeBloodFx.length = 0
   for (const mesh of bodyMeshes.values()) scene.remove(mesh)
   bodyMeshes.clear()
   surfaceSettlements.clear()
@@ -3701,6 +3934,270 @@ function rebuildPlayerAvatarMesh() {
   }
 }
 
+function clearOnFootWeapon() {
+  setOnFootWeaponVisible(false)
+}
+
+async function rebuildOnFootWeapon() {
+  if (!onFootWeaponPromise) {
+    onFootWeaponPromise = buildFixoPistolViewModel().then((weapon) => {
+      onFootWeapon = weapon
+      // Mirror the complete posed rig in camera space. Mirroring the imported
+      // FBX itself corrupts its skinned right hand and uses its offset pivot.
+      const mount = new THREE.Group()
+      mount.name = 'fixoPistolScreenMirror'
+      mount.position.set(-3.77, -2.0, 0)
+      mount.scale.x = -1
+      mount.add(weapon)
+      camera.add(mount)
+
+      // Sharpen the presentation around the barrel, keeping the muzzle fixed
+      // while the rear of the pistol settles slightly left and down.
+      camera.updateMatrixWorld(true)
+      const barrelPivotPosition = weapon.userData.muzzle.getWorldPosition(new THREE.Vector3())
+      mount.worldToLocal(barrelPivotPosition)
+      const barrelPivot = new THREE.Group()
+      const barrelBase = new THREE.Group()
+      barrelPivot.position.copy(barrelPivotPosition)
+      barrelPivot.rotation.z = 0
+      barrelBase.position.copy(barrelPivotPosition).multiplyScalar(-1)
+      mount.remove(weapon)
+      barrelBase.add(weapon)
+      barrelPivot.add(barrelBase)
+      mount.add(barrelPivot)
+      return weapon
+    }).catch((error) => {
+      onFootWeaponPromise = null
+      console.error('[fixo viewmodel] failed to load', error)
+      throw error
+    })
+  }
+  const weapon = await onFootWeaponPromise
+  weapon.visible = !!gameState?.player?.onFoot?.active
+  return weapon
+}
+
+/** Upload textures and compile the isolated viewmodel pipeline on the title. */
+function warmOnFootWeapon() {
+  if (onFootWeaponWarmPromise) return onFootWeaponWarmPromise
+  onFootWeaponWarmPromise = rebuildOnFootWeapon().then(async (weapon) => {
+    const textures = new Set()
+    weapon.traverse((object) => {
+      const materials = Array.isArray(object.material) ? object.material : [object.material]
+      for (const material of materials) {
+        if (!material) continue
+        for (const value of Object.values(material)) {
+          if (value?.isTexture) textures.add(value)
+        }
+      }
+    })
+    for (const texture of textures) renderer.initTexture(texture)
+
+    const wasVisible = weapon.visible
+    const flash = weapon.userData.muzzleFlash
+    const wasFlashVisible = flash?.visible
+    weapon.visible = true
+    if (flash) flash.visible = true
+    // Do not clone the live camera recursively: the viewmodel is its child and
+    // its AnimationMixer intentionally contains circular runtime references.
+    const warmCamera = new THREE.PerspectiveCamera(camera.fov, camera.aspect, camera.near, camera.far)
+    warmCamera.position.copy(camera.position)
+    warmCamera.quaternion.copy(camera.quaternion)
+    warmCamera.updateMatrixWorld(true)
+    warmCamera.layers.set(FIXO_VIEWMODEL_LAYER)
+    await renderer.compileAsync(scene, warmCamera)
+    if (flash) flash.visible = wasFlashVisible
+    weapon.visible = wasVisible && !!gameState?.player?.onFoot?.active
+  }).catch((error) => {
+    onFootWeaponWarmPromise = null
+    console.error('[fixo viewmodel] warm-up failed', error)
+  })
+  return onFootWeaponWarmPromise
+}
+
+/** Compile the shared scene pipeline while the title screen is already up. */
+function warmScenePipelines() {
+  if (sceneWarmPromise) return sceneWarmPromise
+  sceneWarmPromise = Promise.resolve()
+    .then(async () => {
+      // compileAsync is frustum-aware on this renderer. A single compile from
+      // the starting view leaves the first turn into a new quadrant to pay for
+      // those materials and light combinations. Compile four headings behind
+      // the loading veil; the camera never changes, and the extra work is paid
+      // once per session instead of as a hitch during play.
+      const warmCamera = new THREE.PerspectiveCamera(camera.fov, camera.aspect, camera.near, camera.far)
+      warmCamera.position.copy(camera.position)
+      warmCamera.layers.mask = camera.layers.mask
+      const up = new THREE.Vector3(0, 1, 0)
+      const yaw = new THREE.Quaternion()
+      for (const angle of [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5]) {
+        yaw.setFromAxisAngle(up, angle)
+        warmCamera.quaternion.copy(yaw).multiply(camera.quaternion)
+        warmCamera.updateMatrixWorld(true)
+        await renderer.compileAsync(scene, warmCamera)
+      }
+    })
+    .catch((error) => {
+      sceneWarmPromise = null
+      console.warn('[scene] pipeline warm-up failed', error)
+    })
+  return sceneWarmPromise
+}
+
+/** Keep the first shot from compiling a new projectile family during play. */
+function addRepresentativeProjectileWarmup() {
+  const group = new THREE.Group()
+  group.name = 'pipeline-warmup-projectiles'
+  group.frustumCulled = false
+  group.position.copy(camera.position)
+  group.quaternion.copy(camera.quaternion)
+  const specs = [
+    ['pulse_laser', 'laser', false],
+    ['torpedo', 'missile', false],
+    ['fixo_pistol', 'laser', true]
+  ]
+  specs.forEach(([weaponId, type, onFoot], index) => {
+    const mesh = buildProjectileMesh(weaponId, type, onFoot)
+    mesh.position.set((index - 1) * 3, 0, -10)
+    mesh.frustumCulled = false
+    group.add(mesh)
+  })
+  scene.add(group)
+  return group
+}
+
+function setOnFootWeaponVisible(visible) {
+  if (onFootWeapon) onFootWeapon.visible = !!visible
+}
+
+function clearDeathFootBody() {
+  if (!deathFootBody) return
+  scene.remove(deathFootBody)
+  deathFootBody.traverse((child) => {
+    child.geometry?.dispose?.()
+    if (Array.isArray(child.material)) child.material.forEach((material) => material?.dispose?.())
+    else child.material?.dispose?.()
+  })
+  deathFootBody = null
+}
+
+/** Reuse the shared NPC avatar model for a grounded corpse and blood splatter. */
+function showOnFootDeathBody(position) {
+  if (!playerAvatarMesh) return
+  const onFoot = gameState.player.onFoot
+  const heading = Number(onFoot?.heading) || 0
+  const x = Number(position?.[0]) || 0
+  const y = Number(position?.[1]) || 0
+  const z = Number(position?.[2]) || 0
+
+  playerAvatarMesh.traverse((child) => child.layers.set(0))
+  playerAvatarMesh.visible = true
+
+  // The living animation can leave limbs mid-stride. Reset the articulated
+  // pivots, then settle them into a loose collapse instead of leaving a rigid
+  // standing mannequin laid on its back.
+  const resetPart = (name) => {
+    const part = playerAvatarMesh.getObjectByName(name)
+    if (!part) return null
+    if (part.userData.avatarRestQuaternion) part.quaternion.copy(part.userData.avatarRestQuaternion)
+    else part.quaternion.identity()
+    return part
+  }
+  const posePart = (name, x, y, z) => {
+    const part = resetPart(name)
+    if (part) part.rotation.set(x, y, z)
+  }
+  posePart('leftUpperArm', 0.22, 0, -0.28)
+  posePart('leftForearm', -0.45, 0, 0.2)
+  posePart('rightUpperArm', -0.16, 0, 0.3)
+  posePart('rightForearm', 0.68, 0, -0.12)
+  posePart('leftThigh', -0.18, 0, 0.05)
+  posePart('leftShin', 0.55, 0, 0)
+  posePart('rightThigh', 0.12, 0, -0.06)
+  posePart('rightShin', -0.38, 0, 0)
+
+  playerAvatarMesh.rotation.order = 'YXZ'
+  playerAvatarMesh.rotation.set(-Math.PI / 2, heading, 0.07)
+  playerAvatarMesh.position.set(x, y, z)
+  playerAvatarMesh.updateMatrixWorld(true)
+  const corpseBounds = new THREE.Box3().setFromObject(playerAvatarMesh)
+  playerAvatarMesh.position.y += y + 0.018 - corpseBounds.min.y
+
+  const blood = new THREE.Group()
+  blood.name = 'onFootDeathBlood'
+  blood.rotation.y = heading
+
+  // Low-poly irregular pools read as wet stains far better than identical
+  // circles. The fixed edge pattern keeps the corpse presentation stable.
+  const addStain = (ox, oz, rx, rz, opacity, color, phase = 0) => {
+    const shape = new THREE.Shape()
+    const edge = [0.92, 0.7, 1.08, 0.82, 0.64, 1.04, 0.78, 1.12, 0.74, 0.96, 0.68, 1.02]
+    for (let i = 0; i < edge.length; i++) {
+      const a = phase + (i / edge.length) * Math.PI * 2
+      const r = edge[i]
+      const px = Math.cos(a) * rx * r
+      const pz = Math.sin(a) * rz * r
+      if (i === 0) shape.moveTo(px, pz)
+      else shape.lineTo(px, pz)
+    }
+    shape.closePath()
+    const geometry = new THREE.ShapeGeometry(shape)
+    geometry.rotateX(-Math.PI / 2)
+    const stain = new THREE.Mesh(
+      geometry,
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2
+      })
+    )
+    stain.position.set(ox, 0.001, oz)
+    blood.add(stain)
+  }
+
+  // The largest pool sits under the chest/shoulder area; smaller pools and
+  // directional smears break up the perfect decal look.
+  addStain(0.02, -1.08, 0.58, 0.34, 0.82, 0x4b0a10, 0.15)
+  addStain(-0.14, -1.4, 0.28, 0.18, 0.58, 0x701019, 1.1)
+  addStain(0.38, -0.72, 0.24, 0.14, 0.5, 0x5d0d14, -0.4)
+  addStain(-0.48, -0.35, 0.18, 0.1, 0.42, 0x83151c, 0.7)
+  addStain(0.38, -1.72, 0.14, 0.09, 0.38, 0x8c181e, -0.8)
+
+  const droplets = [
+    [-0.82, -1.38, 0.075, 0.13, 0.7],
+    [0.72, -1.18, 0.045, 0.08, 0.58],
+    [-0.68, -0.78, 0.032, 0.06, 0.52],
+    [0.82, -0.52, 0.024, 0.05, 0.48],
+    [-0.3, -1.82, 0.018, 0.04, 0.42],
+    [0.56, -1.92, 0.014, 0.03, 0.38]
+  ]
+  for (const [ox, oz, rx, rz, opacity] of droplets) {
+    const drop = new THREE.Mesh(
+      new THREE.CircleGeometry(1, 7),
+      new THREE.MeshBasicMaterial({
+        color: 0x651017,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -3
+      })
+    )
+    drop.rotation.x = -Math.PI / 2
+    drop.position.set(ox, 0.002, oz)
+    drop.scale.set(rx, rz, 1)
+    blood.add(drop)
+  }
+  blood.position.set(x, y + 0.012, z)
+  scene.add(blood)
+  deathFootBody = blood
+}
+
 const onFootGroundRay = new THREE.Raycaster()
 const onFootGroundOrigin = new THREE.Vector3()
 const onFootGroundDown = new THREE.Vector3(0, -1, 0)
@@ -3744,7 +4241,7 @@ function hasLineOfSightToOnFootPlayer(fromPos) {
 }
 
 /** Return the first island/structure surface crossed by a player round. */
-function resolveProjectileWorldImpact({ from, to }) {
+function resolveProjectileWorldImpact({ from, to, projectile = null }) {
   if (!Array.isArray(from) || !Array.isArray(to)) return null
   onFootProjectileFrom.fromArray(from)
   onFootProjectileDelta.fromArray(to).sub(onFootProjectileFrom)
@@ -3775,6 +4272,19 @@ function resolveProjectileWorldImpact({ from, to }) {
     const waterT = startAboveWater / Math.max(1e-6, startAboveWater - endAboveWater)
     waterDistance = waterT * distance
   }
+  const wildlifeHit = projectile?.ownerId === 'player'
+    ? hitWildlifeSegment(gameState.wildlife, from, to, projectile.damage, gameState.simTime)
+    : null
+  const wildlifeDistance = wildlifeHit ? wildlifeHit.t * distance : Infinity
+  const terrainDistance = closest?.distance ?? Infinity
+  if (wildlifeHit && wildlifeDistance <= Math.min(terrainDistance, waterDistance)) {
+    return {
+      position: wildlifeHit.position,
+      wildlifeImpact: true,
+      wildlifeId: wildlifeHit.creature.id,
+      wildlifeKilled: wildlifeHit.killed
+    }
+  }
   if (closest && closest.distance <= waterDistance) return { position: closest.point.toArray() }
   if (Number.isFinite(waterDistance)) {
     onFootWaterImpact.copy(onFootProjectileFrom)
@@ -3800,6 +4310,157 @@ function islandSurfaceYAt(body, x, z) {
     if (Number.isFinite(hit?.point?.y) && hit.point.y > minLandY) return hit.point.y
   }
   return islandGroundYAt(body, x, z) ?? islandTerrainYAt(body, x, z)
+}
+
+// Wildlife does not need a per-frame mesh raycast. The procedural sampler is
+// the same terrain field used to build the island, so reserve exact mesh
+// validation for spawn/respawn placement only.
+function wildlifeSurfaceYAt(body, x, z) {
+  return islandGroundYAt(body, x, z) ?? islandTerrainYAt(body, x, z)
+}
+
+function wildlifeTargetForIsland(body) {
+  const radius = Number(body?.radius) || 0
+  const base = Math.max(1, Math.min(4, 1 + Math.floor(radius / 420) + (hashStringForOrbit(body.id) % 2)))
+  return base * 3
+}
+
+function wildlifeSpeciesFor(body) {
+  const roll = Math.random()
+  if ((Number(body?.radius) || 0) > 700 && roll > 0.82) return 'deer'
+  if (roll < 0.38) return 'rabbit'
+  if (roll < 0.65) return 'cat'
+  return 'dog'
+}
+
+function wildlifePointOnIsland(body) {
+  const maxRadius = Math.max(12, Math.min(islandMaxShoreline(body) * 0.78, (Number(body.radius) || 0) * 0.82))
+  for (let attempt = 0; attempt < 18; attempt++) {
+    const angle = Math.random() * Math.PI * 2
+    const radius = Math.sqrt(Math.random()) * maxRadius
+    const x = Number(body.position?.[0] || 0) + Math.cos(angle) * radius
+    const z = Number(body.position?.[2] || 0) + Math.sin(angle) * radius
+    const y = wildlifeSurfaceYAt(body, x, z)
+    if (!Number.isFinite(y)) continue
+    if (y <= waveHeight(x, z, gameState.simTime) + 0.7) continue
+    const exactY = islandSurfaceYAt(body, x, z)
+    if (!Number.isFinite(exactY)) continue
+    return [x, exactY + 0.02, z]
+  }
+  return null
+}
+
+function spawnWildlifeOnIsland(body, species = wildlifeSpeciesFor(body), now = gameState.simTime) {
+  const position = wildlifePointOnIsland(body)
+  if (!position) return null
+  const id = `wildlife-${body.id}-${Math.floor(now * 1000)}-${Math.random().toString(36).slice(2, 7)}`
+  const creature = createWildlife(id, species, body.id, position, Math.random() * Math.PI * 2, now)
+  gameState.wildlife.push(creature)
+  return creature
+}
+
+function spawnWildlifeBloodFx(position) {
+  const fx = createWildlifeBlood(position)
+  scene.add(fx.group)
+  wildlifeBloodFx.push(fx)
+}
+
+function updateWildlifeBloodFx(dt) {
+  for (let i = wildlifeBloodFx.length - 1; i >= 0; i--) {
+    const fx = wildlifeBloodFx[i]
+    fx.ttl -= dt
+    for (const child of fx.group.children) {
+      child.position.y -= dt * 0.75
+      if (child.material) child.material.opacity = Math.max(0, fx.ttl / 0.42)
+    }
+    if (fx.ttl > 0) continue
+    scene.remove(fx.group)
+    fx.group.traverse((child) => {
+      child.geometry?.dispose?.()
+      child.material?.dispose?.()
+    })
+    wildlifeBloodFx.splice(i, 1)
+  }
+}
+
+/** Stream a capped, ephemeral animal population around rendered islands. */
+function updateWildlifeRuntime(dt) {
+  if (!gameState) return
+  gameState.wildlife ??= []
+  const focus = gameState.player.onFoot?.active
+    ? gameState.player.onFoot.position
+    : gameState.player.ship.position
+  const now = Number(gameState.simTime) || 0
+  const bodies = getWorld(gameState.galaxy)?.bodies ?? []
+  const nearby = bodies.filter((body) => {
+    if (body.kind !== 'island' || !bodyMeshes.has(body.id)) return false
+    return Math.hypot(
+      (Number(body.position?.[0]) || 0) - (Number(focus?.[0]) || 0),
+      (Number(body.position?.[2]) || 0) - (Number(focus?.[2]) || 0)
+    ) <= WILDLIFE_STREAM_DISTANCE
+  })
+  const byBody = new Map()
+  for (const creature of gameState.wildlife) {
+    if (!byBody.has(creature.bodyId)) byBody.set(creature.bodyId, [])
+    byBody.get(creature.bodyId).push(creature)
+  }
+
+  for (const body of nearby) {
+    const group = byBody.get(body.id) ?? []
+    byBody.set(body.id, group)
+    const surfaceAt = (x, z) => wildlifeSurfaceYAt(body, x, z)
+    const respawning = group.filter((creature) => creature.state === 'respawning')
+    for (const creature of respawning) {
+      if (now < (Number(creature.respawnAt) || Infinity)) continue
+      const position = wildlifePointOnIsland(body)
+      if (position) respawnWildlife(creature, position, Math.random() * Math.PI * 2, now)
+      else creature.respawnAt = now + 8
+    }
+    updateWildlife(group, dt, now, surfaceAt)
+    let slots = wildlifeTargetForIsland(body) - group.length
+    while (slots > 0 && gameState.wildlife.length < WILDLIFE_MAX_ACTIVE) {
+      const creature = spawnWildlifeOnIsland(body)
+      if (!creature) break
+      group.push(creature)
+      slots--
+    }
+  }
+
+  if (gameState.player.onFoot?.active) {
+    for (const { creature, damage } of updateWildlifeDogAttacks(gameState.wildlife, gameState.player.onFoot.position, now)) {
+      gameState.player.onFoot.health = Math.max(0, Number(gameState.player.onFoot.health) - damage)
+      gameState.player.onFoot.lastDeathCause = 'Mauled by a wild dog'
+      gameState.inCombat = true
+      gameState.lastCombatContactAt = gameState.simTime
+      pulseDamageVignette(creature.position)
+    }
+  }
+
+  // Do not simulate animals outside the stream ring, but do remove their dead
+  // meshes immediately. Their tiny logic records stay until respawn so a kill
+  // always produces a later replacement instead of increasing the population.
+  const liveMeshIds = new Set()
+  for (const creature of gameState.wildlife) {
+    if (creature.state === 'respawning') continue
+    const body = bodies.find((candidate) => candidate.id === creature.bodyId)
+    if (!body || !nearby.includes(body)) continue
+    liveMeshIds.add(creature.id)
+    if (!wildlifeModelReady(creature.species)) continue
+    let mesh = wildlifeMeshes.get(creature.id)
+    if (!mesh) {
+      mesh = buildWildlifeMesh(creature)
+      if (!mesh) continue
+      wildlifeMeshes.set(creature.id, mesh)
+      scene.add(mesh)
+    }
+    updateWildlifeMesh(mesh, creature, dt, now)
+  }
+  for (const [id, mesh] of wildlifeMeshes) {
+    if (liveMeshIds.has(id)) continue
+    scene.remove(mesh)
+    wildlifeMeshes.delete(id)
+  }
+  updateWildlifeBloodFx(dt)
 }
 
 const ON_FOOT_TREE_CLEARANCE = 0.42
@@ -3849,7 +4510,7 @@ function keepOnFootClearOfTrees(body, onFoot) {
 
   // The horizontal correction can move us to another terrain face. Re-seat
   // grounded feet so the trunk stop never creates a visible hover or sink.
-  if (corrected && !onFoot.jumping) {
+  if (corrected && !onFoot.jumping && !onFoot.falling) {
     const groundY = islandSurfaceYAt(body, onFoot.position[0], onFoot.position[2])
     if (Number.isFinite(groundY)) onFoot.position[1] = groundY
   }
@@ -3858,7 +4519,7 @@ function keepOnFootClearOfTrees(body, onFoot) {
 
 /** Recover a footfall that was pushed just outside the triangulated shore. */
 function recoverOnFootGround(body, onFoot, surfaceAt) {
-  if (onFoot.jumping) return false
+  if (onFoot.jumping || onFoot.falling) return false
   const x = Number(onFoot.position?.[0]) || 0
   const z = Number(onFoot.position?.[2]) || 0
   // Valid dry and shallow-water positions are intentional; only recover when
@@ -3898,6 +4559,10 @@ function recoverOnFootGround(body, onFoot, surfaceAt) {
 }
 
 function syncOnFootCameraSafe(onFoot, options = {}) {
+  if (camera.near !== ON_FOOT_CAMERA_NEAR) {
+    camera.near = ON_FOOT_CAMERA_NEAR
+    camera.updateProjectionMatrix()
+  }
   syncOnFootCamera(camera, onFoot, options)
 }
 
@@ -3917,27 +4582,15 @@ function syncPlayerFlashlight() {
     setPlayerFlashlightOn(playerFlashlight, false)
     return
   }
-  // Keep the flashlight in the opposite hand from the Fixo Pistol. The weapon
-  // origin intentionally remains on leftHand for the authored first-person
-  // convention; the light belongs on the other, visible hand.
-  const hand = playerAvatarMesh?.getObjectByName('rightHand')
-  if (hand) {
-    playerAvatarMesh.updateWorldMatrix(true, true)
-    hand.getWorldPosition(_flashlightHandPosition)
-    playerFlashlight.root.position.copy(_flashlightHandPosition)
-  } else {
-    playerFlashlight.root.position.set(
-      Number(onFoot.position?.[0]) || 0,
-      (Number(onFoot.position?.[1]) || 0) + ON_FOOT_AVATAR_HEIGHT * 0.7,
-      Number(onFoot.position?.[2]) || 0
-    )
-  }
-  playerFlashlight.root.rotation.order = 'YXZ'
-  playerFlashlight.root.rotation.set(
-    -THREE.MathUtils.clamp(Number(onFoot.pitch) || 0, -0.72, 0.72),
-    Number(onFoot.heading) || 0,
-    0
-  )
+  // Head-mounted light: originate and aim from the camera so the beam remains
+  // centred on the crosshair instead of following the offset pistol muzzle.
+  camera.updateMatrixWorld(true)
+  camera.getWorldPosition(playerFlashlight.root.position)
+  camera.getWorldDirection(_flashlightAimDirection)
+  _flashlightAimPoint.copy(playerFlashlight.root.position).addScaledVector(_flashlightAimDirection, 28)
+  playerFlashlight.root.lookAt(_flashlightAimPoint)
+  playerFlashlight.spot.position.set(0, 0, 0)
+  playerFlashlight.spot.target.position.set(0, 0, 28)
   setPlayerFlashlightOn(playerFlashlight, true)
 }
 
@@ -3949,22 +4602,29 @@ function ensureOnFootState() {
     velocity: [0, 0, 0],
     heading: 0,
     pitch: 0,
-    walkPhase: 0,
+        walkPhase: 0,
         jumping: false,
+        falling: false,
         verticalVelocity: 0,
         jumpTime: 0,
         jumpGroundY: null,
+        jumpLandingDistance: null,
+        fallStartY: null,
         grounded: true,
         flashlightOn: false,
     health: 100,
     stamina: 100,
     runLocked: false,
     running: false,
+    lastDeathCause: null,
     footstepTimer: 0,
     footstepMoving: false,
     footstepSide: 'L'
   }
   const onFoot = gameState.player.onFoot
+  if (typeof onFoot.falling !== 'boolean') onFoot.falling = false
+  if (!Object.prototype.hasOwnProperty.call(onFoot, 'jumpLandingDistance')) onFoot.jumpLandingDistance = null
+  if (!Object.prototype.hasOwnProperty.call(onFoot, 'fallStartY')) onFoot.fallStartY = null
   if (!Number.isFinite(Number(onFoot.health))) onFoot.health = 100
   if (typeof onFoot.grounded !== 'boolean') onFoot.grounded = !onFoot.jumping
   return onFoot
@@ -4029,7 +4689,8 @@ function moveShipAlongsideDisembarkShore(body, landing) {
   if (length < 1e-5) return
 
   const shore = islandShorelineToward(body, landingX, landingZ)
-  const targetDistance = shore + DISEMBARK_SHORE_STANDOFF
+  const hullClearance = getShipCollisionRadius(playerShipClass) + DISEMBARK_SHORE_CLEARANCE
+  const targetDistance = shore + hullClearance
   const ship = gameState.player.ship.position
   // Always use the landing bearing, but keep the hull just outside the traced
   // shoreline. Pulling it toward a distant dry footfall could put the ship
@@ -4063,12 +4724,15 @@ function beginDisembark() {
   onFoot.pitch = 0
   onFoot.walkPhase = 0
   onFoot.jumping = false
+  onFoot.falling = false
   onFoot.verticalVelocity = 0
   onFoot.jumpTime = 0
   onFoot.jumpGroundY = null
+  onFoot.jumpLandingDistance = null
+  onFoot.fallStartY = null
   onFoot.grounded = true
   onFoot.flashlightOn = false
-  onFoot.health = 100
+  onFoot.lastDeathCause = null
   onFoot.stamina = 100
   onFoot.runLocked = false
   onFoot.running = false
@@ -4087,6 +4751,7 @@ function beginDisembark() {
     playerAvatarMesh.visible = true
     updatePlayerAvatarMesh(playerAvatarMesh, onFoot, 0)
   }
+  setOnFootWeaponVisible(true)
   hud?.setOnFoot?.(true)
   hud?.updateHealth?.(onFoot.health)
   hud?.updateStamina?.(onFoot.stamina)
@@ -4101,15 +4766,19 @@ function finishDisembark() {
   const onFoot = ensureOnFootState()
   if (!onFoot.active) return false
   onFoot.active = false
+  camera.near = WORLD_CAMERA_NEAR
+  camera.updateProjectionMatrix()
   onFoot.bodyId = null
   onFoot.velocity = [0, 0, 0]
   onFoot.jumping = false
+  onFoot.falling = false
   onFoot.verticalVelocity = 0
   onFoot.jumpTime = 0
   onFoot.jumpGroundY = null
+  onFoot.jumpLandingDistance = null
+  onFoot.fallStartY = null
   onFoot.grounded = true
   onFoot.flashlightOn = false
-  onFoot.health = 100
   onFoot.stamina = 100
   onFoot.runLocked = false
   onFoot.running = false
@@ -4120,8 +4789,9 @@ function finishDisembark() {
   gameState.projectiles = (gameState.projectiles ?? []).filter((projectile) => !projectile.onFoot)
   syncPlayerFlashlight()
   if (playerAvatarMesh) playerAvatarMesh.visible = false
+  setOnFootWeaponVisible(false)
   hud?.setOnFoot?.(false)
-  hud?.updateHealth?.(100)
+  hud?.updateHealth?.(onFoot.health)
   hud?.updateStamina?.(100)
   hud?.element && (hud.element.style.display = '')
   gameState.inCombat = false
@@ -4169,7 +4839,7 @@ function updateOnFootPlayer(dt) {
   const footStartX = Number(onFoot.position?.[0]) || 0
   const footStartZ = Number(onFoot.position?.[2]) || 0
   const airborneY = Number(onFoot.position[1]) || 0
-  const surfaceAt = (x, z) => {
+  const rawSurfaceAt = (x, z) => {
     const waterY = waveHeight(x, z, gameState.simTime)
     const terrainY = islandSurfaceYAt(body, x, z)
     if (!Number.isFinite(terrainY)) return null
@@ -4180,45 +4850,91 @@ function updateOnFootPlayer(dt) {
     // naturally stops the player at the boundary.
     return waterY - terrainY <= ON_FOOT_WADE_DEPTH ? terrainY : null
   }
+  const slopeAt = (x, z) => {
+    const sample = 0.7
+    const center = islandTerrainYAt(body, x, z)
+    const x0 = islandTerrainYAt(body, x - sample, z)
+    const x1 = islandTerrainYAt(body, x + sample, z)
+    const z0 = islandTerrainYAt(body, x, z - sample)
+    const z1 = islandTerrainYAt(body, x, z + sample)
+    if (![center, x0, x1, z0, z1].every(Number.isFinite)) return Infinity
+    return Math.hypot((x1 - x0) / (2 * sample), (z1 - z0) / (2 * sample))
+  }
+  const surfaceAt = (x, z) => {
+    const y = rawSurfaceAt(x, z)
+    return y != null && slopeAt(x, z) <= ON_FOOT_MAX_WALKABLE_SLOPE ? y : null
+  }
+  const fallAt = (x, z) => {
+    const rawY = rawSurfaceAt(x, z)
+    if (rawY != null && slopeAt(x, z) > ON_FOOT_MAX_WALKABLE_SLOPE) {
+      const currentY = islandTerrainYAt(body, onFoot.position[0], onFoot.position[2])
+      return Number.isFinite(currentY) && rawY < currentY - 0.15
+    }
+    return rawY == null
+  }
   updateOnFootMovement(
     onFoot,
     keys,
     dt,
     surfaceAt,
     moveSpeed,
-    !!onFoot.jumping
+    !!(onFoot.jumping || onFoot.falling),
+    fallAt
   )
   keepOnFootClearOfTrees(body, onFoot)
   recoverOnFootGround(body, onFoot, surfaceAt)
-  if (onFoot.jumping) onFoot.position[1] = airborneY
+  if (onFoot.jumping || onFoot.falling) onFoot.position[1] = airborneY
   const waterY = waveHeight(onFoot.position[0], onFoot.position[2], gameState.simTime)
   const terrainY = islandSurfaceYAt(body, onFoot.position[0], onFoot.position[2])
   const onLand = Number.isFinite(terrainY) && terrainY > waterY + 0.1
   const wading = Number.isFinite(terrainY) && terrainY <= waterY + 0.1 && waterY - terrainY <= ON_FOOT_WADE_DEPTH
   const walkable = onLand || wading
+  const bodyArchetype = bodyMeshes.get(body.id)?.userData?.archetype
+  const bodyRadius = Math.max(1, Number(body.radius) || 1)
+  const edgeFraction = Math.hypot(
+    (Number(onFoot.position?.[0]) || 0) - (Number(body.position?.[0]) || 0),
+    (Number(onFoot.position?.[2]) || 0) - (Number(body.position?.[2]) || 0)
+  ) / bodyRadius
+  const landingSurface = footstepSurfaceForIsland(bodyArchetype, edgeFraction)
   if (onFoot.jumping) {
+    const wasJumping = onFoot.jumping
     updateOnFootJump(onFoot, dt, walkable ? terrainY : null)
+    if (wasJumping && !onFoot.jumping) {
+      const jumpFallDistance = Math.max(0, Number(onFoot.jumpLandingDistance) || 0)
+      audio.playOnFootLanding({ fallDistance: jumpFallDistance, surface: landingSurface })
+      const damage = onFootFallDamage(jumpFallDistance)
+      if (damage > 0) {
+        onFoot.health = Math.max(0, Number(onFoot.health) - damage)
+        onFoot.lastDeathCause = 'stumbled and fell...a lot'
+      }
+      onFoot.jumpLandingDistance = null
+    }
+  } else if (onFoot.falling) {
+    const landingY = Number.isFinite(terrainY) && terrainY > waterY + 0.1 ? terrainY : waterY
+    const landing = updateOnFootFall(onFoot, dt, landingY)
+    if (landing.landed) {
+      audio.playOnFootLanding({ fallDistance: landing.fallDistance, surface: landingSurface })
+      const damage = onFootFallDamage(landing.fallDistance)
+      if (damage > 0) {
+        onFoot.health = Math.max(0, Number(onFoot.health) - damage)
+        onFoot.lastDeathCause = 'stumbled and fell...a lot'
+      }
+    }
   }
-  if (!onFoot.jumping) onFoot.grounded = walkable
+  if (!onFoot.jumping && !onFoot.falling) onFoot.grounded = walkable
   const movedDistance = Math.hypot(
     (Number(onFoot.position?.[0]) || 0) - footStartX,
     (Number(onFoot.position?.[2]) || 0) - footStartZ
   )
   if (onLand) {
     updateOnFootGrass(body, onFoot)
-    const bodyRadius = Math.max(1, Number(body.radius) || 1)
-    const edgeFraction = Math.hypot(
-      (Number(onFoot.position?.[0]) || 0) - (Number(body.position?.[0]) || 0),
-      (Number(onFoot.position?.[2]) || 0) - (Number(body.position?.[2]) || 0)
-    ) / bodyRadius
-    const surface = footstepSurfaceForIsland(bodyMeshes.get(body.id)?.userData?.archetype, edgeFraction)
     const grounded = !onFoot.jumping
     for (const side of advanceOnFootFootsteps(onFoot, dt, {
       moving: movedDistance > 0.015,
       grounded,
       running
     })) {
-      audio.playFootstep(surface, { running, side })
+      audio.playFootstep(landingSurface, { running, side })
     }
   } else {
     clearOnFootGrass()
@@ -4270,10 +4986,10 @@ function openSystemScanPanel() {
   systemScanMap.show()
 }
 
-function startSession(newGameState, { enterFlightMode = false } = {}) {
+async function startSession(newGameState, { enterFlightMode = false } = {}) {
   // Never leave the player on a black canvas if setup throws mid-way.
   try {
-    startSessionInner(newGameState, { enterFlightMode })
+    await startSessionInner(newGameState, { enterFlightMode })
   } catch (err) {
     console.error('[startSession] failed', err)
     try {
@@ -4300,11 +5016,31 @@ function startSession(newGameState, { enterFlightMode = false } = {}) {
   }
 }
 
-function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
+async function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   clearSession()
   stopMenuBackground()
   gameState = newGameState
+  sessionLoading = true
+  setSessionLoading(true)
   nextGullCallAt = gameState.simTime + 2
+  gameState.npcs ??= []
+  gameState.wildlife ??= []
+  const thunderWarmPromise = audio.preloadThunderSounds()
+  // Model fetches are deliberately asynchronous; the first session frame is
+  // not held hostage by four animal assets loading from disk. Boot also starts
+  // this preload on the title screen, so entering an island does not pay the
+  // first wildlife decode and upload in the same frame as the day/night path.
+  const wildlifeWarmPromise = loadWildlifeModels()
+  // Civilian traffic is an ephemeral world population: saves do not persist
+  // individual NPCs, so every session reconstructs the fleet across the same
+  // generated sea. Replacements are handled only after a traffic ship dies.
+  const trafficWorld = getWorld(gameState.galaxy)
+  const liveTraffic = gameState.npcs.filter((npc) => npc.ambientTraffic && !npc.destroyed).length
+  if (liveTraffic < AMBIENT_TRAFFIC_COUNT) {
+    gameState.npcs.push(
+      ...spawnAmbientTraffic(Math.random, trafficWorld?.bodies ?? [], AMBIENT_TRAFFIC_COUNT - liveTraffic)
+    )
+  }
   ensureBlueprintMaps(gameState)
   // Offline craft completions from deserialize (wall-clock) — toast after HUD exists.
   const offlineCraftDone = gameState._craftingJustCompleted ?? []
@@ -4320,6 +5056,7 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   }
   rebuildPlayerShipMesh()
   rebuildPlayerAvatarMesh()
+  rebuildOnFootWeapon()
   ensureDrones(gameState.player.ship)
   clearDroneMeshes()
   damageEffects = createDamageEffects()
@@ -4440,7 +5177,12 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   inventoryUI = createInventoryUI(appEl, gameState, {
     onStorageChanged: () => dockingUI?.refreshStorage?.()
   })
-  missionsUI = createMissionsUI(appEl, gameState, {})
+  missionsUI = createMissionsUI(appEl, gameState, {
+    onWaypointChange: ({ name }) => {
+      audio.playWaypointSet()
+      flashToast(`Waypoint set: ${name ?? 'mission objective'}`)
+    }
+  })
   characterUI = createCharacterUI(appEl, gameState)
   ensureLawStanding(gameState)
   const startSys = getSystem(gameState.galaxy, gameState.player.currentSystemId)
@@ -4463,7 +5205,7 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   padding: 0;
   text-shadow: 0 1px 4px rgba(0,0,0,1), 0 2px 8px rgba(0,0,0,1), 0 0 16px rgba(0,0,0,0.95), 0 3px 14px rgba(0,0,0,0.85);
 }
-/* Waypoint / target-dir arrows + Tab-lock reticle box */
+/* Waypoint / target-dir cues + Tab-lock reticle box */
 .hud-dir-shadow {
   filter:
     drop-shadow(0 1px 2px rgba(0,0,0,1))
@@ -4497,7 +5239,7 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
     document.head.appendChild(floatInfoStyle)
   }
   const floatBandBottom = getFloatHudBandBottomPx()
-  const aboveStatusCss = `position:fixed;left:50%;top:auto;bottom:${floatBandBottom}px;transform:translateX(-50%);display:none;white-space:nowrap;z-index:20;text-align:center;`
+  const aboveStatusCss = `position:fixed;left:50%;top:auto;bottom:${floatBandBottom}px;transform:translateX(-50%);display:none;white-space:nowrap;z-index:20;text-align:center;transition:top 0.16s ease-out;`
 
   // Interaction prompts — stacked just above the bottom-center ship status panel.
   dockPromptEl = document.createElement('div')
@@ -4661,16 +5403,26 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
     `${aboveStatusCss}max-width:min(640px,92vw);white-space:normal;`
   appEl.appendChild(factionToastEl)
 
-  // Waypoint direction cue — bright yellow arrow around the ship.
-  // Direction arrows + target box share .hud-dir-shadow for a hard black drop shadow.
+  // Waypoint reticle — stays on the horizon until the waypoint is actually
+  // close enough and on-screen to sit on the world object.
   waypointEl = document.createElement('div')
   waypointEl.id = 'waypoint-indicator'
   waypointEl.style.cssText =
-    'position:fixed;pointer-events:none;display:none;transform:translate(-50%,-50%);z-index:6;'
+    'position:fixed;pointer-events:none;display:none;transform:translate(-50%,-50%);width:56px;height:56px;z-index:10;'
   waypointEl.innerHTML = `
-    <div class="wp-arrow hud-dir-shadow" style="width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:14px solid #ffe14a;"></div>
+    <div class="wp-reticle hud-dir-shadow" style="position:absolute;inset:0;color:#ffe14a;">
+      <i style="position:absolute;left:0;top:0;width:14px;height:14px;border-top:2px solid currentColor;border-left:2px solid currentColor;"></i>
+      <i style="position:absolute;right:0;top:0;width:14px;height:14px;border-top:2px solid currentColor;border-right:2px solid currentColor;"></i>
+      <i style="position:absolute;left:0;bottom:0;width:14px;height:14px;border-bottom:2px solid currentColor;border-left:2px solid currentColor;"></i>
+      <i style="position:absolute;right:0;bottom:0;width:14px;height:14px;border-bottom:2px solid currentColor;border-right:2px solid currentColor;"></i>
+      <span style="position:absolute;left:50%;top:50%;width:4px;height:4px;background:currentColor;border-radius:50%;transform:translate(-50%,-50%);"></span>
+    </div>
+    <div class="wp-label float-info-text" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:4px;white-space:nowrap;text-align:center;color:#ffe14a;"></div>
   `
-  appEl.appendChild(waypointEl)
+  // Keep navigation separate from both the WebGL HUD scene and the app HUD
+  // container. A body-level fixed overlay cannot inherit camera/crosshair
+  // transforms from either one.
+  document.body.appendChild(waypointEl)
 
   crosshairEl = document.createElement('div')
   crosshairEl.id = 'crosshair'
@@ -4685,7 +5437,7 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   targetIndicatorEl = document.createElement('div')
   targetIndicatorEl.id = 'target-indicator'
   targetIndicatorEl.style.cssText =
-    'position:fixed;pointer-events:none;display:none;transform:translate(-50%,-50%);width:56px;height:56px;'
+    'position:fixed;pointer-events:none;display:none;transform:translate(-50%,-50%);width:56px;height:56px;z-index:5;'
   targetIndicatorEl.innerHTML = `
     <div class="target-box hud-dir-shadow" style="position:absolute;inset:0;border:2px solid var(--ui-text);"></div>
     <div class="target-label float-info-text" style="position:absolute;top:100%;left:50%;transform:translateX(-50%);margin-top:4px;white-space:nowrap;text-align:center;"></div>
@@ -4729,7 +5481,9 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   // Rebind once after restore has finished deciding docked vs free flight.
   // A loaded free-flight save must not inherit the hidden/reset state used by
   // the docked camera branch.
-  if (!docked && !gameState.player.onFoot?.active) {
+  if (!docked && gameState.player.onFoot?.active) {
+    reenterFlightMode()
+  } else if (!docked) {
     const restoredWake = ensurePlayerWake()
     if (restoredWake?.group) restoredWake.group.visible = true
     updatePlayerWake(1 / 60)
@@ -4738,6 +5492,24 @@ function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
     // wake appeared to be missing until starting a new game.
     if (!enterFlightMode) reenterFlightMode()
   }
+
+  // Finish the expensive first-use work behind the loading veil. This keeps
+  // Continue/Load from hitching when the first wildlife, gun, projectile or
+  // impact shader is encountered in live play.
+  await Promise.allSettled([
+    thunderWarmPromise,
+    wildlifeWarmPromise,
+    warmOnFootWeapon()
+  ])
+  updateWildlifeRuntime(0)
+  const projectileWarmup = addRepresentativeProjectileWarmup()
+  try {
+    await warmScenePipelines()
+  } finally {
+    scene.remove(projectileWarmup)
+  }
+  sessionLoading = false
+  setSessionLoading(false)
 
   // Paint one frame immediately so Load never leaves a black canvas while the
   // first animate() waits a tick (menu was already hidden).
@@ -5022,7 +5794,7 @@ function flashToast(text, durationS = MINING_TOAST_DURATION_S) {
   const el = document.createElement('div')
   el.className = 'float-info-text'
   el.style.cssText =
-    'position:fixed;left:50%;transform:translateX(-50%);display:none;z-index:20;text-align:center;max-width:min(640px,92vw);white-space:normal;pointer-events:none;'
+    'position:fixed;left:50%;transform:translateX(-50%);display:none;z-index:20;text-align:center;max-width:min(640px,92vw);white-space:normal;pointer-events:none;transition:top 0.16s ease-out;'
   appEl.appendChild(el)
   setHudToastText(el, text)
   showHudToast(el)
@@ -6038,11 +6810,15 @@ function handlePlayerDeath({ cause: requestedCause = null, drowned = false } = {
   const killer = gameState.player.lastKiller ?? null
   let cause = requestedCause
   if (!cause) {
-    cause = 'Ship destroyed in combat'
-    if (killer?.method === 'ram') {
-      cause = `Rammed by ${killer.shipName} Piloted by ${killer.pilotName}`
-    } else if (killer?.pilotName) {
-      cause = `Destroyed by ${killer.shipName} Piloted by ${killer.pilotName}`
+    if (drowned) {
+      cause = describeOnFootDeath(killer)
+    } else {
+      cause = 'Ship destroyed in combat'
+      if (killer?.method === 'ram') {
+        cause = `Rammed by ${killer.shipName} Piloted by ${killer.pilotName}`
+      } else if (killer?.pilotName) {
+        cause = `Destroyed by ${killer.shipName} Piloted by ${killer.pilotName}`
+      }
     }
   }
   const summary = {
@@ -6067,6 +6843,7 @@ function handlePlayerDeath({ cause: requestedCause = null, drowned = false } = {
     yaw: headingOf(gameState.player.ship) + Math.PI * 0.35,
     pitch: 0.32,
     dist: drowned ? 7 : Math.max(42, r * 4.5),
+    focusY: drowned ? 0.75 : 2,
     t: 0
   }
   if (!drowned) {
@@ -6085,7 +6862,8 @@ function handlePlayerDeath({ cause: requestedCause = null, drowned = false } = {
     gameState.player.onFoot.active = false
     gameState.player.onFoot.flashlightOn = false
     gameState.player.onFoot.health = 0
-    if (playerAvatarMesh) playerAvatarMesh.visible = true
+    setOnFootWeaponVisible(false)
+    showOnFootDeathBody(pos)
     syncPlayerFlashlight()
   }
   gameState.player.ship.velocity = [0, 0, 0]
@@ -6106,6 +6884,7 @@ function handlePlayerDeath({ cause: requestedCause = null, drowned = false } = {
 function hideCombatHudForDeath() {
   if (hud?.element) hud.element.style.display = 'none'
   systemOverview?.hide?.()
+  hideWaypointIndicator()
   if (crosshairEl) crosshairEl.style.display = 'none'
   if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
   if (targetDirEl) targetDirEl.style.display = 'none'
@@ -6152,10 +6931,10 @@ window.addEventListener('keydown', (e) => {
   }
   if (
     gameState.player.onFoot?.active &&
-    !['F1', 'Escape', 'KeyM'].includes(e.code)
+    !['F1', 'Escape', 'KeyM', 'Tab'].includes(e.code)
   ) {
     // Inventory, probes, weapons, helm and drones belong on the boat. The sea
-    // chart remains available on foot.
+    // chart and contact targeting remain available on foot.
     e.preventDefault()
     return
   }
@@ -6221,13 +7000,12 @@ window.addEventListener('keydown', (e) => {
     }
     setGamePaused(true)
   } else if (e.code === 'Backspace' && flightMode && !paused && !dockEffect) {
-    // Dedicated clear-target key — Shift+Tab already does this too, this is
-    // just the one-handed version players reach for without leaving WASD.
+    // One-handed clear for both navigation and combat markers.
     e.preventDefault()
-    if (currentTarget) {
-      clearTargetLock()
-      flashToast('Target lock cleared')
-    }
+    const hadTarget = !!currentTarget
+    const hadWaypoint = clearWaypoint()
+    clearTargetLock()
+    if (hadTarget || hadWaypoint) flashToast(hadTarget && hadWaypoint ? 'Target and waypoint cleared' : hadTarget ? 'Target lock cleared' : 'Waypoint cleared')
   } else if (
     e.code === 'KeyS' &&
     docked &&
@@ -6242,8 +7020,7 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault()
     dockingUI?.toggleServices?.()
   } else if (e.code === 'KeyM' && !paused && !inventoryOpen && !missionsOpen && !characterOpen && !dockEffect) {
-    // The sea chart — under way or alongside. One sea, so this is the only map
-    // there is; it sets a waypoint rather than plotting a route between regions.
+    // M is the sea chart aboard, but becomes a local island map while ashore.
     e.preventDefault()
     audio.setThrustState(null)
     if (!chartOpen) {
@@ -6251,7 +7028,8 @@ window.addEventListener('keydown', (e) => {
       // Unlock pointer *after* chartOpen is true so pointerlockchange does not
       // treat the unlock as Esc and open the pause menu.
       exitFlightMode()
-      seaChart?.show()
+      const onFoot = gameState.player.onFoot?.active ? gameState.player.onFoot : null
+      seaChart?.show({ islandBodyId: onFoot?.bodyId ?? null })
     } else {
       // Closing: suppress unlock→pause, then hide (onClose reenters helm once).
       suppressPointerUnlockPause = true
@@ -6270,8 +7048,6 @@ window.addEventListener('keydown', (e) => {
     } else if (gameState.inCombat) {
       flashToast('Cannot engage cruise control while under fire')
     } else {
-      teleportDronesToBay(gameState.player.ship)
-      clearDroneMeshes()
       clearTargetLock()
       cruising = true
       gameState.player.ship.supercruiseElapsed = 0
@@ -6470,6 +7246,12 @@ function closeCharacterScreen() {
 const TARGET_RANGE = 2000
 const TARGETABLE_BODY_KINDS = new Set(['island', 'port', 'outpost'])
 
+function targetingOriginPosition() {
+  return gameState.player.onFoot?.active
+    ? gameState.player.onFoot.position
+    : gameState.player.ship.position
+}
+
 function asteroidWorldPosition(field, rock) {
   return [field.position[0] + rock.position[0], field.position[1] + rock.position[1], field.position[2] + rock.position[2]]
 }
@@ -6517,26 +7299,28 @@ function bodyKindLabel(kind) {
 }
 
 function getTargetableEntities() {
-  const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
+  const playerPos = new THREE.Vector3().fromArray(targetingOriginPosition())
   const entities = []
 
   for (const npc of gameState.npcs) {
     if (npc.destroyed) continue
-    const dist = shipPos.distanceTo(new THREE.Vector3().fromArray(npc.position))
+    const dist = playerPos.distanceTo(new THREE.Vector3().fromArray(npc.position))
     if (dist <= TARGET_RANGE) entities.push({ kind: 'npc', id: npc.id, position: npc.position, dist, radius: 0 })
   }
 
   for (const wreck of gameState.wrecks) {
-    const dist = shipPos.distanceTo(new THREE.Vector3().fromArray(wreck.position))
+    const dist = playerPos.distanceTo(new THREE.Vector3().fromArray(wreck.position))
     if (dist <= TARGET_RANGE) entities.push({ kind: 'wreck', id: wreck.id, position: wreck.position, dist, radius: 0 })
   }
 
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
 
   for (const body of currentSystem.bodies) {
-    if (TARGETABLE_BODY_KINDS.has(body.kind)) {
+    const bodyTargetable = TARGETABLE_BODY_KINDS.has(body.kind) &&
+      !(gameState.player.onFoot?.active && body.kind === 'island')
+    if (bodyTargetable) {
       const bodyPos = new THREE.Vector3().fromArray(body.position)
-      const dist = shipPos.distanceTo(bodyPos)
+      const dist = playerPos.distanceTo(bodyPos)
       const radius = collisionRadiusFor(body) ?? 0
       // Surface distance: large planets stay targetable from outside the shell.
       const surfaceDist = Math.max(0, dist - radius)
@@ -6555,7 +7339,7 @@ function getTargetableEntities() {
       getAsteroidRocks(body).forEach((rock, index) => {
         if (!isRockAlive(gameState, body.id, index)) return
         const position = asteroidWorldPosition(body, rock)
-        const dist = shipPos.distanceTo(new THREE.Vector3(...position))
+        const dist = playerPos.distanceTo(new THREE.Vector3(...position))
         if (dist <= TARGET_RANGE) entities.push({ kind: 'asteroid', fieldId: body.id, index, position, dist, radius: 0 })
       })
     }
@@ -6568,7 +7352,7 @@ function getTargetableEntities() {
       if (!a.fullyScanned) continue
       if (a.status === 'completed' || a.status === 'despawning') continue
       if (isDatacoreType(a.type)) {
-        const siteDist = shipPos.distanceTo(new THREE.Vector3().fromArray(a.position))
+        const siteDist = playerPos.distanceTo(new THREE.Vector3().fromArray(a.position))
         if (siteDist <= TARGET_RANGE) {
           entities.push({
             kind: 'anomaly',
@@ -6581,7 +7365,7 @@ function getTargetableEntities() {
         }
         for (const n of a.nodules ?? []) {
           if (n.status === 'destroyed') continue
-          const nd = shipPos.distanceTo(new THREE.Vector3().fromArray(n.position))
+          const nd = playerPos.distanceTo(new THREE.Vector3().fromArray(n.position))
           if (nd > TARGET_RANGE) continue
           entities.push({
             kind: 'nodule',
@@ -6602,7 +7386,7 @@ function getTargetableEntities() {
         !a.baseDestroyed &&
         alienSiteRuntime?.anomalyId === a.id
       ) {
-        const bd = shipPos.distanceTo(new THREE.Vector3().fromArray(a.position))
+        const bd = playerPos.distanceTo(new THREE.Vector3().fromArray(a.position))
         if (bd <= TARGET_RANGE) {
           entities.push({
             kind: 'alien_base',
@@ -6636,6 +7420,11 @@ function toTargetRef(entity) {
 // still selects what is under the reticle.
 const _aimFwd = new THREE.Vector3()
 function crosshairAimDirection(out = _aimFwd) {
+  if (gameState.player.onFoot?.active) {
+    camera.updateMatrixWorld(true)
+    camera.getWorldDirection(out)
+    return out.normalize()
+  }
   return turretDirection(gameState.player.ship, out)
 }
 
@@ -6660,7 +7449,17 @@ function aimScore(entity, shipPos, forward) {
   return score
 }
 
-/** Clear Tab-lock target only — does not touch waypoints / plotted routes. */
+function clearWaypoint() {
+  const player = gameState?.player
+  const hadWaypoint = !!(player?.waypointBodyId || player?.waypointPosition)
+  if (!player) return false
+  player.waypointBodyId = null
+  player.waypointPosition = null
+  if (hadWaypoint) audio.playWaypointClear()
+  return hadWaypoint
+}
+
+/** Clear Tab-lock target only. */
 function clearTargetLock() {
   currentTarget = null
   if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
@@ -6677,14 +7476,14 @@ function cycleTarget() {
     return
   }
 
-  const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
+  const playerPos = new THREE.Vector3().fromArray(targetingOriginPosition())
   // Turret / crosshair direction — not hull forward (camera and guns track the gun).
   const forward = crosshairAimDirection()
   // Strongest aim under a ~20° cone around the reticle.
   let underCrosshair = null
   let bestScore = 0.94
   for (const e of entities) {
-    const score = aimScore(e, shipPos, forward)
+    const score = aimScore(e, playerPos, forward)
     if (score > bestScore) {
       bestScore = score
       underCrosshair = e
@@ -6840,6 +7639,7 @@ function resolveTarget() {
   if (currentTarget.kind !== 'body') return null
   const body = currentSystem.bodies.find((b) => b.id === currentTarget.id)
   if (!body) return null
+  if (gameState.player.onFoot?.active && body.kind === 'island') return null
   // Whole belts are waypoint-only — Tab-lock individual rocks instead.
   if (body.kind === 'wreckField') return null
   return {
@@ -6852,6 +7652,33 @@ function resolveTarget() {
     kindLabel: bodyKindLabel(body.kind),
     radius: body.radius ?? collisionRadiusFor(body) ?? 0
   }
+}
+
+function updateTargetHud() {
+  const target = resolveTarget()
+  if (!target) {
+    hud?.updateTarget?.(null)
+    return
+  }
+  const player = targetingOriginPosition()
+  const dist = new THREE.Vector3().fromArray(player).distanceTo(new THREE.Vector3().fromArray(target.position))
+  const metaParts = []
+  if (target.pilotName) metaParts.push(target.pilotName)
+  if (target.faction) metaParts.push(target.faction)
+  if (target.kindLabel) metaParts.push(target.kindLabel)
+  if (target.isAsteroid) metaParts.push('sunken hull')
+  metaParts.push(`${Math.round(dist)} m`)
+  hud?.updateTarget?.({
+    name: target.name,
+    hostile: !!target.hostile,
+    meta: metaParts.join(' · '),
+    armor: target.armor,
+    maxArmor: target.maxArmor,
+    hull: target.hull,
+    maxHull: target.maxHull,
+    oreLeft: target.oreLeft,
+    oreMax: target.oreMax
+  })
 }
 
 function targetReticleColor(target) {
@@ -6901,6 +7728,24 @@ function updateTargetIndicator() {
     return
   }
 
+  // A body can be both Tab-locked and waypointed. The target box is projected
+  // from the crosshair camera; leave the stable waypoint box as the only
+  // visible marker for that body so the two cues cannot be mistaken.
+  const waypoint = getActiveWaypoint()
+  const sameWaypoint = waypoint && (
+    (waypoint.bodyId && currentTarget?.kind === 'body' && waypoint.bodyId === currentTarget.id) ||
+    (!waypoint.bodyId && currentTarget?.position &&
+      Math.hypot(
+        waypoint.position[0] - currentTarget.position[0],
+        waypoint.position[2] - currentTarget.position[2]
+      ) < 1
+    )
+  )
+  if (sameWaypoint) {
+    targetIndicatorEl.style.display = 'none'
+    return
+  }
+
   const mark = targetReticleWorldPos(target)
   const projected = mark.clone().project(camera)
   if (projected.z > 1) {
@@ -6915,8 +7760,8 @@ function updateTargetIndicator() {
   targetIndicatorEl.querySelector('.target-box').style.borderColor = color
   const label = targetIndicatorEl.querySelector('.target-label')
   // Horizontal range only — depth is not meaningful on the sea.
-  const ship = gameState.player.ship.position
-  const dist = Math.hypot(ship[0] - target.position[0], ship[2] - target.position[2])
+  const player = targetingOriginPosition()
+  const dist = Math.hypot(player[0] - target.position[0], player[2] - target.position[2])
   const kindBit = target.kindLabel ? ` · ${target.kindLabel}` : ''
   if (target.hullPct !== null) {
     label.textContent = `${target.name} · ${Math.round(dist)}m · ${Math.round(target.hullPct * 100)}%`
@@ -6931,13 +7776,16 @@ function updateTargetIndicator() {
 // Arrow next to the ship’s screen position, aimed at the current Tab target.
 // Pure 2D bearing (front / sides / behind) — no elevation component.
 const TARGET_DIR_OFFSET_PX = 96
-const WAYPOINT_DIR_OFFSET_PX = 112
-const WAYPOINT_DIR_COLOR = '#ffe14a'
 const _tdirShip = new THREE.Vector3()
 const _tdirTarget = new THREE.Vector3()
 const _tdirAhead = new THREE.Vector3()
 const _tdirShipProj = new THREE.Vector3()
 const _tdirAimProj = new THREE.Vector3()
+const _waypointWorld = new THREE.Vector3()
+const _waypointProjected = new THREE.Vector3()
+const _waypointToCamera = new THREE.Vector3()
+const _waypointCameraRight = new THREE.Vector3()
+const _waypointCameraUp = new THREE.Vector3()
 
 /**
  * Place a ship-relative direction chevron.
@@ -6950,6 +7798,33 @@ function placeShipRelativeDirArrow(el, arrowSel, targetX, targetZ, color, offset
     return
   }
   camera.updateMatrixWorld(true)
+  if (gameState.player.onFoot?.active) {
+    _waypointToCamera.set(targetX, camera.position.y, targetZ).sub(camera.position)
+    _waypointCameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion)
+    _waypointCameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion)
+    let dirX = _waypointToCamera.dot(_waypointCameraRight)
+    let dirY = -_waypointToCamera.dot(_waypointCameraUp)
+    const length = Math.hypot(dirX, dirY)
+    if (length < 1e-6) {
+      camera.getWorldDirection(_tdirAhead)
+      dirX = 0
+      dirY = _waypointToCamera.dot(_tdirAhead) < 0 ? 1 : -1
+    } else {
+      dirX /= length
+      dirY /= length
+    }
+    const w = window.innerWidth
+    const h = window.innerHeight
+    el.style.left = `${Math.round(w * 0.5 + dirX * offsetPx)}px`
+    el.style.top = `${Math.round(h * 0.5 + dirY * offsetPx)}px`
+    el.style.display = 'block'
+    const arrow = el.querySelector(arrowSel)
+    if (arrow) {
+      arrow.style.transform = `rotate(${Math.atan2(dirY, dirX) + Math.PI / 2}rad)`
+      arrow.style.borderBottomColor = color
+    }
+    return
+  }
   _tdirShip.fromArray(gameState.player.ship.position)
   const dx = targetX - _tdirShip.x
   const dz = targetZ - _tdirShip.z
@@ -7176,7 +8051,7 @@ function updateBelowRadarPrompts() {
     el.style.color = 'rgba(255,255,255,0.94)'
     el.style.removeProperty('opacity')
     el.style.left = '50%'
-    const height = el.offsetHeight || 18
+    const height = Math.ceil(el.getBoundingClientRect().height || el.offsetHeight || 18)
     y -= height
     el.style.top = `${y}px`
     el.style.bottom = 'auto'
@@ -7188,23 +8063,89 @@ function updateBelowRadarPrompts() {
 function updateWaypointIndicator() {
   const wp = getActiveWaypoint()
   if (!wp || !waypointEl || docked) {
-    if (waypointEl) waypointEl.style.display = 'none'
+    hideWaypointIndicator()
     return
   }
-  // Bright yellow ship-relative cue (maps / overview set the waypoint).
-  placeShipRelativeDirArrow(
-    waypointEl,
-    '.wp-arrow',
-    wp.position[0],
-    wp.position[2],
-    WAYPOINT_DIR_COLOR,
-    WAYPOINT_DIR_OFFSET_PX
-  )
+
+  const ship = gameState.player.ship.position
+  const dx = wp.position[0] - ship[0]
+  const dz = wp.position[2] - ship[2]
+  const distance = Math.hypot(dx, dz)
+  if (distance < 1e-6) {
+    hideWaypointIndicator()
+    return
+  }
+
+  const body = wp.bodyId
+    ? getSystem(gameState.galaxy, gameState.player.currentSystemId).bodies.find((b) => b.id === wp.bodyId)
+    : null
+  const wpTarget = {
+    position: wp.position,
+    reticle: body?.kind === 'port' || body?.kind === 'outpost' ? 'facility' : body?.kind === 'island' ? 'world' : 'nav',
+    radius: body?.radius ?? 0
+  }
+
+  // Project the actual target rather than approximating its bearing on a
+  // synthetic horizon. This means that, once the target is visible, the
+  // reticule sits on the target itself; when it is outside the camera view,
+  // the same direction is clamped to the nearest screen edge.
+  targetReticleWorldPos(wpTarget, _waypointWorld)
+  camera.updateMatrixWorld(true)
+  _waypointProjected.copy(_waypointWorld).project(camera)
+  const w = window.innerWidth
+  const h = window.innerHeight
+  const inView = Number.isFinite(_waypointProjected.x) && Number.isFinite(_waypointProjected.y) &&
+    _waypointProjected.z >= -1 && _waypointProjected.z <= 1 &&
+    Math.abs(_waypointProjected.x) <= 1 && Math.abs(_waypointProjected.y) <= 1
+  let x
+  let y
+  if (inView) {
+    x = (_waypointProjected.x * 0.5 + 0.5) * w
+    y = (-_waypointProjected.y * 0.5 + 0.5) * h
+  } else {
+    let dirX = _waypointProjected.x
+    let dirY = -_waypointProjected.y
+    if (_waypointProjected.z > 1 || !Number.isFinite(dirX) || !Number.isFinite(dirY)) {
+      _waypointToCamera.copy(_waypointWorld).sub(camera.position)
+      _waypointCameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion)
+      _waypointCameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion)
+      dirX = _waypointToCamera.dot(_waypointCameraRight)
+      dirY = -_waypointToCamera.dot(_waypointCameraUp)
+    }
+    const length = Math.hypot(dirX, dirY)
+    if (length < 1e-6) {
+      dirX = 0
+      dirY = 1
+    } else {
+      dirX /= length
+      dirY /= length
+    }
+    const padding = 40
+    const halfWidth = Math.max(1, w * 0.5 - padding)
+    const halfHeight = Math.max(1, h * 0.5 - padding)
+    const edgeScale = Math.min(
+      halfWidth / Math.max(Math.abs(dirX), 1e-6),
+      halfHeight / Math.max(Math.abs(dirY), 1e-6)
+    )
+    x = w * 0.5 + dirX * edgeScale
+    y = h * 0.5 + dirY * edgeScale
+  }
+
+  waypointEl.style.left = `${Math.round(x)}px`
+  waypointEl.style.top = `${Math.round(y)}px`
+  waypointEl.style.display = 'block'
+  const label = waypointEl.querySelector('.wp-label')
+  if (label) label.textContent = `${wp.name} · ${Math.round(distance)}m`
+}
+
+function hideWaypointIndicator() {
+  if (waypointEl) waypointEl.style.display = 'none'
 }
 
 let lastTime = performance.now()
 function animate() {
   requestAnimationFrame(animate)
+  npcTrafficMeshBuildsThisFrame = 0
   const now = performance.now()
   const dt = Math.min((now - lastTime) / 1000, 0.1)
   lastTime = now
@@ -7223,12 +8164,22 @@ function animate() {
     return
   }
 
+  // Session setup is deliberately asynchronous: keep presenting the covered
+  // scene, but do not advance combat, weather, or player movement underneath
+  // the loading veil while pipelines and models are being warmed.
+  if (sessionLoading) {
+    refreshEnvironment(gameState.simTime)
+    render()
+    return
+  }
+
   // Rain / storms keep rolling while docked, paused, or dead.
   tickWeather(dt, gameState.simTime)
 
   // Death: freeze the fight, keep the sea running, orbit the wreck slowly.
   if (deathOrbit) {
     spray.clear()
+    hideWaypointIndicator()
     deathOrbit.t += dt
     deathOrbit.yaw += dt * 0.18
     const [cx, cy, cz] = deathOrbit.center
@@ -7238,7 +8189,7 @@ function animate() {
       cy + 10 + Math.sin(deathOrbit.pitch) * deathOrbit.dist * 0.85,
       cz + Math.cos(deathOrbit.yaw) * cosP * deathOrbit.dist
     )
-    camera.lookAt(cx, cy + 2, cz)
+    camera.lookAt(cx, cy + (deathOrbit.focusY ?? 2), cz)
     const liveWreckIds = new Set()
     for (const wreck of gameState.wrecks ?? []) {
       liveWreckIds.add(wreck.id)
@@ -7314,6 +8265,7 @@ function animate() {
   // completes), so this branch must run regardless of `docked`.
   if (dockEffect) {
     spray.clear()
+    hideWaypointIndicator()
     updateDockEffect(dt)
     refreshEnvironment(gameState?.simTime ?? menuAnimT)
     render()
@@ -7324,6 +8276,7 @@ function animate() {
   // world running (flight input stays off while those UIs hold the cursor).
   if (paused) {
     spray.clear()
+    hideWaypointIndicator()
     audio.setStrafeActive(false)
     if (targetDirEl) targetDirEl.style.display = 'none'
     if (gameState.player.onFoot?.active) {
@@ -7339,7 +8292,10 @@ function animate() {
   updateHarbourPedestrians(dt)
   hud?.setOnFoot?.(!!gameState.player.onFoot?.active)
   if (gameState.player.onFoot?.active) {
+    setOnFootWeaponVisible(true)
+    updateFixoPistolViewModel(onFootWeapon, dt, now / 1000, _nightLightFactor)
     spray.clear()
+    hideWaypointIndicator()
     missileFireHeld = false
     audio.setStrafeActive(false)
     audio.setThrustState(null)
@@ -7355,13 +8311,13 @@ function animate() {
       (projectile) => projectile.onFoot || projectile.targetRef?.kind === 'player'
     )
     updateOnFootPlayer(dt)
+    updateWildlifeRuntime(dt)
+    checkGullProjectileHits(dt)
     updateProjectiles(gameState, dt, onProjectileHit, resolveProjectileWorldImpact)
     if (gameState.player.onFoot.health <= 0) {
-      // No explicit cause: onProjectileHit already called notePlayerDamagedBy
-      // on the hit, so gameState.player.lastKiller names the actual shooter
-      // — handlePlayerDeath's default message reads the same as a normal
-      // ship-combat death ("Destroyed by <ship> Piloted by <pilot>").
-      handlePlayerDeath()
+      // No explicit cause: onProjectileHit already called notePlayerDamagedBy,
+      // so the ashore death summary can name the vessel that fired the shot.
+      handlePlayerDeath({ cause: gameState.player.onFoot.lastDeathCause ?? null, drowned: true })
       return
     }
     if (laserFireHeld) tryOnFootFire()
@@ -7399,15 +8355,16 @@ function animate() {
     if (probePromptEl) probePromptEl.style.display = 'none'
     if (probeResultsEl) probeResultsEl.style.display = 'none'
     updateBelowRadarPrompts()
-    if (targetIndicatorEl) targetIndicatorEl.style.display = 'none'
-    if (targetDirEl) targetDirEl.style.display = 'none'
+    updateTargetHud()
+    updateTargetIndicator()
+    updateTargetDirectionIndicator()
     for (const mesh of bodyMeshes.values()) {
       updateHarbourMesh(mesh, gameState.simTime, _nightLightFactor)
     }
-    updateBodyVisibility()
-    hud?.element && (hud.element.style.display = '')
-    systemOverview?.hide?.()
-    if (playerWake?.group) playerWake.group.visible = false
+      updateBodyVisibility()
+      hud?.element && (hud.element.style.display = '')
+      systemOverview?.hide?.()
+      if (playerWake?.group) playerWake.group.visible = false
     if (camera.fov !== BASE_FOV) {
       camera.fov = BASE_FOV
       camera.updateProjectionMatrix()
@@ -7434,6 +8391,17 @@ function animate() {
       onFootCombatFrame.hasLineOfSightToOnFootPlayer = hasLineOfSightToOnFootPlayer
       for (const npc of gameState.npcs) {
         if (npc.destroyed) continue
+        const trafficNeedsFullAi =
+          !npc.ambientTraffic ||
+          npcTrafficIsNearPlayer(npc, NPC_TRAFFIC_COLLISION_DISTANCE) ||
+          npc.hostileToPlayer ||
+          npc.aiState !== 'trade' ||
+          onFootCombatFrame.civSos ||
+          !!onFootCombatFrame.engagedMap[npc.id]
+        if (!trafficNeedsFullAi) {
+          updateAmbientTrafficRoute(npc, gameState, dt, onFootCombatFrame.tradeHubs)
+          continue
+        }
         updateNpcAI(
           npc,
           gameState,
@@ -7447,6 +8415,10 @@ function animate() {
         )
       }
       for (const npc of gameState.npcs) {
+        if (!npcTrafficIsNearPlayer(npc)) {
+          removeNpcMesh(npc.id)
+          continue
+        }
         let mesh = npcMeshes.get(npc.id)
         if (!mesh && !npc.destroyed) mesh = addNpcMesh(npc)
         if (!mesh) continue
@@ -7468,8 +8440,14 @@ function animate() {
           updateShipNightLights(mesh, _nightLightFactor)
         }
       }
+      updateCombatFlag(gameState, onFootCombatFrame)
     }
+    updatePlayerHealthRegen(dt)
     ocean.setSearchlight(null)
+    if (updateGullFlock(gullFlock, gameState.player.onFoot.position, gameState.simTime) && gameState.simTime >= nextGullCallAt) {
+      audio.playGullCall()
+      nextGullCallAt = gameState.simTime + 7 + Math.random() * 8
+    }
     render()
     if (hudReticleRing.visible) {
       const prevAutoClear = renderer.autoClear
@@ -7483,6 +8461,7 @@ function animate() {
 
   if (docked) {
     spray.clear()
+    hideWaypointIndicator()
     audio.setStrafeActive(false)
     audio.setSeaMotion(0)
     if (targetDirEl) targetDirEl.style.display = 'none'
@@ -7515,6 +8494,7 @@ function animate() {
       syncOceanSearchlight()
     }
     if (chartOpen) seaChart?.refresh?.()
+    updatePlayerHealthRegen(dt, false)
     render()
     return
   }
@@ -7713,6 +8693,17 @@ function animate() {
   const combatFrame = prepareCombatFrame(gameState)
   for (const npc of gameState.npcs) {
     if (npc.destroyed) continue
+    const trafficNeedsFullAi =
+      !npc.ambientTraffic ||
+      npcTrafficIsNearPlayer(npc, NPC_TRAFFIC_COLLISION_DISTANCE) ||
+      npc.hostileToPlayer ||
+      npc.aiState !== 'trade' ||
+      combatFrame.civSos ||
+      !!combatFrame.engagedMap[npc.id]
+    if (!trafficNeedsFullAi) {
+      updateAmbientTrafficRoute(npc, gameState, dt, combatFrame.tradeHubs)
+      continue
+    }
     updateNpcAI(
       npc,
       gameState,
@@ -7749,6 +8740,7 @@ function animate() {
     ]
     for (const npc of gameState.npcs) {
       if (npc.destroyed) continue
+      if (npc.ambientTraffic && !npcTrafficIsNearPlayer(npc, NPC_TRAFFIC_COLLISION_DISTANCE)) continue
       const r = getShipCollisionRadius(getShipClass(npc.shipClassId))
       shipBodies.push({ ship: npc, npc, radius: r, mass: r * r })
     }
@@ -7771,8 +8763,10 @@ function animate() {
   }
 
   checkGullProjectileHits(dt)
+  updateWildlifeRuntime(dt)
   updateProjectiles(gameState, dt, onProjectileHit, resolveProjectileWorldImpact)
   updateCombatFlag(gameState, combatFrame)
+  updatePlayerHealthRegen(dt)
   updateDamageVignette(dt)
   updateMissionProgress(gameState)
 
@@ -7796,37 +8790,47 @@ function animate() {
   }
   truceWasActive = truceNowActive
 
-  // Busy shipping lanes in home waters, empty sea further out —
-  // spawnEncounterNear separately biases what you meet by the same remoteness.
+  // Civilian traffic is already distributed across the world and follows
+  // routes between hubs. This loop remains only for the existing near-player
+  // encounter roll, so pirates/aliens keep their current behaviour.
   const spawnSystem = getWorld(gameState.galaxy)
   const core = remoteness(gameState.player.ship.position)
   const ambientCap = Math.max(1, Math.round(AMBIENT_NPC_CAP + 1 - core * 3))
-  // Honest traffic only while inside the Haven Reach patrol area and the player
-  // has not started anything (see combat.js). Contract targets still spawn.
+  // Home waters still suppress hostile encounter rolls until peace is broken.
   const atPeacefulHome =
     inHomeWaters(gameState.player.ship.position) && !gameState.flags.startingSystemPeaceBroken
-  const forceNeutralAmbient = atPeacefulHome
-  // Station police don't count toward ambient traffic cap (they're fixtures).
+  // Station police and the background fleet don't count toward encounter cap.
   const ambientCount = gameState.npcs.filter(
-    (n) => !n.destroyed && n.faction !== 'police'
+    (n) => !n.destroyed && !n.ambientTraffic && n.faction !== 'police'
   ).length
   if (gameState.simTime > nextAmbientSpawnAt && ambientCount < ambientCap) {
-    gameState.npcs.push(
-      spawnEncounterNear(
+    if (!atPeacefulHome) {
+      const encounter = spawnEncounterNear(
         Math.random,
         gameState.player.ship.position,
         gameState.galaxy,
         core,
-        forceNeutralAmbient,
+        false,
         spawnSystem.bodies
       )
-    )
+      // Trader rolls are now covered by the world fleet; only retain the
+      // hostile rolls that this encounter loop already produced.
+      if (encounter.faction !== 'trader') gameState.npcs.push(encounter)
+    }
     nextAmbientSpawnAt = gameState.simTime + AMBIENT_SPAWN_INTERVAL_S * (0.7 + core * 0.6)
     // Occasionally replace killed harbour patrols.
     refreshStationPolicePatrols()
   }
 
+  // A civilian ship is replaced one-for-one after destruction, never on a
+  // timer. Hostile, patrol, and anomaly NPCs are deliberately excluded.
+  replenishAmbientTraffic(Math.random, gameState, spawnSystem.bodies, AMBIENT_TRAFFIC_COUNT)
+
   for (const npc of gameState.npcs) {
+    if (!npcTrafficIsNearPlayer(npc)) {
+      removeNpcMesh(npc.id)
+      continue
+    }
     let mesh = npcMeshes.get(npc.id)
     if (!mesh && !npc.destroyed) {
       // lite hull + wake (EdgesGeometry skipped — hitch when meshing mid-fight)
@@ -7923,11 +8927,12 @@ function animate() {
     liveProjectileIds.add(proj.id)
     let mesh = projectileMeshes.get(proj.id)
     if (!mesh) {
-      mesh = buildProjectileMesh(proj.weaponId, proj.weaponType)
+      mesh = buildProjectileMesh(proj.weaponId, proj.weaponType, !!proj.onFoot)
       projectileMeshes.set(proj.id, mesh)
       scene.add(mesh)
     }
-    mesh.scale.setScalar(proj.onFoot ? 0.5 : 1)
+    mesh.scale.setScalar(1)
+    mesh.visible = shouldShowProjectileMesh(proj)
     syncMeshToEntity(mesh, proj)
     if (proj.weaponType === 'missile' && missileTrail) {
       liveMissileIds.add(proj.id)
@@ -8074,32 +9079,7 @@ function animate() {
     activeWp?.name ?? null
   )
   // Tab-target detail panel (top right, left of system overview).
-  {
-    const t = resolveTarget()
-    if (!t) {
-      hud.updateTarget(null)
-    } else {
-      const shipPos = new THREE.Vector3().fromArray(gameState.player.ship.position)
-      const dist = shipPos.distanceTo(new THREE.Vector3().fromArray(t.position))
-      const metaParts = []
-      if (t.pilotName) metaParts.push(t.pilotName)
-      if (t.faction) metaParts.push(t.faction)
-      if (t.kindLabel) metaParts.push(t.kindLabel)
-      if (t.isAsteroid) metaParts.push('sunken hull')
-      metaParts.push(`${Math.round(dist)} m`)
-      hud.updateTarget({
-        name: t.name,
-        hostile: !!t.hostile,
-        meta: metaParts.join(' · '),
-        armor: t.armor,
-        maxArmor: t.maxArmor,
-        hull: t.hull,
-        maxHull: t.maxHull,
-        oreLeft: t.oreLeft,
-        oreMax: t.oreMax
-      })
-    }
-  }
+  updateTargetHud()
   hud.updateRadar(computeRadarContacts(), RADAR_RANGE, gameState.simTime, headingOf(gameState.player.ship))
 
   // F priority: wreck → nodule → dock. Each also requires the object to be
@@ -8256,11 +9236,18 @@ startMenuBackground()
 // first `buildMenuSystemVisuals` above ran before models could possibly be
 // ready and skipped vegetation (`isNatureReady()` gate in islandMesh.js) —
 // once it resolves, rebuild so trees/grass appear rather than never.
-void Promise.all([loadSoundPreference(), loadUiThemePreference(), preloadNatureModels()]).then(
+void warmOnFootWeapon()
+void loadWildlifeModels()
+void Promise.all([
+  loadSoundPreference(),
+  loadUiThemePreference(),
+  preloadNatureModels()
+]).then(
   () => {
     if (menuActive && !gameState) {
       clearMenuBodies()
       buildMenuSystemVisuals(getMenuWorld())
+      void warmScenePipelines()
     }
   }
 )

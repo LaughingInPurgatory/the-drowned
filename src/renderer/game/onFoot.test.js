@@ -5,8 +5,11 @@ import {
   updateOnFootStamina,
   ON_FOOT_JUMP_SPEED,
   ON_FOOT_JUMP_TRAVEL_MULTIPLIER,
+  ON_FOOT_MAX_WALKABLE_SLOPE,
   startOnFootJump,
   updateOnFootJump,
+  updateOnFootFall,
+  onFootFallDamage,
   boardingRangeForShip,
   withinBoardingRange,
   footstepSurfaceForIsland,
@@ -76,6 +79,10 @@ test('footsteps classify shore, hard islands, and living ground', () => {
   assert.equal(footstepSurfaceForIsland('drowned', 0.4), 'grass')
 })
 
+test('on-foot slope limit is 65 degrees', () => {
+  assert.equal(Math.round(Math.atan(ON_FOOT_MAX_WALKABLE_SLOPE) * 180 / Math.PI), 65)
+})
+
 test('footstep cadence starts promptly and alternates feet', () => {
   const state = { footstepSide: 'L' }
   assert.deepEqual(advanceOnFootFootsteps(state, 0.1, { moving: true, grounded: true }), [])
@@ -108,4 +115,42 @@ test('on-foot jump lands on its launch floor when shoreline sampling fails', () 
   assert.equal(state.grounded, true)
   assert.equal(state.position[1], 3)
   assert.equal(startOnFootJump(state), true)
+})
+
+test('jumping down a large drop records fall distance for damage', () => {
+  const state = { position: [0, 8, 0], jumping: false, grounded: true }
+  assert.equal(startOnFootJump(state), true)
+  for (let i = 0; i < 40 && state.jumping; i++) updateOnFootJump(state, 0.1, 0)
+  assert.equal(state.jumping, false)
+  assert.equal(state.jumpLandingDistance, 8)
+  assert.equal(onFootFallDamage(state.jumpLandingDistance), 18)
+})
+
+test('walking off a ledge starts a fall instead of pinning to the edge', () => {
+  const state = {
+    position: [0, 4, 0],
+    velocity: [0, 0, 0],
+    heading: 0,
+    grounded: true,
+    falling: false
+  }
+  updateOnFootMovement(state, new Set(['KeyW']), 0.2, () => null, 5, false, () => true)
+  assert.equal(state.falling, true)
+  assert.ok(state.position[2] > 0)
+})
+
+test('falling lands with a modest distance-based damage amount', () => {
+  const state = {
+    position: [0, 8, 0],
+    falling: true,
+    fallStartY: 8,
+    verticalVelocity: -12,
+    grounded: false
+  }
+  let landing = { landed: false, fallDistance: 0 }
+  for (let i = 0; i < 20 && !landing.landed; i++) landing = updateOnFootFall(state, 0.1, 0)
+  assert.equal(landing.landed, true)
+  assert.equal(landing.fallDistance, 8)
+  assert.equal(onFootFallDamage(3), 0)
+  assert.equal(onFootFallDamage(8), 18)
 })

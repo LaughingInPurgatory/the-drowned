@@ -1803,6 +1803,7 @@ export function createDockingUI(container, gameState, rng, hooks = {}) {
           WEAPONS.filter(
             (w) =>
               w.category === category &&
+              !w.handheld &&
               (!w.alien || (storageWeapons[w.id] ?? 0) > 0 || (spareWeapons[w.id] ?? 0) > 0)
           )
             .slice()

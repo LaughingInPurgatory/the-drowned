@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { makeSearchlightBeamMaterial } from './shipMesh.js'
+import { makeSearchlightBeamMaterial, makeSearchlightCookie } from './shipMesh.js'
 
 /** Small handheld beam used by the on-foot survivor. */
 export function buildPlayerFlashlight({ beamLen = 26, farRadius = 1.35 } = {}) {
@@ -31,7 +31,8 @@ export function buildPlayerFlashlight({ beamLen = 26, farRadius = 1.35 } = {}) {
   beam.frustumCulled = false
   root.add(housing, glow, beam)
 
-  const spot = new THREE.SpotLight(0xfff0d0, 0, 36, 0.18, 0.72, 1.6)
+  const spot = new THREE.SpotLight(0xfff4df, 0, 500, 0.22, 0.7, 1.25)
+  spot.map = makeSearchlightCookie()
   spot.visible = true
   spot.castShadow = false
   root.add(spot)
@@ -48,13 +49,15 @@ export function setPlayerFlashlightOn(flashlight, on) {
   if (!flashlight) return false
   const enabled = !!on
   flashlight.enabled = enabled
-  flashlight.housing.visible = enabled
-  flashlight.glow.visible = enabled
-  flashlight.beam.visible = enabled
+  // The lamp is worn beside the player's head and sits outside first-person
+  // view; only its projected beam should be visible.
+  flashlight.housing.visible = false
+  flashlight.glow.visible = false
+  flashlight.beam.visible = false
   if (flashlight.beam.material?.uniforms?.uOpacity) {
-    flashlight.beam.material.uniforms.uOpacity.value = enabled ? 0.44 : 0
+    flashlight.beam.material.uniforms.uOpacity.value = 0
   }
-  flashlight.spot.intensity = enabled ? 5200 : 0
+  flashlight.spot.intensity = enabled ? 35000 : 0
   flashlight.spot.visible = true
   return enabled
 }

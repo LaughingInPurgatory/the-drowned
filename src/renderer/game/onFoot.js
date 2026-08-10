@@ -5,6 +5,10 @@ export const ON_FOOT_RUN_SPEED = 8.4
 export const ON_FOOT_JUMP_SPEED = 9.6 * Math.sqrt(2 / 3)
 export const ON_FOOT_JUMP_TRAVEL_MULTIPLIER = Math.sqrt(3 / 2)
 export const ON_FOOT_GRAVITY = 13
+// tan(65°): slopes below 65° remain climbable.
+export const ON_FOOT_MAX_WALKABLE_SLOPE = 2.145
+export const ON_FOOT_SAFE_FALL_DISTANCE = 3.5
+export const ON_FOOT_FALL_DAMAGE_PER_M = 4
 export const ON_FOOT_BOARD_RANGE = 24
 export const ON_FOOT_BOARD_MARGIN = 8
 export const ON_FOOT_STAMINA_DRAIN_S = 5
@@ -21,7 +25,15 @@ function finite(value, fallback = 0) {
  * Move a person across an island surface. `surfaceAt(x, z)` returns ground Y
  * or null outside the walkable land; failed moves slide along the valid axis.
  */
-export function updateOnFootMovement(onFoot, keys, dt, surfaceAt, speed = ON_FOOT_WALK_SPEED, preserveY = false) {
+export function updateOnFootMovement(
+  onFoot,
+  keys,
+  dt,
+  surfaceAt,
+  speed = ON_FOOT_WALK_SPEED,
+  preserveY = false,
+  fallAt = null
+) {
   if (!onFoot || !Array.isArray(onFoot.position) || typeof surfaceAt !== 'function') return false
   const step = Math.min(0.1, Math.max(0, finite(dt)))
   const heading = finite(onFoot.heading)
@@ -61,6 +73,10 @@ export function updateOnFootMovement(onFoot, keys, dt, surfaceAt, speed = ON_FOO
     nextX = x + dx
     nextZ = z + dz
     if (!preserveY) nextY = fullY
+  } else if (length > 1e-6 && typeof fallAt === 'function' && fallAt(x + dx, z + dz)) {
+    nextX = x + dx
+    nextZ = z + dz
+    startOnFootFall(onFoot)
   } else {
     const xY = trySurface(x + dx, z)
     if (xY != null) {
@@ -79,12 +95,49 @@ export function updateOnFootMovement(onFoot, keys, dt, surfaceAt, speed = ON_FOO
   return Math.hypot(nextX - x, nextZ - z) > 1e-5
 }
 
+/** Start a gravity-driven drop after leaving walkable ground. */
+export function startOnFootFall(onFoot) {
+  if (!onFoot || onFoot.jumping || onFoot.falling) return false
+  onFoot.falling = true
+  onFoot.fallStartY = finite(onFoot.position?.[1])
+  onFoot.verticalVelocity = 0
+  onFoot.grounded = false
+  return true
+}
+
+/** Integrate a fall and report the landing distance once a floor is reached. */
+export function updateOnFootFall(onFoot, dt, groundY) {
+  if (!onFoot?.falling || !Array.isArray(onFoot.position)) {
+    return { landed: false, fallDistance: 0 }
+  }
+  const seconds = Math.min(0.1, Math.max(0, finite(dt)))
+  const velocity = finite(onFoot.verticalVelocity)
+  const floorY = Number.isFinite(Number(groundY)) ? Number(groundY) : null
+  onFoot.position[1] = finite(onFoot.position[1]) + velocity * seconds
+  onFoot.verticalVelocity = velocity - ON_FOOT_GRAVITY * seconds
+  if (floorY == null || onFoot.position[1] > floorY) {
+    return { landed: false, fallDistance: 0 }
+  }
+  const fallDistance = Math.max(0, finite(onFoot.fallStartY, floorY) - floorY)
+  onFoot.position[1] = floorY
+  onFoot.verticalVelocity = 0
+  onFoot.falling = false
+  onFoot.fallStartY = null
+  onFoot.grounded = true
+  return { landed: true, fallDistance }
+}
+
+export function onFootFallDamage(distance) {
+  return Math.max(0, Math.floor((finite(distance) - ON_FOOT_SAFE_FALL_DISTANCE) * ON_FOOT_FALL_DAMAGE_PER_M))
+}
+
 /** Start a grounded jump. */
 export function startOnFootJump(onFoot) {
   if (!onFoot || onFoot.jumping || onFoot.grounded === false) return false
   onFoot.jumping = true
   onFoot.verticalVelocity = ON_FOOT_JUMP_SPEED
   onFoot.jumpTime = 0
+  onFoot.jumpLandingDistance = null
   // Keep a stable landing floor if the player travels over the shallow-water
   // boundary while airborne. The old fallback used the current airborne Y,
   // which made an invalid shoreline sample launch the player forever.
@@ -105,6 +158,7 @@ export function updateOnFootJump(onFoot, dt, groundY) {
   onFoot.verticalVelocity = velocity - ON_FOOT_GRAVITY * seconds
   onFoot.jumpTime = finite(onFoot.jumpTime) + seconds
   if (onFoot.position[1] <= floorY) {
+    onFoot.jumpLandingDistance = Math.max(0, finite(onFoot.jumpGroundY, floorY) - floorY)
     onFoot.position[1] = floorY
     onFoot.verticalVelocity = 0
     onFoot.jumpTime = 0

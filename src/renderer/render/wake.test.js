@@ -132,7 +132,7 @@ test('noise domain stays small and water-fixed as the hull travels', () => {
 
 test('premium player hull uses wet clearcoat; lite NPC stays Standard', async () => {
   const { getShipClass, STARTER_SHIP_CLASS_ID } = await import('../data/shipClasses.js')
-  const { buildShipMesh } = await import('./shipMesh.js')
+  const { buildShipMesh, setSearchlightOn } = await import('./shipMesh.js')
   const cls = getShipClass(STARTER_SHIP_CLASS_ID)
   const player = buildShipMesh(cls, { searchlight: true })
   const npc = buildShipMesh(cls, { lite: true })
@@ -143,4 +143,7 @@ test('premium player hull uses wet clearcoat; lite NPC stays Standard', async ()
   assert.ok(npcHull?.material?.isMeshStandardMaterial)
   assert.equal(player.userData.premiumHull, true)
   assert.equal(npc.userData.premiumHull, false)
+  assert.equal(setSearchlightOn(player, true), true)
+  assert.equal(player.userData.searchlight.beam.visible, false)
+  assert.ok(player.userData.searchlight.spot.distance >= 1000)
 })

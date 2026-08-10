@@ -355,5 +355,5 @@ export function clockLabel(t) {
 // The GLSL sky dome that used to live here is gone. WebGPURenderer cannot
 // compile a custom GLSL ShaderMaterial, so it had been dead since the port —
 // nothing imported SKY_SHADER or skyUniforms(). The live sky is
-// render/skyNodeMaterial.js (TSL). Its 'night nebulae / cosmic dust' section
-// went with it; a flooded Earth gets a milky way, not a sci-fi skybox.
+// render/skyNodeMaterial.js (TSL), including the restrained damaged-atmosphere
+// haze that sits in the star field rather than the lower cloud layers.

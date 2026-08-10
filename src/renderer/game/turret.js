@@ -196,6 +196,13 @@ export function turretAimPoint(shipState, shipClass, out = new THREE.Vector3(), 
   return out.addScaledVector(dir, distance)
 }
 
+/** Extend the camera-to-reticle ray without changing its screen position. */
+export function crosshairSightlineEnd(cameraPosition, displayedAim, distance, out = new THREE.Vector3()) {
+  out.copy(displayedAim).sub(cameraPosition)
+  if (out.lengthSq() < 1e-8) return out.copy(displayedAim)
+  return out.normalize().multiplyScalar(distance).add(cameraPosition)
+}
+
 /** Ease the turret back to dead ahead — used when the helm is unmanned. */
 export function centreTurret(shipState, dt, rate = 2.2) {
   const k = Math.min(1, rate * dt)

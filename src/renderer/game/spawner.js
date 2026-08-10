@@ -3,8 +3,15 @@ import { SHIP_CLASSES, ALIEN_SHIP_CLASSES } from '../data/shipClasses.js'
 import { defaultLoadoutFor } from '../data/weapons.js'
 import { generateHumanName } from '../procgen/names.js'
 import { exteriorRadiusFor, npcExclusionRadiusFor } from './collision.js'
+import { WORLD_RADIUS } from '../procgen/world.js'
 
 let npcCounter = 0
+
+// Civilian shipping is a background population, not a combat encounter. Keep
+// it in the simulation so the sea feels inhabited everywhere, but do not use
+// it to fill the near-player encounter cap below.
+export const AMBIENT_TRAFFIC_COUNT = 400
+const TRAFFIC_HUB_KINDS = new Set(['port', 'outpost'])
 
 // Sorted once so pirate difficulty can be picked as a position in this list
 // rather than re-sorting per spawn. Exclude alien + police (not pirate hulls).
@@ -323,6 +330,61 @@ export function spawnNpc(rng, { position, faction = 'pirate', species = null, co
     species,
     bodies
   })
+}
+
+function trafficHubsFor(bodies) {
+  return (bodies ?? []).filter((body) => TRAFFIC_HUB_KINDS.has(body.kind))
+}
+
+function randomOpenWaterPosition(rng, bodies) {
+  const maxRadius = Math.max(1000, WORLD_RADIUS - NPC_SPAWN_CLEARANCE - NPC_SPAWN_SHIP_RADIUS)
+  for (let attempt = 0; attempt < 64; attempt++) {
+    // Uniform density over the playable sea disc, so the fleet is not packed
+    // around the centre of the world.
+    const radius = Math.sqrt(rng()) * maxRadius
+    const angle = rng() * Math.PI * 2
+    const candidate = [Math.cos(angle) * radius, 0, Math.sin(angle) * radius]
+    if (!positionOverlapsBodies(candidate, bodies)) return candidate
+  }
+  return clearPositionOfBodies(
+    [Math.cos(rng() * Math.PI * 2) * maxRadius, 0, Math.sin(rng() * Math.PI * 2) * maxRadius],
+    bodies
+  )
+}
+
+function randomTradeDestination(rng, hubs, avoidId = null) {
+  if (!hubs.length) return null
+  const choices = hubs.length > 1 ? hubs.filter((hub) => hub.id !== avoidId) : hubs
+  return pick(rng, choices.length ? choices : hubs)
+}
+
+/** Spawn background civilian shipping across the whole world. */
+export function spawnAmbientTraffic(rng, bodies, count = AMBIENT_TRAFFIC_COUNT) {
+  const hubs = trafficHubsFor(bodies)
+  const spawned = []
+  for (let i = 0; i < count; i++) {
+    const destination = randomTradeDestination(rng, hubs)
+    const npc = spawnNpc(rng, {
+      position: randomOpenWaterPosition(rng, bodies),
+      faction: 'trader',
+      bodies
+    })
+    npc.ambientTraffic = true
+    npc.aiState = 'trade'
+    npc.tradeDestinationId = destination?.id ?? null
+    spawned.push(npc)
+  }
+  return spawned
+}
+
+/** Replace only the civilian traffic lost since the last population check. */
+export function replenishAmbientTraffic(rng, gameState, bodies, count = AMBIENT_TRAFFIC_COUNT) {
+  if (!gameState) return []
+  const live = (gameState.npcs ?? []).filter((npc) => npc.ambientTraffic && !npc.destroyed).length
+  if (live >= count) return []
+  const spawned = spawnAmbientTraffic(rng, bodies, count - live)
+  gameState.npcs.push(...spawned)
+  return spawned
 }
 
 // Spawn distance is kept just beyond typical combat engagement range (see

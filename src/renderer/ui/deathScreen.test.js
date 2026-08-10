@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ACIDIC_SEA_DEATH_PUNS,
+  describeOnFootDeath,
   formatDeathCause,
   formatFaction,
   pickDeathPun,
@@ -49,4 +50,15 @@ test('acidic seawater deaths choose from twenty dedicated puns', () => {
   for (let i = 0; i < 20; i++) {
     assert.ok(ACIDIC_SEA_DEATH_PUNS.includes(pickDeathPun('Killed by acidic seawater')))
   }
+})
+
+test('on-foot death cause names the attacking vessel when known', () => {
+  assert.equal(
+    describeOnFootDeath({ shipName: 'Coastguard Cutter', method: 'fire' }),
+    'Killed ashore by naval gunfire from Coastguard Cutter'
+  )
+  assert.equal(
+    describeOnFootDeath({ shipName: 'Unknown vessel', method: 'fire' }),
+    'Killed ashore by unidentified naval gunfire'
+  )
 })

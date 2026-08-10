@@ -157,7 +157,6 @@ const STYLE = `
   display: none !important;
 }
 #hud.on-foot .status-panel,
-#hud.on-foot .target-panel,
 #hud.on-foot #radar {
   display: none !important;
 }
@@ -850,8 +849,10 @@ export function createHud(container) {
       radarCtx.textBaseline = 'middle'
       radarCtx.shadowColor = 'rgba(0,0,0,0.9)'
       radarCtx.shadowBlur = 3
+      // Right-hand helm turns decrease heading, so labels use the opposite
+      // sign to stay aligned with the visual turn and the world compass.
       for (const [label, bearing] of [['N', 0], ['E', Math.PI / 2], ['S', Math.PI], ['W', Math.PI * 1.5]]) {
-        const relative = bearing - heading
+        const relative = bearing + heading
         const p = project(Math.sin(relative) * U * 0.88, 0, Math.cos(relative) * U * 0.88)
         radarCtx.fillStyle = label === 'N' ? getUiPalette().bright : ar(0.82)
         radarCtx.fillText(label, p.sx, p.sy)

@@ -22,7 +22,9 @@ import {
   clamp,
   attribute,
   oneMinus,
-  negate
+  negate,
+  texture,
+  screenUV
 } from 'three/tsl'
 import { SHOT_MODE } from '../devShots.js'
 
@@ -33,10 +35,13 @@ import { SHOT_MODE } from '../devShots.js'
  * `setPostOverlay`) because all three are artifacts of looking through wet air
  * with a camera rather than things standing in the world:
  *
- *   1. **rain** — one full-screen quad running four procedural streak layers.
+ *   1. **rain** — one half-resolution quad running six procedural streak layers,
+ *      then linearly upscaled over the finished frame. The soft rain streaks lose
+ *      no useful detail at half resolution, while the shader shades 75% fewer
+ *      pixels. Lightning and its glow remain full resolution.
  *      Not particles. A particle field cheap enough to run at 60fps tops out at
  *      about a thousand sprites, which is why the old one read as snow: you
- *      could count the drops. Four hashed grids give ~30,000 streaks for one
+ *      could count the drops. Six hashed grids give ~30,000 streaks for one
  *      draw call, with real parallax (near layers are longer, faster, sparser
  *      and brighter; far layers collapse into a mist you feel rather than see).
  *      Normal-blended grey, not additive white — rain darkens a bright sky and
@@ -67,6 +72,16 @@ const HORIZON_NDC = 0.045
 const SOUND_KMS = 0.343
 /** Strike distance range, km. Past ~3km the clap is a rumble not a crack. */
 const STRIKE_KM = [0.2, 3.1]
+
+/** Rain is intentionally soft; half resolution cuts its fragment cost by 75%. */
+const RAIN_RENDER_SCALE = 0.5
+
+export function rainRenderSize(width, height) {
+  return [
+    Math.max(1, Math.round(width * RAIN_RENDER_SCALE)),
+    Math.max(1, Math.round(height * RAIN_RENDER_SCALE))
+  ]
+}
 
 function hash01(n) {
   const x = Math.sin(n * 127.1 + 311.7) * 43758.5453
@@ -515,7 +530,7 @@ const BOLT_MAX_VERTS = 9500
 
 /**
  * Live weather FX: rain, squalls, lightning.
- * Call `update(dt, simTime, aspect)` every frame; draw via scene/camera after post.
+ * Call `update(dt, simTime, aspect)` every frame; draw via `render(renderer)` after post.
  */
 export function createWeather() {
   const quad = new THREE.PlaneGeometry(2, 2)
@@ -577,7 +592,9 @@ export function createWeather() {
     transparent: true,
     depthTest: false,
     depthWrite: false,
-    blending: THREE.NormalBlending
+    // Store straight colour + alpha in the low-resolution target. Blending is
+    // applied once, when that texture is composited over the finished frame.
+    blending: THREE.NoBlending
   })
   rainMat.colorNode = Fn(() => {
     // Full-screen quad UV → NDC
@@ -811,11 +828,68 @@ export function createWeather() {
   boltMesh.renderOrder = 2
   boltMesh.visible = false
 
-  const overlayScene = new THREE.Scene()
-  overlayScene.add(rainMesh)
-  overlayScene.add(glowMesh)
-  overlayScene.add(boltMesh)
+  const rainScene = new THREE.Scene()
+  rainScene.add(rainMesh)
+  const lightningScene = new THREE.Scene()
+  lightningScene.add(glowMesh)
+  lightningScene.add(boltMesh)
   const overlayCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 10)
+
+  // Rain is the costly pass: six procedural layers, each with a multi-value
+  // hash, across every screen pixel. Render it at half width and height and
+  // upscale once; the intentionally soft streaks and lens film mask the lower
+  // resolution, while lightning keeps its sharp full-resolution path.
+  const rainTarget = new THREE.RenderTarget(1, 1, {
+    type: THREE.UnsignedByteType,
+    colorSpace: THREE.LinearSRGBColorSpace
+  })
+  rainTarget.texture.minFilter = THREE.LinearFilter
+  rainTarget.texture.magFilter = THREE.LinearFilter
+  rainTarget.texture.generateMipmaps = false
+  const rainCompositeMat = new THREE.MeshBasicNodeMaterial({
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.NormalBlending
+  })
+  rainCompositeMat.colorNode = texture(rainTarget.texture, screenUV)
+  const rainComposite = new THREE.QuadMesh(rainCompositeMat)
+  const drawingBufferSize = new THREE.Vector2()
+  const savedClearColor = new THREE.Color()
+  let rainTargetWidth = 0
+  let rainTargetHeight = 0
+
+  function render(renderer) {
+    if (!rainMesh.visible && !glowMesh.visible && !boltMesh.visible) return
+
+    if (rainMesh.visible) {
+      renderer.getDrawingBufferSize(drawingBufferSize)
+      const [width, height] = rainRenderSize(drawingBufferSize.x, drawingBufferSize.y)
+      if (width !== rainTargetWidth || height !== rainTargetHeight) {
+        rainTarget.setSize(width, height)
+        rainTargetWidth = width
+        rainTargetHeight = height
+      }
+
+      const previousTarget = renderer.getRenderTarget()
+      const previousClearAlpha = renderer.getClearAlpha()
+      renderer.getClearColor(savedClearColor)
+      try {
+        renderer.setRenderTarget(rainTarget)
+        renderer.setClearColor(0x000000, 0)
+        renderer.clear()
+        renderer.render(rainScene, overlayCamera)
+      } finally {
+        renderer.setRenderTarget(previousTarget)
+        renderer.setClearColor(savedClearColor, previousClearAlpha)
+      }
+      rainComposite.render(renderer)
+    }
+
+    if (glowMesh.visible || boltMesh.visible) {
+      renderer.render(lightningScene, overlayCamera)
+    }
+  }
 
   // --- Sim state ---
   let fxT = 0
@@ -1292,15 +1366,10 @@ export function createWeather() {
 
   return {
     update,
+    render,
     clear,
     weatherAt,
     setTitleSafe,
-    get scene() {
-      return overlayScene
-    },
-    get camera() {
-      return overlayCamera
-    },
     get visible() {
       return rainMesh.visible || glowMesh.visible || boltMesh.visible
     },

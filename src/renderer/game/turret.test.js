@@ -8,6 +8,7 @@ import {
   turretAimPoint,
   turretMuzzleWorld,
   turretMountLocal,
+  crosshairSightlineEnd,
   centreTurret,
   TURRET_MAX_TRAVERSE,
   TURRET_MIN_PITCH,
@@ -21,6 +22,16 @@ function ship(heading = 0) {
 }
 
 const cls = () => getShipClass(STARTER_SHIP_CLASS_ID)
+
+test('close surface convergence stays beneath the displayed crosshair', () => {
+  const camera = new THREE.Vector3(0, 12, -20)
+  const displayedAim = new THREE.Vector3(3, 5, 100)
+  const end = crosshairSightlineEnd(camera, displayedAim, 500, new THREE.Vector3())
+  const reticleRay = displayedAim.clone().sub(camera).normalize()
+  const resolvedRay = end.clone().sub(camera).normalize()
+  assert.ok(reticleRay.distanceTo(resolvedRay) < 1e-9)
+  assert.ok(Math.abs(end.distanceTo(camera) - 500) < 1e-9)
+})
 
 test('the mouse lays the turret and nothing else touches the hull', () => {
   const s = ship()

@@ -72,15 +72,19 @@ export function createGameState({
         pitch: 0,
         walkPhase: 0,
         jumping: false,
+        falling: false,
         verticalVelocity: 0,
         jumpTime: 0,
         jumpGroundY: null,
+        jumpLandingDistance: null,
+        fallStartY: null,
         grounded: true,
         flashlightOn: false,
         health: 100,
         stamina: 100,
         runLocked: false,
-        running: false
+        running: false,
+        lastDeathCause: null
       },
       // Player-only skills 0–20 (data/skills.js) — raised via skillbooks.
       skills: emptySkills(),

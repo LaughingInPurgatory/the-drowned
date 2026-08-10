@@ -6,6 +6,7 @@ import {
   fireOnFootProjectile,
   updateProjectiles,
   updateNpcAI,
+  updateAmbientTrafficRoute,
   PLAYER_DAMAGE_TAKEN_MULT,
   rollShipBounty,
   applyShipBounty
@@ -85,6 +86,8 @@ test('Fixo Pistol uses deck-gun stats and reports world impacts', () => {
   assert.equal(fireOnFootProjectile(gameState, onFoot, [0, 2, 0], [0, 0, 1]), false)
   assert.equal(gameState.projectiles[0].weaponId, 'fixo_pistol')
   assert.equal(gameState.projectiles[0].damage, getWeapon('pulse_laser').damage)
+  assert.deepEqual(gameState.projectiles[0].renderOrigin, [0, 2, 0])
+  assert.equal(gameState.projectiles[0].renderStartDistance, 5)
 
   let hitPayload = null
   updateProjectiles(
@@ -95,6 +98,7 @@ test('Fixo Pistol uses deck-gun stats and reports world impacts', () => {
   )
   assert.equal(gameState.projectiles.length, 0)
   assert.equal(hitPayload?.onFootImpact, true)
+  assert.deepEqual(hitPayload?.inboundDir, [0, 0, -7])
 })
 
 test('player ship rounds report world impacts separately from on-foot rounds', () => {
@@ -587,4 +591,60 @@ test('a moored boat cannot be attacked', () => {
   gameState.player.dockedBodyId = null
   step(gameState, 200, () => updateNpcAI(npc, gameState, DT, () => {}, () => {}))
   assert.equal(npc.aiState, 'attack', 'once under way it is fair game again')
+})
+
+test('ambient traffic follows a hub route and picks a new hub on arrival', () => {
+  const npc = pirate([0, 0, -1000], {
+    id: 'npc-trader',
+    faction: 'trader',
+    ambientTraffic: true,
+    aiState: 'trade',
+    tradeDestinationId: 'outpost-b'
+  })
+  const bodies = [
+    { kind: 'port', id: 'port-a', position: [0, 0, 0], radius: null },
+    { kind: 'outpost', id: 'outpost-b', position: [1000, 0, 0], radius: null }
+  ]
+  const frame = {
+    bodies,
+    playerPos: [0, 0, 10000],
+    playerMoored: false,
+    playerOnFoot: false,
+    truce: false,
+    policeSos: false,
+    civSos: false,
+    pirates: [],
+    aliens: [],
+    police: [],
+    engagedMap: {}
+  }
+  const gameState = seaState([npc], [0, 0, 10000])
+  updateNpcAI(npc, gameState, 1, () => {}, () => {}, frame)
+  assert.equal(npc.aiState, 'trade')
+  assert.ok(npc.velocity[0] > 0, 'traffic should steer toward its destination')
+
+  npc.position = [1000, 0, 160]
+  npc.velocity = [0, 0, 0]
+  updateNpcAI(npc, gameState, DT, () => {}, () => {}, frame)
+  assert.equal(npc.tradeDestinationId, 'port-a', 'arrival should send the ship to another hub')
+})
+
+test('distant ambient traffic uses the cheap surface route integrator', () => {
+  const npc = pirate([0, 0, -1000], {
+    id: 'npc-distant-trader',
+    faction: 'trader',
+    ambientTraffic: true,
+    aiState: 'trade'
+  })
+  npc.hostileToPlayer = false
+  const gameState = seaState([npc], [0, 0, 10000])
+  const hubs = [{ kind: 'port', id: 'port-a', position: [1000, 0, -1000], radius: null }]
+  const before = [...npc.position]
+
+  updateAmbientTrafficRoute(npc, gameState, 0.1, hubs)
+
+  assert.notDeepEqual(npc.position, before, 'distant traffic should continue moving')
+  assert.ok(Number.isFinite(npc.position[1]), 'route-only traffic must remain on the sea surface')
+  assert.equal(npc.velocity[1], 0, 'route-only traffic must not accumulate vertical velocity')
+  assert.ok(npc.tradeDestinationId, 'route-only traffic should retain a hub destination')
 })

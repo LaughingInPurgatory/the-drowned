@@ -1,0 +1,9 @@
+Fixo first-person viewmodel asset
+
+Pistol 43 Tactical | FPS Animations
+Author: Vlasov Daniil (Sketchfab user dan741vlasov)
+Source: https://sketchfab.com/3d-models/pistol-43-tactical-fps-animations-1a4c9d15818a4522aedbeb70919a17da
+License: Creative Commons Attribution 4.0 International
+License URL: https://creativecommons.org/licenses/by/4.0/
+
+The model and its textures are redistributed with this game under that license.

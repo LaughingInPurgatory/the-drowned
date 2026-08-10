@@ -1,4 +1,4 @@
-import { dropMission, missionNavTarget, acceptMission } from '../game/missions.js'
+import { dropMission, missionNavTarget, setWaypointForMission, acceptMission } from '../game/missions.js'
 import { findBody, getSystem } from '../procgen/world.js'
 import { escapeHtml } from './escapeHtml.js'
 import { gameConfirm, gameNotice } from './gameDialog.js'
@@ -96,27 +96,48 @@ const STYLE = `
 #missions-ui button.accept:hover { background: rgba(127,224,160,0.22); }
 `
 
+function targetRangeFromPlayer(mission, gameState) {
+  const t = missionNavTarget(mission, gameState)
+  const targetBody = t.bodyId ? findBody(gameState.galaxy, t.bodyId) : null
+  const targetPosition = targetBody?.position ?? t.position
+  const playerPosition = gameState.player?.onFoot?.active
+    ? gameState.player.onFoot.position
+    : gameState.player?.ship?.position
+  if (!Array.isArray(targetPosition) || !Array.isArray(playerPosition)) return ''
+  const dx = targetPosition[0] - playerPosition[0]
+  const dz = targetPosition[2] - playerPosition[2]
+  const distance = Math.hypot(dx, dz)
+  if (distance < 1) return 'here'
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+  const bearing = (Math.atan2(dx, dz) + Math.PI * 2) % (Math.PI * 2)
+  const direction = directions[Math.round(bearing / (Math.PI / 4)) % directions.length]
+  const range = distance >= 10000 ? `${(distance / 1000).toFixed(1)} km` : `${Math.round(distance)} m`
+  return `${range} ${direction} from you`
+}
+
 function describeTarget(mission, gameState) {
   const t = missionNavTarget(mission, gameState)
   const system = getSystem(gameState.galaxy, t.systemId)
   const systemName = system?.name ?? t.systemId
+  const targetBody = t.bodyId ? findBody(gameState.galaxy, t.bodyId) : null
+  const relative = targetRangeFromPlayer(mission, gameState)
+  const relativeBit = relative ? ` · ${relative}` : ''
   if (mission.type === 'trade' && mission.trade) {
     const tr = mission.trade
     const need = tr.quantity ?? 0
     const bought = tr.purchased ?? 0
     const sold = tr.sold ?? 0
-    const body = findBody(gameState.galaxy, t.bodyId)
+    const body = targetBody
     const goDest = sold < need && bought > sold
     if (goDest || (bought >= need && sold < need)) {
-      return `Sell ${sold}/${need} at ${body?.name ?? 'destination'} · ${systemName} (bought ${bought}/${need})`
+      return `Sell ${sold}/${need} at ${body?.name ?? 'destination'} · ${systemName}${relativeBit} (bought ${bought}/${need})`
     }
-    return `Buy ${bought}/${need} at ${body?.name ?? 'origin'} · ${systemName} (sold ${sold}/${need})`
+    return `Buy ${bought}/${need} at ${body?.name ?? 'origin'} · ${systemName}${relativeBit} (sold ${sold}/${need})`
   }
   if (t.bodyId) {
-    const body = findBody(gameState.galaxy, t.bodyId)
-    return `Objective: ${body?.name ?? t.bodyId} · ${systemName}`
+    return `Objective: ${targetBody?.name ?? t.bodyId} · ${systemName}${relativeBit}`
   }
-  return `Objective: hostile target · ${systemName}`
+  return `Objective: hostile target · ${systemName}${relativeBit}`
 }
 
 function renderLog(mission) {
@@ -206,6 +227,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
           <div class="title">${escapeHtml(m.title)}</div>
           <div class="meta">${escapeHtml(m.type ? m.type.charAt(0).toUpperCase() + m.type.slice(1) : '')} · Reward ${m.reward} BU</div>
           <div class="meta">Posted at ${escapeHtml(giver?.name ?? m.giverStationId)} · ${Math.round(dist)} m</div>
+          <div class="meta">Objective · ${escapeHtml(targetRangeFromPlayer(m, gameState) || 'location unavailable')}</div>
           <div class="mission-actions">
             <button class="accept" data-id="${m.id}">Accept</button>
           </div>
@@ -258,6 +280,7 @@ export function createMissionsUI(container, gameState, hooks = {}) {
           ${renderLog(m)}
           <div class="status progress">${progress}</div>
           <div class="mission-actions">
+            <button class="track" data-id="${m.id}">Set Waypoint</button>
             <button class="drop" data-id="${m.id}">Drop Mission</button>
           </div>
         </div>
@@ -265,6 +288,22 @@ export function createMissionsUI(container, gameState, hooks = {}) {
     }).join('') + `
       <div class="footer-note">Drop Mission abandons the contract with no reward. Set waypoints on the sea chart (M), Overview, or Region Sonar. Investigations: sonar pulse the target (P). Each lead raises the payout 5%.</div>
     `
+
+    body.querySelectorAll('.track').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        const mission = gameState.missions.active.find((m) => m.id === btn.dataset.id)
+        if (!mission) return
+        try {
+          setWaypointForMission(gameState, mission.id)
+          const target = missionNavTarget(mission, gameState)
+          const body = target.bodyId ? findBody(gameState.galaxy, target.bodyId) : null
+          hooks.onWaypointChange?.({ name: body?.name ?? mission.title, mission })
+          render()
+        } catch (err) {
+          await gameNotice('Waypoint failed', err.message)
+        }
+      })
+    )
 
     body.querySelectorAll('.drop').forEach((btn) =>
       btn.addEventListener('click', async () => {

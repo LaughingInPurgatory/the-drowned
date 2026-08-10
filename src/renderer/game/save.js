@@ -133,12 +133,11 @@ export function serializeGameState(gameState) {
   if (gameState.simClockOriginMs != null) {
     gameState.simTime = Math.max(0, (nowMs - gameState.simClockOriginMs) / 1000)
   }
-  const { onFoot, ...savedPlayer } = gameState.player
   return {
     version: gameState.version,
     seed: gameState.seed,
     createdAt: gameState.createdAt,
-    player: savedPlayer,
+    player: gameState.player,
     galaxy: gameState.galaxy,
     economyOverrides: gameState.economyOverrides,
     marketStock: gameState.marketStock ?? {},
@@ -177,7 +176,7 @@ export function deserializeGameState(data) {
   }
   if (gameState.player?.avatar) gameState.player.avatar = normalizeAvatarSelection(gameState.player.avatar)
   else if (gameState.player) gameState.player.avatar = randomAvatarSelection()
-  if (gameState.player) {
+  if (gameState.player && !gameState.player.onFoot) {
     gameState.player.onFoot = {
       active: false,
       bodyId: null,
@@ -187,8 +186,10 @@ export function deserializeGameState(data) {
       pitch: 0,
       walkPhase: 0,
       jumping: false,
+      falling: false,
       verticalVelocity: 0,
       jumpTime: 0,
+      fallStartY: null,
       flashlightOn: false,
       health: 100,
       stamina: 100,

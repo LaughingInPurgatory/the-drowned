@@ -98,6 +98,38 @@ test('docked pose fields round-trip through save', () => {
   assert.deepEqual(restored.player.dockedApproachDir, [0, 0, 1])
 })
 
+test('on-foot position and the parked ship both survive a save', () => {
+  const gameState = createGameState({
+    characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,
+    galaxyOpts: TEST_WORLD_OPTS
+  })
+  const island = gameState.galaxy.systems[0].bodies.find((body) => body.kind === 'island')
+  gameState.player.onFoot = {
+    ...gameState.player.onFoot,
+    active: true,
+    bodyId: island.id,
+    position: [123.5, 7.25, -456.75],
+    heading: 1.4,
+    pitch: -0.2,
+    flashlightOn: true,
+    health: 73
+  }
+  gameState.player.ship.position = [88, 0, -390]
+  gameState.player.ship.heading = 2.2
+
+  const restored = deserializeGameState(JSON.parse(JSON.stringify(serializeGameState(gameState))))
+
+  assert.equal(restored.player.onFoot.active, true)
+  assert.equal(restored.player.onFoot.bodyId, island.id)
+  assert.deepEqual(restored.player.onFoot.position, [123.5, 7.25, -456.75])
+  assert.equal(restored.player.onFoot.heading, 1.4)
+  assert.equal(restored.player.onFoot.pitch, -0.2)
+  assert.equal(restored.player.onFoot.flashlightOn, true)
+  assert.equal(restored.player.onFoot.health, 73)
+  assert.deepEqual(restored.player.ship.position, [88, 0, -390])
+  assert.equal(restored.player.ship.heading, 2.2)
+})
+
 test('load clears hardpoint cooldowns so weapons work after a docked save', () => {
   const gameState = createGameState({
     characterName: 'Nova', shipInstanceName: 'Wanderer', shipClassId: STARTER_SHIP_CLASS_ID, seed: 5,

@@ -86,6 +86,10 @@ export async function createScene(container) {
   // normal depth buffer means no logarithmicDepthBuffer, which in turn means
   // custom ShaderMaterials no longer need the logdepthbuf chunks.
   const camera = new THREE.PerspectiveCamera(60, 1, 0.5, 60_000)
+  // Camera-space viewmodels (the on-foot pistol/hand) are children of the
+  // camera. Keep the camera in the scene graph so the renderer traverses
+  // those children during the normal scene render.
+  scene.add(camera)
 
   const renderer = await createWebGPURenderer(container, { preserveDrawingBuffer: SHOT_MODE })
 
@@ -228,12 +232,11 @@ export async function createScene(container) {
   // plain `renderer.render(scene, camera)`, and a plain `renderer.render()`
   // of a full-screen quad via `THREE.QuadMesh` — a bare geometry+camera
   // helper, not RenderPipeline; its own `.render()` is nothing but
-  // `renderer.render(this, camera)`. The scene renders into an offscreen
-  // supersampled target exactly like the confirmed-working raw path always
-  // did, just at 2x size; a second, ordinary quad draw box-filters that down
-  // (the antialiasing) and adds a handful of bright-weighted wide taps of the
-  // same texture (the bloom) in one pass, straight to the swapchain.
-  const AA_SCALE = 2
+  // `renderer.render(this, camera)`. The scene uses a native-resolution target
+  // and a small box filter instead of a 2x supersampled target. This is the
+  // deliberate simpler-AA tradeoff: the same bloom remains, but the scene
+  // raster work drops to the screen's actual pixel count.
+  const AA_SCALE = 1
   const superTarget = new THREE.RenderTarget(1, 1, {
     type: THREE.HalfFloatType,
     colorSpace: THREE.LinearSRGBColorSpace
@@ -242,7 +245,7 @@ export async function createScene(container) {
   const compositeMat = new THREE.MeshBasicNodeMaterial()
   compositeMat.colorNode = Fn(() => {
     const uv = screenUV
-    // 2x2 box downsample of the supersampled buffer — this *is* the AA.
+    // Small native-resolution box filter — this is the simpler AA path.
     const s00 = texture(superTarget.texture, uv.add(uTexel.mul(vec2(-0.25, -0.25))))
     const s10 = texture(superTarget.texture, uv.add(uTexel.mul(vec2(0.25, -0.25))))
     const s01 = texture(superTarget.texture, uv.add(uTexel.mul(vec2(-0.25, 0.25))))
@@ -545,11 +548,13 @@ export async function createScene(container) {
     const modeChanged = keyMode !== lastCelestialMode || shadowEnabled !== lastShadowEnabled
     const extentChanged = Math.abs(shadowExtent - lastShadowExtent) > 0.01
     const shadowDue = shadowFrame - lastShadowMapFrame >= shadowCadence
-    const shadowDirectionChanged =
-      !haveShadowHistory || _keyDirScratch.dot(lastShadowDirection) < 0.9998
     const shadowTargetMoved =
       !haveShadowHistory || sun.target.position.distanceToSquared(lastShadowCameraTarget) > 0.01
-    if (shadowEnabled && (modeChanged || extentChanged || shadowDirectionChanged || shadowTargetMoved || shadowDue)) {
+    // Keep the celestial direction smooth, but do not rebuild the 2048² shadow
+    // map for every tiny sun/moon rotation. The old direction check made dusk
+    // and dawn the worst hitch in the game because it forced a depth pass every
+    // couple of frames; cadence already bounds the staleness to 2/8 frames.
+    if (shadowEnabled && (modeChanged || extentChanged || shadowTargetMoved || shadowDue)) {
       sun.shadow.needsUpdate = true
       lastShadowMapFrame = shadowFrame
       lastShadowCameraTarget.copy(sun.target.position)
@@ -674,12 +679,34 @@ export async function createScene(container) {
    * revert of *both* was needed to clear. Whoever revisits the swapchain bug
    * itself needs the actual packaged app (`npm run build && npx electron .`).
    */
+  let useDirectLiveRender = false
+
   function render() {
-    const prevTarget = renderer.getRenderTarget()
-    renderer.setRenderTarget(superTarget)
-    renderer.render(scene, camera)
-    renderer.setRenderTarget(prevTarget)
-    compositeQuad.render(renderer)
+    if (!useDirectLiveRender) {
+      try {
+        const prevTarget = renderer.getRenderTarget()
+        renderer.setRenderTarget(superTarget)
+        renderer.render(scene, camera)
+        renderer.setRenderTarget(prevTarget)
+        compositeQuad.render(renderer)
+      } catch (err) {
+        useDirectLiveRender = true
+        console.warn('[scene] live composite failed; falling back to direct render', err)
+      }
+    }
+    if (useDirectLiveRender) {
+      try {
+        renderer.setRenderTarget(null)
+        renderer.autoClear = true
+        renderer.render(scene, camera)
+      } catch (err) {
+        if (!render._directWarned) {
+          render._directWarned = true
+          console.error('[scene] direct render failed', err)
+        }
+        return
+      }
+    }
     if (!postOverlay) return
     const prevAutoClear = renderer.autoClear
     renderer.autoClear = false
@@ -691,7 +718,9 @@ export async function createScene(container) {
         console.warn('[scene] postOverlay failed', err)
       }
     }
-    renderer.autoClear = prevAutoClear
+    finally {
+      renderer.autoClear = prevAutoClear
+    }
   }
 
   /**

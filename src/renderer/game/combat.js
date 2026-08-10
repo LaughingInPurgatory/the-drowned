@@ -16,7 +16,7 @@ import { mineRock, isRockAlive, mineYieldForWeapon } from './mining.js'
 import { spawnWreckWithSkills } from './wrecks.js'
 import { playerSkillBonuses } from './skills.js'
 import { getAsteroidRocks } from '../render/asteroidFieldMesh.js'
-import { rockCollisionRadius } from './collision.js'
+import { npcExclusionRadiusFor, rockCollisionRadius } from './collision.js'
 import { getWeapon, BASE_WEAPON_ID, ALIEN_BASE_WEAPON_ID } from '../data/weapons.js'
 import { damageDrone } from './drones.js'
 import {
@@ -429,6 +429,10 @@ export function fireOnFootProjectile(gameState, onFoot, origin, direction, onFir
     weaponType: 'laser',
     weaponId: weapon.id,
     position: [_fireMuzzle.x, _fireMuzzle.y, _fireMuzzle.z],
+    // Keep the near-muzzle portion of the handheld round hidden; its normal
+    // flight visibility begins once it is about five metres from the gun.
+    renderOrigin: [_fireMuzzle.x, _fireMuzzle.y, _fireMuzzle.z],
+    renderStartDistance: 5,
     quaternion: [_projQuat.x, _projQuat.y, _projQuat.z, _projQuat.w],
     velocity: [_projDir.x * weapon.speed, _projDir.y * weapon.speed, _projDir.z * weapon.speed],
     damage: weapon.damage,
@@ -751,15 +755,20 @@ export function updateProjectiles(gameState, dt, onHit, onWorldImpact) {
         const impactPosition = Array.isArray(impact)
           ? impact
           : Array.isArray(impact.position) ? impact.position : proj.position.slice()
+        _inbound.subVectors(_projPrev, _projNext)
         onHit?.({
           position: impactPosition,
           weaponType: proj.weaponType,
           weaponId: proj.weaponId,
           onFootImpact: !!proj.onFoot,
           worldImpact: true,
+          wildlifeImpact: !!impact.wildlifeImpact,
+          wildlifeId: impact.wildlifeId ?? null,
+          wildlifeKilled: !!impact.wildlifeKilled,
           waterImpact: !!impact.waterImpact,
           silentImpact: !!proj.gullHit,
-          ownerId: proj.ownerId
+          ownerId: proj.ownerId,
+          inboundDir: [_inbound.x, _inbound.y, _inbound.z]
         })
         hit = true
       }
@@ -795,6 +804,86 @@ function faceToward(npc, fromPos, toPos, turnRate, dt) {
   return _steerOut.set(Math.sin(heading), 0, Math.cos(heading))
 }
 
+const TRADE_HUB_KINDS = new Set(['port', 'outpost'])
+const TRADE_ARRIVAL_DISTANCE = 180
+
+function pickTradeDestination(npc, bodies, cachedHubs = null) {
+  const hubs = cachedHubs ?? (bodies ?? []).filter((body) => TRADE_HUB_KINDS.has(body.kind))
+  if (!hubs.length) return null
+  const choices = hubs.length > 1
+    ? hubs.filter((hub) => hub.id !== npc.tradeDestinationId)
+    : hubs
+  const destination = choices[Math.floor(Math.random() * choices.length)] ?? hubs[0]
+  npc.tradeDestinationId = destination.id
+  return destination
+}
+
+function tradeDestinationFor(npc, npcPos, bodies, cachedHubs = null) {
+  const hubs = cachedHubs ?? (bodies ?? []).filter((body) => TRADE_HUB_KINDS.has(body.kind))
+  let destination = hubs.find((body) => body.id === npc.tradeDestinationId)
+  if (!destination || !TRADE_HUB_KINDS.has(destination.kind)) {
+    destination = pickTradeDestination(npc, bodies, hubs)
+  }
+  if (!destination) return null
+
+  const dx = destination.position[0] - npcPos.x
+  const dz = destination.position[2] - npcPos.z
+  const arrivalDistance = Math.max(
+    TRADE_ARRIVAL_DISTANCE,
+    (npcExclusionRadiusFor(destination) ?? 0) + NPC_SPAWN_SHIP_RADIUS + NPC_FLIGHT_CLEARANCE
+  )
+  if (Math.hypot(dx, dz) <= arrivalDistance) {
+    destination = pickTradeDestination(npc, bodies, hubs)
+  }
+  return destination
+}
+
+function tradeTargetFor(npc, npcPos, bodies, cachedHubs = null) {
+  const destination = tradeDestinationFor(npc, npcPos, bodies, cachedHubs)
+  if (!destination) return null
+  return new THREE.Vector3(destination.position[0], 0, destination.position[2])
+}
+
+/**
+ * Move distant civilian traffic without paying for combat targeting,
+ * allocations, or body-clearance checks that cannot affect the player at that
+ * range. Full AI resumes before the ship enters the visible/collision ring.
+ */
+export function updateAmbientTrafficRoute(npc, gameState, dt, hubs = []) {
+  if (!npc?.ambientTraffic || npc.destroyed) return
+  const shipClass = getShipClass(npc.shipClassId)
+  const stats = shipClass.stats
+  const seconds = Math.min(0.1, Math.max(0, Number(dt) || 0))
+  const position = npc.position ?? [0, 0, 0]
+  const velocity = npc.velocity ?? [0, 0, 0]
+  const npcPos = { x: Number(position[0]) || 0, z: Number(position[2]) || 0 }
+  const destination = tradeDestinationFor(npc, npcPos, hubs, hubs)
+  let heading = headingOf(npc)
+  if (destination) {
+    const target = Math.atan2(
+      (Number(destination.position[0]) || 0) - npcPos.x,
+      (Number(destination.position[2]) || 0) - npcPos.z
+    )
+    const delta = Math.atan2(Math.sin(target - heading), Math.cos(target - heading))
+    const maxTurn = stats.turnRate * 0.7 * seconds
+    heading += Math.max(-maxTurn, Math.min(maxTurn, delta))
+    npc.heading = heading
+  }
+
+  const throttle = Math.pow(0.35, seconds)
+  let vx = ((Number(velocity[0]) || 0) + Math.sin(heading) * stats.accel * 0.65 * seconds) * throttle
+  let vz = ((Number(velocity[2]) || 0) + Math.cos(heading) * stats.accel * 0.65 * seconds) * throttle
+  const speed = Math.hypot(vx, vz)
+  if (speed > stats.speed) {
+    const scale = stats.speed / speed
+    vx *= scale
+    vz *= scale
+  }
+  npc.position = [npcPos.x + vx * seconds, 0, npcPos.z + vz * seconds]
+  npc.velocity = [vx, 0, vz]
+  snapToSea(npc, gameState.simTime)
+}
+
 // A pirate/alien encounter turns three-way the moment an alien is present:
 // aliens are hostile to both the player and pirates, and pirates call a
 // truce with the player to fight the aliens instead (main.js detects when
@@ -827,6 +916,7 @@ export function prepareCombatFrame(gameState) {
   return {
     system,
     bodies: system?.bodies ?? [],
+    tradeHubs: (system?.bodies ?? []).filter((body) => TRADE_HUB_KINDS.has(body.kind)),
     // Ashore, anyone allowed to target the player at all (see opponentsFor)
     // aims at the actual body, not the abandoned hull sitting by the shore.
     playerPos: onFootActive ? gameState.player.onFoot.position : gameState.player.ship.position,
@@ -947,6 +1037,12 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
     }
   }
 
+  const trafficEngaged =
+    !!opponent ||
+    !!npc.hostileToPlayer ||
+    !!combatFrame?.engagedMap?.[npc.id] ||
+    !!combatFrame?.civSos
+
   if (hullFraction < FLEE_HULL_FRACTION) {
     // A one-time decision the moment it first drops this low — not re-rolled
     // every frame while it stays there (see RAM_CHANCE above).
@@ -973,6 +1069,16 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
     distance >= (npc.anomalySiteId != null ? ANOMALY_GUARD_DISENGAGE_RANGE : DISENGAGE_RANGE)
   ) {
     npc.aiState = 'patrol'
+  }
+
+  // Civilian traffic resumes its route after a combat contact has dropped
+  // away. Hostile encounters themselves still use the normal attack/flee AI.
+  if (
+    npc.ambientTraffic &&
+    npc.aiState === 'patrol' &&
+    (!trafficEngaged || distance >= DISENGAGE_RANGE)
+  ) {
+    npc.aiState = 'trade'
   }
 
   let forward
@@ -1061,6 +1167,22 @@ export function updateNpcAI(npc, gameState, dt, onFire, onPlayerHit, combatFrame
     const fleeTarget = npcPos.clone().add(away.normalize())
     forward = faceToward(npc, npcPos, fleeTarget, stats.turnRate, dt)
     velocity.addScaledVector(forward, stats.accel * dt)
+  } else if (npc.aiState === 'trade') {
+    const tradeTarget = tradeTargetFor(
+      npc,
+      npcPos,
+      combatFrame?.bodies,
+      combatFrame?.tradeHubs
+    )
+    if (tradeTarget) {
+      forward = faceToward(npc, npcPos, tradeTarget, stats.turnRate * 0.7, dt)
+      velocity.addScaledVector(forward, stats.accel * 0.65 * dt)
+    } else {
+      // The generated world always has hubs, but keep an old/synthetic test
+      // world moving if it does not.
+      forward = new THREE.Vector3(Math.sin(headingOf(npc)), 0, Math.cos(headingOf(npc)))
+      velocity.addScaledVector(forward, stats.accel * 0.25 * dt)
+    }
   } else {
     // Harbour patrols: circle outside the moles; everything else wanders.
     // Every waypoint is on the water — the sea decides the height, not the AI.

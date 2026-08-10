@@ -994,10 +994,10 @@ export function getAlgaeAlbedoMap() {
   return tex
 }
 
-// Station / settlement / bay-interior surface roles — ambientCG CC0, tiled
-// on Three.js primitives. Shared across every archetype; per-body color still
-// comes from hullMaterials. High tile density so STATION_SCALE (~190×) still
-// reads as fine plating rather than one stretched plate per wall.
+// Station / settlement / bay-interior surface roles — ambientCG CC0 plus the
+// generated harbourwood set, tiled on Three.js primitives. Shared across every
+// archetype; per-body color still comes from hullMaterials. High tile density
+// keeps large station surfaces from stretching one plate across a whole wall.
 //
 //   hull        → armor (busy rivets/plates)
 //   panel/wall  → plates
@@ -1011,6 +1011,11 @@ const STATION_ROLE = {
   wall: { prefix: 'plates', repeatU: 15, repeatV: 12 },
   floor: { prefix: 'darkmetal', repeatU: 12, repeatV: 12 },
   beam: { prefix: 'darkmetal', repeatU: 10, repeatV: 8 },
+  // Broad salt-weathered boards for the small waterfront warehouses. Kept at
+  // one source tile per UV tile; harbourMesh owns the real-world board scale.
+  harbourWood: { prefix: 'harbourwood', repeatU: 1, repeatV: 1 },
+  // Heavy top-down quay boards; harbourMesh applies real-world plank scale.
+  harbourDeck: { prefix: 'harbourdeck', repeatU: 1, repeatV: 1 },
   radiator: { prefix: 'darkmetal', repeatU: 12, repeatV: 10 },
   settlementHull: { prefix: 'armor', repeatU: 12, repeatV: 10 },
   // Tipped rock: breakwaters and shoals. Coarse repeat — these are boulders,

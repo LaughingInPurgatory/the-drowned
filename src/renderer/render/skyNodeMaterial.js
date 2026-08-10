@@ -305,11 +305,6 @@ export function createSkyNodeMaterial() {
       const sd = normalize(rotAxis(d, pole, uTime.mul((Math.PI * 2) / DAY_LENGTH_S)))
 
       // Milky way: a band about the galactic plane, with structure and dust.
-      // The band is narrow, silver-grey and faint. There used to be broad
-      // multi-hue "nebulae" here, inherited from the space build this game was
-      // converted from; on a flooded Earth they read as a sci-fi skybox and
-      // they are gone. What you can see from a dark sea is unresolved
-      // starlight, and it is not colourful.
       const gn = normalize(vec3(0.42, 0.55, -0.72))
       const b = sd.dot(gn)
       const band = exp(b.mul(b).mul(-42))
@@ -323,6 +318,17 @@ export function createSkyNodeMaterial() {
       // Dust lanes: dark rifts through the brightest part of the band.
       const rift = band.mul(smoothstep(0.62, 0.30, bandN)).mul(smoothstep(0.2, 0.6, band))
       c.mulAssign(mix(vec3(1), vec3(0.52, 0.50, 0.54), rift.mul(milkyVis).mul(0.7)))
+
+      // Faint red-violet damaged-atmosphere haze, fixed to the celestial sphere
+      // with the stars. Clouds are composited later and remain independent.
+      const gasBroad = fbm3(sd.mul(2.2).add(vec3(8.1, 19.7, 3.4)))
+      const gasDetail = fbm3(sd.mul(7.4).add(vec3(27.3, 5.2, 14.8)))
+      const gasFray = fbm3(sd.mul(18.0).add(vec3(4.7, 31.2, 9.6)))
+      const gasShape = gasBroad.mul(0.8).add(gasDetail.mul(0.2)).add(gasFray.sub(0.5).mul(0.18))
+      const gas = smoothstep(0.44, 0.84, gasShape).mul(mix(float(0.62), float(1), gasFray))
+      const purpleTinge = smoothstep(0.7, 0.94, gasDetail)
+      const gasTint = mix(vec3(0.62, 0.018, 0.028), vec3(0.46, 0.022, 0.13), purpleTinge)
+      c.addAssign(gasTint.mul(gas).mul(milkyVis).mul(0.115))
 
       // Stars. Three tiers of 3D cell hashing on the sphere — no plane
       // projection, so no smeared pole and no pile-up at the horizon.
@@ -365,13 +371,14 @@ export function createSkyNodeMaterial() {
       // a 6 px disc, which is a dot, not a star. Trebled, so the bright tier is
       // sub-two-pixel and the faint tiers are genuinely sub-pixel; magnitudes go
       // up to pay for the lost area, and the faint thresholds drop so the sky
-      // gains the thousands of barely-there points that make a field read deep
-      // instead of sprinkled.
+      // gains the barely-there points that make a field read deep instead of
+      // sprinkled. Keep the faint tiers deliberately sparse so deep night
+      // does not turn into a wall of noise.
       const starVis = openSky.mul(smoothstep(0.0, 0.2, elev))
       c.addAssign(starTier(58, 2.3, 0.9885, 240).mul(starVis))
-      c.addAssign(starTier(120, 1.05, 0.964, 190).mul(starVis).mul(smoothstep(0.05, 0.4, uStars)))
+      c.addAssign(starTier(120, 1.05, 0.972, 190).mul(starVis).mul(smoothstep(0.05, 0.4, uStars)))
       c.addAssign(
-        starTier(240, 0.5, 0.925, 110)
+        starTier(240, 0.5, 0.965, 110)
           .mul(starVis)
           .mul(smoothstep(0.0, 0.18, elev))
           .mul(smoothstep(0.35, 0.8, uStars))

@@ -801,10 +801,12 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     const toLight = uSearchPos.sub(wp)
     const sDist = length(toLight)
     const SL = toLight.div(max(sDist, float(0.05)))
-    const cone = smoothstep(uSearchCosOuter, uSearchCosInner, negate(SL).dot(uSearchDir))
+    const beamNoise = texture(foamTex, wp.xz.mul(0.0047).add(vec2(13.7, 4.1))).w
+    const raggedOuter = uSearchCosOuter.add(beamNoise.sub(0.5).mul(0.004))
+    const cone = smoothstep(raggedOuter, uSearchCosInner, negate(SL).dot(uSearchDir))
     const mask = cone
       .mul(float(1).sub(smoothstep(uSearchRange.mul(0.4), uSearchRange, sDist)))
-      .mul(float(1).div(float(1).add(sDist.mul(0.012))))
+      .mul(float(1).div(float(1).add(sDist.mul(float(2.2).div(max(uSearchRange, float(1)))))))
       .mul(uSearchIntensity)
       .mul(smoothstep(float(0.05), float(0.5), sDist))
     col.addAssign(uSearchColor.mul(specLobe(SL)).mul(mask).mul(mix(float(0.6), float(1.6), fresnel)).mul(2.2))

@@ -1,0 +1,28 @@
+On-foot landing sounds
+
+jump_land.wav
+Source: https://opengameart.org/content/jump-landing
+License: CC0
+Author credit requested by the source page: sfx by Dan Knoflicek.
+Direct source: https://opengameart.org/sites/default/files/Jump%201.wav
+
+jump_land_2.wav
+jump_land_3.wav
+Source: https://opengameart.org/content/jump-landing
+License: CC0
+Author credit requested by the source page: sfx by Dan Knoflicek.
+Direct sources:
+https://opengameart.org/sites/default/files/Jump%202.wav
+https://opengameart.org/sites/default/files/Jump%203.wav
+
+fall_land.wav
+Source: https://opengameart.org/content/muffled-distant-explosion
+License: CC0
+Author: NenadSimic
+Direct source: https://opengameart.org/sites/default/files/NenadSimic%20-%20Muffled%20Distant%20Explosion.wav
+
+Terrain contact layer
+Source: https://opengameart.org/content/fantozzis-footsteps-grasssand-stone
+License: CC0
+Author: Fantozzi (submitted by qubodup)
+Existing files: ../footsteps/Fantozzi-Sand*.ogg and ../footsteps/Fantozzi-Stone*.ogg

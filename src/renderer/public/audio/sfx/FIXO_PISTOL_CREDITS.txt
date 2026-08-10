@@ -1,0 +1,8 @@
+Fixo Pistol firing sound
+
+Source: “Gunshots” by kurt, OpenGameArt.org
+File: 22 Pistol.wav
+License: CC0 1.0 Universal (public domain dedication)
+Source page: https://opengameart.org/content/gunshots
+
+The game uses a trimmed single-shot excerpt from the source recording.

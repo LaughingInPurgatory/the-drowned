@@ -256,6 +256,16 @@ window.addEventListener('click', resumeAudioOnGesture, { once: true })
 // (or if) decode finishes so nothing goes silent mid-frame.
 const sfxBuffers = new Map()
 let sfxLoadPromise = null
+const THUNDER_FILES = [
+  'thunder/thunder_clap.wav',
+  'thunder/thunder_roll_1.ogg', 'thunder/thunder_roll_2.ogg', 'thunder/thunder_roll_3.ogg'
+]
+const ON_FOOT_LANDING_FILES = [
+  'onfoot/jump_land.wav',
+  'onfoot/jump_land_2.wav',
+  'onfoot/jump_land_3.wav',
+  'onfoot/fall_land.wav'
+]
 
 // No thrust.ogg and no laser_*.ogg any more: nothing on this sea runs on
 // reaction mass or coherent light. The engine is a synthesised diesel (see
@@ -265,12 +275,16 @@ let sfxLoadPromise = null
 const SFX_FILES = [
   'engine_engage.ogg',
   'rocket.ogg', 'missile.ogg', 'torpedo.ogg',
+  // CC0 single-shot .22 pistol recording; used by the handheld Fixo only.
+  'fixo_pistol.wav',
   // Short CC0 metallic impact; see public/audio/sfx/SHIP_COLLISION_CREDITS.txt
   'ship_collision_clank.mp3',
   // CC0 OpenGameArt field recording; see public/audio/sfx/SEAGULL_CREDITS.txt
   'seagull_ambient_1.wav',
   // Sounding (P) — CC0 Freesound samples; see public/audio/sfx/SONAR_CREDITS.txt
-  'sonar_ping.ogg', 'sonar_return.ogg'
+  'sonar_ping.ogg', 'sonar_return.ogg',
+  ...THUNDER_FILES,
+  ...ON_FOOT_LANDING_FILES
 ]
 
 // Fantozzi's CC0 pack gives the island two useful footstep families: the
@@ -284,21 +298,37 @@ const FOOTSTEP_FILES = [
   'footsteps/Fantozzi-StoneR1.ogg', 'footsteps/Fantozzi-StoneR2.ogg', 'footsteps/Fantozzi-StoneR3.ogg'
 ]
 
-function ensureSfx() {
-  if (sfxLoadPromise) return sfxLoadPromise
-  const audio = getContext()
-  sfxLoadPromise = Promise.all([...SFX_FILES, ...FOOTSTEP_FILES].map(async (name) => {
+const sfxFileLoads = new Map()
+
+function loadSfxFile(name) {
+  if (sfxBuffers.has(name)) return Promise.resolve()
+  if (sfxFileLoads.has(name)) return sfxFileLoads.get(name)
+  const load = (async () => {
     try {
       const res = await fetch(`audio/sfx/${name}`)
       if (!res.ok) throw new Error(res.statusText)
       const raw = await res.arrayBuffer()
-      const buf = await audio.decodeAudioData(raw.slice(0))
+      const buf = await getContext().decodeAudioData(raw.slice(0))
       sfxBuffers.set(name, buf)
     } catch (err) {
       console.warn(`sfx load failed: ${name}`, err)
+    } finally {
+      sfxFileLoads.delete(name)
     }
-  }))
+  })()
+  sfxFileLoads.set(name, load)
+  return load
+}
+
+function ensureSfx() {
+  if (sfxLoadPromise) return sfxLoadPromise
+  sfxLoadPromise = Promise.all([...SFX_FILES, ...FOOTSTEP_FILES].map(loadSfxFile))
   return sfxLoadPromise
+}
+
+/** Begin decoding thunder before the first storm can trigger it. */
+export function preloadThunderSounds() {
+  return Promise.all(THUNDER_FILES.map(loadSfxFile))
 }
 
 // One-shot or looping sample. Returns { source, gain, volume } or null if not loaded.
@@ -309,6 +339,7 @@ function playSample(name, {
   fadeIn = 0,
   delay = 0,
   duration = 0,
+  offset = 0,
   lowpassHz = 0,
   lowpassQ = 0.6
 } = {}) {
@@ -340,8 +371,10 @@ function playSample(name, {
   } else {
     gain.connect(getMasterDestination())
   }
-  source.start(now)
-  if (duration > 0 && !loop) source.stop(now + duration)
+  const startOffset = Math.max(0, Math.min(Number(offset) || 0, Math.max(0, buf.duration - 0.01)))
+  if (duration > 0 && !loop) source.start(now, startOffset, duration)
+  else source.start(now, startOffset)
+  if (duration > 0 && !loop && startOffset === 0) source.stop(now + duration)
   // Store target volume — AudioParam.value is unreliable after ramps, and
   // stopSampleNodes needs a real peak to fade from (not the 0.0001 floor).
   return { source, gain, volume }
@@ -390,6 +423,25 @@ const FOOTSTEP_FAMILIES = {
   wood: ['StoneL1', 'StoneL2', 'StoneL3', 'StoneR1', 'StoneR2', 'StoneR3']
 }
 
+// Landing uses the same CC0 surface recordings as footsteps, but with a
+// shorter, lower-passed contact layer. That keeps sand/grass soft and gives
+// rock a crisp heel strike instead of making every surface sound like wood.
+const LANDING_SURFACE_SETTINGS = {
+  grass: { family: 'Sand', jumpVolume: 0.34, fallVolume: 0.42, jumpFilter: 1350, fallFilter: 1700, noiseFilter: 720 },
+  sand: { family: 'Sand', jumpVolume: 0.38, fallVolume: 0.46, jumpFilter: 1050, fallFilter: 1350, noiseFilter: 560 },
+  stone: { family: 'Stone', jumpVolume: 0.36, fallVolume: 0.5, jumpFilter: 2850, fallFilter: 3400, noiseFilter: 1800 }
+}
+
+function landingSurfaceSample(surface) {
+  const setting = LANDING_SURFACE_SETTINGS[surface] ?? LANDING_SURFACE_SETTINGS.grass
+  const side = Math.random() < 0.5 ? 'L' : 'R'
+  const index = 1 + Math.floor(Math.random() * 3)
+  return {
+    setting,
+    file: `footsteps/Fantozzi-${setting.family}${side}${index}.ogg`
+  }
+}
+
 /** Play a close, unattenuated player footstep using the current terrain family. */
 export function playFootstep(surface = 'grass', { running = false, side = 'L' } = {}) {
   ensureSfx()
@@ -413,6 +465,48 @@ export function playFootstep(surface = 'grass', { running = false, side = 'L' } 
     drive: surface === 'stone' ? 1.4 : 0.7
   })
   return false
+}
+
+/** Terrain-aware body-impact cue for jumps and falls. */
+export function playOnFootLanding({ fallDistance = 0, surface = 'grass' } = {}) {
+  ensureSfx()
+  const distance = Math.max(0, Number(fallDistance) || 0)
+  const isFall = distance > 0.5
+  const impact = Math.min(0.55, 0.16 + distance * 0.035)
+  const { setting, file } = landingSurfaceSample(surface)
+  const contact = playSample(file, {
+    volume: (isFall ? setting.fallVolume : setting.jumpVolume) * Math.min(1.8, 1 + distance * 0.035),
+    rate: isFall ? 0.88 + Math.random() * 0.16 : 0.9 + Math.random() * 0.18,
+    duration: isFall ? 0.42 : 0.24,
+    lowpassHz: isFall ? setting.fallFilter : setting.jumpFilter,
+    lowpassQ: 0.65
+  })
+  // Do not layer the old generic jump sample over the terrain cue: its hard
+  // transient is what made grass and sand read like a wooden floor. Falls get
+  // only a restrained, low-passed body rumble; the surface contact stays first.
+  const body = isFall ? playSample('onfoot/fall_land.wav', {
+    volume: Math.min(0.28, 0.12 + distance * 0.01),
+    rate: 0.82 + Math.random() * 0.12,
+    duration: Math.min(1.25, 0.55 + distance * 0.05),
+    lowpassHz: setting.family === 'Stone' ? 1850 : 950,
+    lowpassQ: 0.8
+  }) : null
+  const synthImpact = contact || body ? 0.28 : 1
+  tone({
+    type: 'sine',
+    freq: (setting.family === 'Stone' ? 138 : 96) - impact * 32,
+    freqEnd: 54,
+    duration: 0.18,
+    attack: 0.004,
+    peak: impact * 0.55 * synthImpact
+  })
+  noiseBurst({
+    duration: 0.075,
+    filterFreq: setting.noiseFilter,
+    peak: impact * synthImpact,
+    drive: setting.family === 'Stone' ? 1.45 : 0.9,
+    highpassHz: 55
+  })
 }
 
 function stopSampleNodes(nodes, fadeOut = 0.12) {
@@ -554,6 +648,9 @@ function noiseBurst({
 // low whooshes rather than sci-fi, and they read fine as a harpoon or a fish
 // leaving the tube.
 const WEAPON_SAMPLES = {
+  // Handheld weapon only — ship weapons keep their existing sample/synth
+  // mappings below and never use this recording.
+  fixo_pistol: { file: 'fixo_pistol.wav', volume: 0.72, rate: 0.94 },
   rocket_pod: { file: 'rocket.ogg', volume: 0.7, rate: 0.62 },
   seeker_missile: { file: 'missile.ogg', volume: 0.74, rate: 0.6 },
   torpedo: { file: 'torpedo.ogg', volume: 0.84, rate: 0.58 },
@@ -763,6 +860,10 @@ function playDullImpact() {
 /** A soft, low splash/blob when a ship round punches into open water. */
 export function playWaterImpact() {
   ensureSfx()
+  // Short bright droplet at the front, followed by the existing low glob. The
+  // same helper is used by ship and Fixo rounds, so both impacts stay matched.
+  noiseBurst({ duration: 0.045, filterFreq: 1650, peak: 0.1, drive: 0.9, delay: 0.012 })
+  tone({ type: 'triangle', freq: 410, freqEnd: 185, duration: 0.13, peak: 0.1, delay: 0.008 })
   noiseBurst({ duration: 0.12, filterFreq: 720, peak: 0.13, drive: 1.1 })
   noiseBurst({ duration: 0.32, filterFreq: 300, peak: 0.09, drive: 1.2, delay: 0.025 })
   tone({ type: 'sine', freq: 150, freqEnd: 62, duration: 0.2, peak: 0.1 })
@@ -1596,7 +1697,9 @@ export function playThunder(opts = {}) {
   ensureSfx()
   if (!sfxEnabled) return
   const delay = opts.delay ?? 0
-  const volume = Math.min(1.4, Math.max(0.05, opts.volume ?? 1))
+  // Give the storm its requested extra presence without changing rain, music,
+  // weapons, or any other SFX bus levels.
+  const volume = Math.min(2.1, Math.max(0.05, (opts.volume ?? 1) * 1.5))
   // Weather already supplies distanceKm (0.2–3.1). Infer nearness if missing.
   const km = Number.isFinite(opts.distanceKm)
     ? opts.distanceKm
@@ -1605,9 +1708,35 @@ export function playThunder(opts = {}) {
   const near = Math.min(1, Math.max(0, 1 - (km - 0.2) / 2.9))
   const far = 1 - near * 0.65
 
+  // Real field recordings carry the irregular crack/roll envelope that a
+  // handful of oscillators cannot fake. Pick a different take and playback
+  // rate each strike; keep the procedural version below as the instant-load
+  // fallback for the first storm after boot.
+  const rollFiles = [
+    'thunder/thunder_roll_1.ogg',
+    'thunder/thunder_roll_2.ogg',
+    'thunder/thunder_roll_3.ogg'
+  ]
+  const sampleFile = near > 0.58
+    ? 'thunder/thunder_clap.wav'
+    : rollFiles[Math.floor(Math.random() * rollFiles.length)]
+  const sampleVolume = volume * (near > 0.58 ? 0.78 + near * 0.42 : 0.9 + far * 0.45)
+  const sampleDuration = near > 0.58 ? 2.2 + far * 1.5 : 3.8 + far * 2.4
+  const samplePlayed = !!playSample(sampleFile, {
+    volume: sampleVolume,
+    rate: (near > 0.58 ? 0.9 : 0.82) + Math.random() * (near > 0.58 ? 0.22 : 0.18),
+    delay,
+    duration: sampleDuration,
+    lowpassHz: near > 0.58 ? 4200 + near * 2800 : 900 + near * 850,
+    lowpassQ: 0.45
+  })
+  // Keep a restrained procedural bed under the recording. It guarantees an
+  // audible strike on decoders that play a field take unusually quietly.
+  const synthVolume = samplePlayed ? 0.35 : 1
+
   // --- Crack (close strikes only) ---
   if (near > 0.35) {
-    const crackPeak = volume * near * near * 0.55
+    const crackPeak = volume * near * near * 0.55 * synthVolume
     noiseBurst({
       duration: 0.04,
       filterFreq: 5500,
@@ -1638,7 +1767,7 @@ export function playThunder(opts = {}) {
   }
 
   // --- Pressure boom + rolling body (all distances) ---
-  const subMul = volume * (0.55 + far * 0.55)
+  const subMul = volume * (0.55 + far * 0.55) * synthVolume
   const rollLen = 2.2 + far * 1.4
   tone({
     type: 'sine',
@@ -1692,7 +1821,7 @@ export function playThunder(opts = {}) {
   noiseBurst({
     duration: 1.0 + far * 0.4,
     filterFreq: 280 + near * 120,
-    peak: 0.11 * volume * (0.4 + near * 0.6),
+    peak: 0.11 * volume * (0.4 + near * 0.6) * synthVolume,
     drive: 1.2,
     delay: delay + 0.08,
     highpassHz: 50

@@ -10,8 +10,6 @@ import {
   getAlgaeAlbedoMap
 } from './textures.js'
 import {
-  getCorrugatedMaps,
-  getPlankMaps,
   getGrowthMaps,
   getRustStreakMap,
   getSoftDiscMap,
@@ -39,7 +37,7 @@ import { SEA_MAX_AMPLITUDE } from '../world/sea.js'
  * which needed lifting; see main.js `floatOnWaterline`).
  *
  * Surfaces mix soft-blended triplanar PBR station maps with procedural
- * waterfront detail (planks, corrugated cladding, barnacles, rust streaks)
+ * waterfront detail (planks, timber cladding, barnacles, rust streaks)
  * from harbourDetail.js. Major slabs are slightly rounded so silhouettes read
  * as worn concrete/steel rather than plastic cubes.
  */
@@ -188,8 +186,6 @@ function materials(rng, weathered) {
   // jetty reads as toothpicks stuck in a blue sheet.
   const wetPile = new THREE.Color(0x14120f).lerp(rust, weathered * 0.18)
   const soakPile = new THREE.Color(0x0a0908).lerp(new THREE.Color(0x1e1812), weathered * 0.28)
-  const plank = getPlankMaps()
-  const corrugated = getCorrugatedMaps()
   const growth = getGrowthMaps()
   const disc = getSoftDiscMap()
   const rustStreak = getRustStreakMap()
@@ -197,19 +193,18 @@ function materials(rng, weathered) {
   const netMap = getNetMap()
 
   return {
-    // Quay deck: procedural planks (grooves, nails, damp patches) — the single
-    // biggest step from "one slab" to a worked waterfront. Slightly wetter
-    // clearcoat-ish env so deck near the waterline does not read bone-dry.
-    deck: detailMat(
-      plank,
+    // Quay deck: photographed-style heavy maritime boards with proper grain,
+    // joins, iron fixings, salt wear and damp seams.
+    deck: texturedMat(
+      'harbourDeck',
       {
-        color: timberTone,
-        roughness: 0.78 + weathered * 0.1,
-        metalness: 0.03,
-        envMapIntensity: 0.28,
-        normalScale: new THREE.Vector2(1.55, 1.55)
+        color: new THREE.Color(0xffffff).lerp(timberTone, weathered * 0.2),
+        roughness: 0.84,
+        metalness: 0.02,
+        envMapIntensity: 0.36,
+        normalScale: new THREE.Vector2(1.05, 1.05)
       },
-      plank.map ? { scale: 0.22, sharpness: 5.5, key: 'harbour|planks' } : null
+      { scale: 0.22, sharpness: 5.5 }
     ),
     // Sheet / tank / roof steel — photo set + roughness variance so it is not
     // one plastic chrome value across every tank.
@@ -224,21 +219,18 @@ function materials(rng, weathered) {
       },
       { scale: 0.16, sharpness: 4.5, offset: true, rng }
     ),
-    // Warehouse walls — corrugated cladding with sheet overlaps and rust bloom.
+    // Warehouse walls — salt-weathered timber with real grain, knots, fixings,
+    // damp seams and PBR relief. Keep this directional: triplanar blending
+    // would cross the horizontal boards and turn them into a quilt pattern.
     wall: detailMat(
-      corrugated,
+      getStationTextures('harbourWood'),
       {
-        color: new THREE.Color(0xd2c4a8).lerp(rust, weathered * 0.38),
-        roughness: 0.72 + weathered * 0.16,
-        metalness: 0.28 - weathered * 0.1,
-        envMapIntensity: 0.35,
-        normalScale: new THREE.Vector2(1.55, 1.55)
-      },
-      // No triplanar here. Corrugated is *directional* — blending the same rib
-      // pattern across three axes crosses the ribs with themselves and the wall
-      // reads as a giant diamond quilt. Cladding gets a single per-face
-      // projection (retileUVsTriplanar on the geometry) instead.
-      null
+        color: new THREE.Color(0xffffff).lerp(new THREE.Color(0xa3917f), weathered * 0.3),
+        roughness: 0.9,
+        metalness: 0.02,
+        envMapIntensity: 0.24,
+        normalScale: new THREE.Vector2(0.92, 0.92)
+      }
     ),
     // Fallback chalky panel when canvas maps are missing (tests).
     wallFlat: texturedMat(
@@ -606,11 +598,11 @@ function addShed(group, mats, rng, { x, z, w, d, h, rot = 0, lit = true }) {
     bevelThickness: 0.08
   })
   wallGeo.translate(0, 0, -d / 2)
-  // Prefer corrugated cladding; fall back to chalky panel maps in headless tests.
+  // Prefer timber cladding; fall back to chalky panel maps in headless tests.
   const wallMat = mats.wall?.map ? mats.wall : mats.wallFlat
-  // World-scale UVs, one projection per face: sheets stay ~1.6 m wide however
-  // the shed was sized, and the ribs run vertically like real cladding.
-  const body = new THREE.Mesh(retileUVsTriplanar(wallGeo, 0.62), wallMat)
+  // World-scale UVs, one projection per face. One source tile spans ~3.3 m,
+  // keeping each board around a believable 25 cm tall on every shed size.
+  const body = new THREE.Mesh(retileUVsTriplanar(wallGeo, 0.3), wallMat)
   body.castShadow = true
   body.receiveShadow = true
   shed.add(body)
@@ -1236,6 +1228,18 @@ export function buildHarbourMesh(body) {
       )
   )
 
+  // These lists are stable after construction. Cache them so the frame loop
+  // does not recursively walk every harbour once for beacons and again for
+  // light emitters.
+  const beaconMeshes = []
+  const areaEmitterRoots = []
+  group.traverse((child) => {
+    if (child.userData?.beacon && child.material) beaconMeshes.push(child)
+    if (child.userData?.areaEmitters?.length) areaEmitterRoots.push(child)
+  })
+  group.userData.beaconMeshes = beaconMeshes
+  group.userData.areaEmitterRoots = areaEmitterRoots
+
   return group
 }
 
@@ -1253,11 +1257,9 @@ export function updateHarbourMesh(mesh, elapsed, nightFactor = 1) {
   const nightLevel = n * n
   mesh.userData.areaLightLevel = nightLevel
   mesh.userData.areaLightPulse = pulse
-  mesh.traverse((child) => {
-    if (child.userData?.beacon && child.material) {
-      child.material.emissiveIntensity = 0.8 + pulse * 1.8
-    }
-  })
+  for (const beacon of mesh.userData.beaconMeshes ?? []) {
+    if (beacon.material) beacon.material.emissiveIntensity = 0.8 + pulse * 1.8
+  }
 }
 
 const _emitWorld = new THREE.Vector3()
@@ -1275,10 +1277,7 @@ export function offerHarbourAreaLights(mesh, pool) {
   mesh.updateWorldMatrix(true, false)
 
   // Emitters may live on the root or on child groups (tower local space).
-  const roots = [mesh]
-  mesh.traverse((child) => {
-    if (child !== mesh && child.userData?.areaEmitters) roots.push(child)
-  })
+  const roots = mesh.userData.areaEmitterRoots ?? [mesh]
 
   for (const root of roots) {
     const list = root.userData.areaEmitters

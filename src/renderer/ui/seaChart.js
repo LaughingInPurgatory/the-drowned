@@ -2,6 +2,7 @@ import { getWorld, WORLD_RADIUS, remoteness } from '../procgen/world.js'
 import { missionMarkedBodyIds } from '../game/missions.js'
 import { playerAssetBodyIds } from '../game/economy.js'
 import { escapeHtml } from './escapeHtml.js'
+import { getIslandProfile } from '../render/islandMesh.js'
 import {
   floatingResizeHandleCss,
   floatingPanelElevationCss,
@@ -12,10 +13,10 @@ import {
 /**
  * The sea chart.
  *
- * One sea, so one map: a plan view of the whole world with every harbour,
- * outpost, island and wreck field on it. Opens centred on your boat (bright
- * yellow mark); drag to pan, scroll to zoom. Click a place to set a waypoint.
- * Unvisited marks are drawn faintly.
+ * The sea chart is a plan view of the whole world while aboard. On foot it
+ * switches to a local plan of the current island so the player can navigate
+ * terrain and nearby facilities without zooming the entire ocean down to a
+ * postage stamp.
  */
 
 const STYLE = `
@@ -128,6 +129,8 @@ export function createSeaChart(container, gameState, hooks = {}) {
 
   const panel = root.querySelector('.sc-panel')
   const header = root.querySelector('.sc-header')
+  const titleEl = root.querySelector('.sc-title')
+  const subEl = root.querySelector('.sc-sub')
   const canvas = root.querySelector('canvas')
   const ctx = canvas.getContext('2d')
   const selBody = root.querySelector('.sc-sel-body')
@@ -140,6 +143,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
   let centreX = 0
   let centreZ = 0
   let selected = null
+  let localIslandId = null
   const drag = { active: false, x: 0, y: 0, moved: 0 }
 
   wireFloatingPanel({
@@ -167,7 +171,11 @@ export function createSeaChart(container, gameState, hooks = {}) {
   function scale() {
     const rect = canvas.getBoundingClientRect()
     const span = Math.min(rect.width, rect.height)
-    return span > 0 ? (span * 0.92 * zoom) / (WORLD_RADIUS * 2) : 1
+    const island = localIsland()
+    const mapSpan = island
+      ? Math.max(320, (Number(island.radius) || 400) * 2.55)
+      : WORLD_RADIUS * 2
+    return span > 0 ? (span * 0.92 * zoom) / mapSpan : 1
   }
 
   function worldToScreen(x, z) {
@@ -186,6 +194,11 @@ export function createSeaChart(container, gameState, hooks = {}) {
 
   function bodies() {
     return getWorld(gameState.galaxy)?.bodies ?? []
+  }
+
+  function localIsland() {
+    if (!localIslandId) return null
+    return bodies().find((body) => body.id === localIslandId && body.kind === 'island') ?? null
   }
 
   function playerPosition() {
@@ -207,8 +220,16 @@ export function createSeaChart(container, gameState, hooks = {}) {
     centreZ = Number(p[2]) || 0
   }
 
+  function centreOnIsland() {
+    const island = localIsland()
+    if (!island) return centreOnPlayer()
+    centreX = Number(island.position[0]) || 0
+    centreZ = Number(island.position[2]) || 0
+  }
+
   function draw() {
     if (!open) return
+    const island = localIsland()
     // Pan/zoom free while open; only show() recentres on the boat.
     const rect = canvas.getBoundingClientRect()
     const w = rect.width
@@ -221,8 +242,8 @@ export function createSeaChart(container, gameState, hooks = {}) {
     ctx.fillStyle = '#0a1216'
     ctx.fillRect(0, 0, w, h)
 
-    // Grid, in 5 km squares — gives the chart a sense of distance.
-    const step = 5000 * k
+    // Grid, in 5 km squares at sea or 100 m squares on an island.
+    const step = (island ? 100 : 5000) * k
     if (step > 14) {
       ctx.strokeStyle = 'rgba(120,180,190,0.10)'
       ctx.lineWidth = 1
@@ -239,8 +260,8 @@ export function createSeaChart(container, gameState, hooks = {}) {
       ctx.stroke()
     }
 
-    // The edge of the surveyed world.
-    {
+    // The edge of the surveyed world is not useful on a local island map.
+    if (!island) {
       const [cx, cy] = worldToScreen(0, 0)
       ctx.strokeStyle = 'rgba(140,200,210,0.22)'
       ctx.setLineDash([6, 6])
@@ -269,25 +290,48 @@ export function createSeaChart(container, gameState, hooks = {}) {
     const assetIds = playerAssetBodyIds(gameState)
     const waypointId = gameState.player.waypointBodyId
 
-    // Islands first — they are the ground everything else sits on.
+    // Islands first — they are the ground everything else sits on. The local
+    // map uses the same deterministic shoreline profile as the 3D terrain.
     for (const body of bodies()) {
       if (body.kind !== 'island') continue
+      if (island && body.id !== island.id) continue
       const [x, y] = worldToScreen(body.position[0], body.position[2])
+      const profile = island ? getIslandProfile(body) : null
       const r = Math.max(1.5, (body.radius ?? 400) * k)
       if (x < -r - 40 || x > w + r + 40 || y < -r - 40 || y > h + r + 40) continue
       const seen = visited.has(String(body.id))
-      ctx.fillStyle = seen ? 'rgba(94,224,138,0.20)' : 'rgba(94,224,138,0.07)'
-      ctx.strokeStyle = seen ? 'rgba(94,224,138,0.55)' : 'rgba(94,224,138,0.22)'
+      ctx.fillStyle = island ? 'rgba(94,224,138,0.28)' : seen ? 'rgba(94,224,138,0.20)' : 'rgba(94,224,138,0.07)'
+      ctx.strokeStyle = island ? 'rgba(125,240,170,0.82)' : seen ? 'rgba(94,224,138,0.55)' : 'rgba(94,224,138,0.22)'
       ctx.lineWidth = 1
       ctx.beginPath()
-      ctx.arc(x, y, r, 0, Math.PI * 2)
+      if (profile) {
+        for (let i = 0; i < profile.shore.length; i++) {
+          const theta = (i / profile.shore.length) * Math.PI * 2
+          const px = body.position[0] + Math.cos(theta) * profile.shore[i]
+          const pz = body.position[2] + Math.sin(theta) * profile.shore[i]
+          const [sx, sy] = worldToScreen(px, pz)
+          if (i === 0) ctx.moveTo(sx, sy)
+          else ctx.lineTo(sx, sy)
+        }
+        ctx.closePath()
+      } else {
+        ctx.arc(x, y, r, 0, Math.PI * 2)
+      }
       ctx.fill()
       ctx.stroke()
+      if (island) {
+        ctx.fillStyle = 'rgba(180,220,150,0.28)'
+        ctx.font = '11px monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText(body.name, x, y + r + 18)
+        ctx.textAlign = 'start'
+      }
     }
 
     // Then everything you can go to or work.
     for (const body of bodies()) {
       if (body.kind === 'island') continue
+      if (island && body.parentId !== island.id) continue
       const [x, y] = worldToScreen(body.position[0], body.position[2])
       if (x < -30 || x > w + 30 || y < -30 || y > h + 30) continue
       const seen = visited.has(String(body.id))
@@ -397,9 +441,10 @@ export function createSeaChart(container, gameState, hooks = {}) {
     // Scale bar — a chart without one is a picture.
     {
       const targetPx = 110
-      const rawKm = targetPx / k / 1000
-      const nice = [1, 2, 5, 10, 20, 50].find((n) => n >= rawKm) ?? 50
-      const px = nice * 1000 * k
+      const rawUnits = targetPx / k / (island ? 1 : 1000)
+      const nice = (island ? [50, 100, 200, 500, 1000] : [1, 2, 5, 10, 20, 50])
+        .find((n) => n >= rawUnits) ?? 50
+      const px = nice * (island ? 1 : 1000) * k
       const bx = 14
       const by = h - 18
       ctx.strokeStyle = 'rgba(210,225,225,0.7)'
@@ -414,7 +459,10 @@ export function createSeaChart(container, gameState, hooks = {}) {
       ctx.stroke()
       ctx.fillStyle = 'rgba(210,225,225,0.7)'
       ctx.font = '10px monospace'
-      ctx.fillText(`${nice} km`, bx + px + 6, by + 3)
+      const scaleLabel = island
+        ? nice < 1000 ? `${nice} m` : '1 km'
+        : `${nice} km`
+      ctx.fillText(scaleLabel, bx + px + 6, by + 3)
     }
   }
 
@@ -422,7 +470,9 @@ export function createSeaChart(container, gameState, hooks = {}) {
   function pick(px, py) {
     let best = null
     let bestD = 16
+    const island = localIsland()
     for (const body of bodies()) {
+      if (island && body.kind !== 'island' && body.parentId !== island.id) continue
       const [x, y] = worldToScreen(body.position[0], body.position[2])
       const d = Math.hypot(x - px, y - py)
       // Islands are big targets; only take one if nothing smaller is closer.
@@ -535,10 +585,22 @@ export function createSeaChart(container, gameState, hooks = {}) {
     if (open) resize()
   })
 
-  function show() {
+  function show({ islandBodyId = null } = {}) {
     open = true
+    localIslandId = islandBodyId
+    const island = localIsland()
+    if (island) {
+      titleEl.textContent = 'ISLAND MAP'
+      subEl.textContent = `Local survey · ${island.name} · North-up · drag to pan · scroll to zoom`
+      zoom = 1.05
+      centreOnIsland()
+    } else {
+      titleEl.textContent = 'SEA CHART'
+      subEl.textContent = 'North-up · opens on you · drag to pan · scroll to zoom · click a mark for a waypoint'
+      zoom = 1.6
+      centreOnPlayer()
+    }
     root.classList.add('open')
-    centreOnPlayer()
     selected = null
     describe(null)
     // Layout has to settle before the canvas can be sized from its rect.
@@ -552,6 +614,9 @@ export function createSeaChart(container, gameState, hooks = {}) {
   function hide(opts = {}) {
     if (!open) return
     open = false
+    localIslandId = null
+    titleEl.textContent = 'SEA CHART'
+    subEl.textContent = 'North-up · opens on you · drag to pan · scroll to zoom · click a mark for a waypoint'
     root.classList.remove('open')
     if (!opts.silent) hooks.onClose?.()
   }

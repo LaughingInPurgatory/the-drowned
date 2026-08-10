@@ -1,0 +1,9 @@
+All four wildlife meshes are CC0 assets downloaded from OpenGameArt:
+
+Rabbit: https://opengameart.org/content/rabbit-0
+Deer: https://opengameart.org/content/deer-low-poly-rigged
+Dog: https://opengameart.org/content/dog-low-poly-rigged
+Cat: https://opengameart.org/content/simple-cat
+
+The extracted files are used as runtime art assets. No attribution is required
+under CC0, but the source links are retained here for provenance.

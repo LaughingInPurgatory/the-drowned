@@ -1892,6 +1892,36 @@ export function makeSearchlightBeamMaterial(beamLen) {
   return mat
 }
 
+let _searchlightCookie = null
+
+/** Uneven lens/reflector pattern shared by projected searchlights. */
+export function makeSearchlightCookie() {
+  if (_searchlightCookie) return _searchlightCookie
+  const size = 64
+  const data = new Uint8Array(size * size * 4)
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const nx = (x + 0.5) / size * 2 - 1
+      const ny = (y + 0.5) / size * 2 - 1
+      const r = Math.hypot(nx, ny)
+      const a = Math.atan2(ny, nx)
+      const edge = 0.82 + Math.sin(a * 3 + 0.7) * 0.055 + Math.sin(a * 7 - 1.3) * 0.03
+      const falloff = THREE.MathUtils.smoothstep(edge - r, 0, 0.34)
+      const mottling = 0.88 + 0.07 * Math.sin(nx * 11 + ny * 7) + 0.05 * Math.sin(nx * 23 - ny * 17)
+      const value = Math.round(255 * THREE.MathUtils.clamp(falloff * mottling, 0, 1))
+      const i = (y * size + x) * 4
+      data[i] = data[i + 1] = data[i + 2] = value
+      data[i + 3] = 255
+    }
+  }
+  _searchlightCookie = new THREE.DataTexture(data, size, size, THREE.RGBAFormat)
+  _searchlightCookie.minFilter = THREE.LinearMipmapLinearFilter
+  _searchlightCookie.magFilter = THREE.LinearFilter
+  _searchlightCookie.generateMipmaps = true
+  _searchlightCookie.needsUpdate = true
+  return _searchlightCookie
+}
+
 /**
  * Coloured running lights — port red, starboard green, stern + masthead white.
  * Visible only at night (see updateShipNightLights). Emissive bulbs + emitter
@@ -2027,14 +2057,15 @@ function addSearchlight(group, hull, { withSpot = false } = {}) {
     // One real, shadow-casting lamp on the player, locked to the bow. Three's
     // modern lights use candela; 42 only brightened the immediate housing,
     // while a marine searchlight needs enough throw to pick out a quay or hull.
-    spot = new THREE.SpotLight(0xfff0d0, 0, 240, 0.12, 0.58, 1.8)
+    spot = new THREE.SpotLight(0xfff0d0, 0, 1000, 0.12, 0.62, 1.35)
+    spot.map = makeSearchlightCookie()
     spot.castShadow = false
     // The searchlight is a close, optional secondary source. A 512 map keeps
     // its moving shadows readable without adding a second 1024² depth pass
     // every frame while L is held.
     spot.shadow.mapSize.set(512, 512)
     spot.shadow.camera.near = 0.5
-    spot.shadow.camera.far = 240
+    spot.shadow.camera.far = 1000
     spot.shadow.bias = -0.00015
     spot.shadow.normalBias = 0.35
     // Keep this light in Three's renderer light list from the first frame.
@@ -2048,7 +2079,7 @@ function addSearchlight(group, hull, { withSpot = false } = {}) {
     spot.shadow.needsUpdate = true
     spot.position.set(0, 0.06, 0)
     root.add(spot)
-    spot.target.position.set(0, 0, 160)
+    spot.target.position.set(0, 0, 900)
     root.add(spot.target)
   }
 
@@ -2072,15 +2103,15 @@ export function setSearchlightOn(mesh, on) {
   sl.enabled = enabled
   sl.housing.visible = enabled
   sl.glow.visible = enabled
-  sl.beam.visible = enabled
+  sl.beam.visible = false
   if (sl.beam.material?.uniforms?.uOpacity) {
-    sl.beam.material.uniforms.uOpacity.value = enabled ? 0.38 : 0
+    sl.beam.material.uniforms.uOpacity.value = 0
   }
   if (sl.spot) {
-    // Candela. At 100 m this lands around ten lux before cone falloff: enough
-    // to reveal a hull and shore detail at night, without bleaching daylight.
-    sl.spot.intensity = enabled ? 115000 : 0
-    sl.spot.distance = 240
+    // Long-range marine searchlight: narrow, soft-edged and bright enough to
+    // pick out shoreline and vessels near the edge of its kilometre throw.
+    sl.spot.intensity = enabled ? 180000 : 0
+    sl.spot.distance = 1000
     // Never alter renderer-facing light topology here. It is pre-warmed at
     // scene load, so switching the lamp is uniform-only instead of a compile.
     sl.spot.visible = true
