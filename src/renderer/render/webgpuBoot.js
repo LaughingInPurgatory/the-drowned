@@ -66,7 +66,7 @@ export async function createWebGPURenderer(container, opts = {}) {
   await renderer.init()
   assertWebGPUBackend(renderer)
 
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
   renderer.toneMapping = NeutralToneMapping
   renderer.toneMappingExposure = 1.06
   renderer.shadowMap.enabled = true
@@ -102,7 +102,7 @@ export async function createWebGPURendererOnCanvas(canvas, opts = {}) {
   await renderer.init()
   assertWebGPUBackend(renderer)
 
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
   if (opts.toneMapping != null) renderer.toneMapping = opts.toneMapping
   if (opts.exposure != null) renderer.toneMappingExposure = opts.exposure
   if (opts.shadows) {

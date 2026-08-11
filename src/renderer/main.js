@@ -510,6 +510,10 @@ sessionLoadingStyle.textContent = `
   0%, 100% { opacity: 0.28; transform: scale(0.82); }
   50% { opacity: 1; transform: scale(1); }
 }
+@keyframes title-loading-pulse {
+  0%, 100% { opacity: 0.25; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
 `
 document.head.appendChild(sessionLoadingStyle)
 sessionLoadingEl.innerHTML = `
@@ -526,7 +530,7 @@ sessionLoadingEl.style.cssText = [
   'inset:0',
   'display:none',
   'place-items:center',
-  'background:rgba(3,8,15,0.9)',
+  'background:#000',
   'color:#ffe6a0',
   'font:600 16px/1.2 monospace',
   'letter-spacing:0.14em',
@@ -536,6 +540,34 @@ sessionLoadingEl.style.cssText = [
 appEl.appendChild(sessionLoadingEl)
 function setSessionLoading(visible) {
   sessionLoadingEl.style.display = visible ? 'grid' : 'none'
+}
+
+const titleLoadingEl = document.createElement('div')
+titleLoadingEl.id = 'title-loading'
+titleLoadingEl.innerHTML = `
+  <div style="display:flex;flex-direction:column;align-items:center;gap:13px">
+    <div style="width:30px;height:30px;border:2px solid rgba(255,230,160,0.2);border-top-color:#ffe6a0;border-radius:50%;animation:session-loading-spin 0.95s linear infinite"></div>
+    <div>LOADING<span style="display:inline-flex;gap:4px;margin-left:6px;vertical-align:middle">
+      <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:title-loading-pulse 0.95s ease-in-out infinite"></i>
+      <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:title-loading-pulse 0.95s ease-in-out 0.16s infinite"></i>
+      <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:title-loading-pulse 0.95s ease-in-out 0.32s infinite"></i>
+    </span></div>
+  </div>`
+titleLoadingEl.style.cssText = [
+  'position:fixed',
+  'inset:0',
+  'display:none',
+  'place-items:center',
+  'background:#000',
+  'color:#ffe6a0',
+  'font:600 15px/1.2 monospace',
+  'letter-spacing:0.16em',
+  'z-index:1999',
+  'pointer-events:auto'
+].join(';')
+appEl.appendChild(titleLoadingEl)
+function setTitleLoading(visible) {
+  titleLoadingEl.style.display = visible ? 'grid' : 'none'
 }
 // WebGPU device init is async — top-level await (index.html is type=module).
 const { scene, camera, renderer, render, captureFrame, updateEnvironment, setPostOverlay, ocean, areaLights } =
@@ -2503,16 +2535,16 @@ let titleStormActive = false
 /** Cached world from CANONICAL_WORLD_SEED (same layout as New Game). */
 let menuWorld = null
 
-// The title view drifts over a randomly chosen island — the same sea the
-// player is about to sail, at the same scale, rather than a separate showpiece.
-// A little tighter than the gameplay fly-by, while retaining enough margin to
-// keep the full 1.4 km-radius home island inside the title framing.
-const MENU_ORBIT_RADIUS = 2450
-const MENU_ORBIT_HEIGHT = 190
-const MENU_ORBIT_PERIOD_S = 96
+// The title view faces Port Haven from the water. It sways laterally instead
+// of making a full orbit, keeping the harbour as the visual subject.
+const MENU_VIEW_DISTANCE = 300
+const MENU_VIEW_HEIGHT = 130
+const MENU_SWAY_WIDTH = 260
+const MENU_SWAY_PERIOD_S = 18
 const MENU_LOOK_AT = new THREE.Vector3(0, 0, 0)
-let menuOrbitRadius = MENU_ORBIT_RADIUS
-let menuOrbitHeight = MENU_ORBIT_HEIGHT
+let menuViewDistance = MENU_VIEW_DISTANCE
+let menuViewHeight = MENU_VIEW_HEIGHT
+let menuSwayWidth = MENU_SWAY_WIDTH
 /** How far from the title camera a body is worth building at all. */
 const MENU_BODY_RANGE = 9000
 
@@ -2585,16 +2617,18 @@ function buildMenuSystemVisuals(world) {
   if (!world || !menuActive || gameState) return
   clearMenuBodies()
 
+  const portBody = world.bodies.find((body) => body.kind === 'port' && body.name === 'Port Haven')
   const anchor =
+    portBody ??
     world.bodies.find((body) => body.kind === 'island' && body.name === 'Haven Reach') ??
     world.bodies.find((body) => body.kind === 'island') ??
     world.bodies[0]
-  menuOrbitRadius = MENU_ORBIT_RADIUS
-  menuOrbitHeight = MENU_ORBIT_HEIGHT
+  menuViewDistance = MENU_VIEW_DISTANCE
+  menuViewHeight = MENU_VIEW_HEIGHT
+  menuSwayWidth = MENU_SWAY_WIDTH
   if (anchor?.position) MENU_LOOK_AT.set(anchor.position[0], 0, anchor.position[2])
 
   let portMesh = null
-  let portBody = null
   for (const body of world.bodies) {
     if (
       !anchor?.position ||
@@ -2615,7 +2649,6 @@ function buildMenuSystemVisuals(world) {
     scene.add(mesh)
     if (body.kind === 'port' && body.name === 'Port Haven') {
       portMesh = mesh
-      portBody = body
     }
   }
   buildMenuLighthouse(portMesh, portBody)
@@ -2678,12 +2711,14 @@ function updateMenuBackground(dt) {
       color: 0xffedbd
     })
   }
-  // Slow circuit of the home archipelago, low over the water.
-  const angle = (menuAnimT / MENU_ORBIT_PERIOD_S) * Math.PI * 2
+  // Gentle lateral sway from the water toward Port Haven. Keep the camera on
+  // the seaward side so the harbour remains the subject instead of becoming a
+  // second island orbit.
+  const sway = Math.sin((menuAnimT / MENU_SWAY_PERIOD_S) * Math.PI * 2) * menuSwayWidth
   camera.position.set(
-    MENU_LOOK_AT.x + Math.cos(angle) * menuOrbitRadius,
-    menuOrbitHeight,
-    MENU_LOOK_AT.z + Math.sin(angle) * menuOrbitRadius
+    MENU_LOOK_AT.x + sway,
+    menuViewHeight,
+    MENU_LOOK_AT.z - menuViewDistance
   )
   camera.lookAt(MENU_LOOK_AT)
   refreshEnvironment(menuAnimT)
@@ -5019,6 +5054,7 @@ async function startSession(newGameState, { enterFlightMode = false } = {}) {
 async function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
   clearSession()
   stopMenuBackground()
+  setTitleLoading(false)
   gameState = newGameState
   sessionLoading = true
   setSessionLoading(true)
@@ -6926,6 +6962,16 @@ window.addEventListener('keydown', (e) => {
       gameState.player.onFoot.flashlightOn = !gameState.player.onFoot.flashlightOn
       syncPlayerFlashlight()
       flashToast(gameState.player.onFoot.flashlightOn ? 'Flashlight on' : 'Flashlight off')
+    }
+    return
+  }
+  if (gameState.player.onFoot?.active && e.code === 'Backspace' && !paused && !characterOpen) {
+    e.preventDefault()
+    const hadTarget = !!currentTarget
+    const hadWaypoint = clearWaypoint()
+    clearTargetLock()
+    if (hadTarget || hadWaypoint) {
+      flashToast(hadTarget && hadWaypoint ? 'Target and waypoint cleared' : hadTarget ? 'Target lock cleared' : 'Waypoint cleared')
     }
     return
   }
@@ -9231,26 +9277,35 @@ animate()
 // with it once preloadNatureModels() resolves, below.
 startMenuBackground()
 
-// Sound/theme prefs and nature assets load in the background and are no
-// longer on the critical path to a visible menu. Nature specifically: the
-// first `buildMenuSystemVisuals` above ran before models could possibly be
-// ready and skipped vegetation (`isNatureReady()` gate in islandMesh.js) —
-// once it resolves, rebuild so trees/grass appear rather than never.
-void warmOnFootWeapon()
-void loadWildlifeModels()
-void Promise.all([
+// Keep the title behind a short loading veil while its cached assets upload.
+// Shader compilation is deliberately fire-and-forget here: one renderer can
+// leave compileAsync pending on a cold WebGPU device, and that must never hold
+// the title screen hostage. Nature specifically: the first menu build can
+// happen before those models are ready, so rebuild it when that cache settles.
+setTitleLoading(true)
+const titleAssetsPromise = Promise.allSettled([
   loadSoundPreference(),
   loadUiThemePreference(),
-  preloadNatureModels()
-]).then(
-  () => {
-    if (menuActive && !gameState) {
-      clearMenuBodies()
-      buildMenuSystemVisuals(getMenuWorld())
-      void warmScenePipelines()
-    }
+  preloadNatureModels(),
+  loadWildlifeModels()
+])
+const rebuildTitleAfterAssets = () => {
+  if (menuActive && !gameState) {
+    clearMenuBodies()
+    buildMenuSystemVisuals(getMenuWorld())
   }
-)
+}
+titleAssetsPromise.then(rebuildTitleAfterAssets)
+// Keep all model/shader warm-up work in the background. The title is useful
+// even if a driver leaves one compile promise unresolved.
+void warmOnFootWeapon()
+titleAssetsPromise.then(() => void warmScenePipelines())
+Promise.race([
+  titleAssetsPromise,
+  new Promise((resolve) => setTimeout(resolve, 4500))
+]).finally(() => {
+  setTitleLoading(false)
+})
 ;(() => {
   // `?shot=` drives the visual-QA loop and owns the boot path itself: menu,
   // clock, weather and where the boat sits. No-op without the query param.

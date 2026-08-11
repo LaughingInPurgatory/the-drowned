@@ -97,7 +97,8 @@ import {
   negate,
   saturate,
   oneMinus,
-  clamp
+  clamp,
+  If
 } from 'three/tsl'
 import {
   SEA_COMPILED,
@@ -133,6 +134,12 @@ const FOAM_LAG = 1.6
  * turns into an actual coverage percentage. Measure, then set the threshold.
  */
 const DEBUG = null
+
+/**
+ * Distance LOD is deliberately a switch, not a rewrite. Set false to compile
+ * the original full-cost water path while tuning or comparing captures.
+ */
+const ENABLE_WATER_DISTANCE_LOD = true
 
 // ---------------------------------------------------------------------------
 // Foam / micro-detail texture
@@ -438,10 +445,14 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
 
     // ---- capillary band: slope only, so buoyancy never sees it ------------
     const ds = vec2(0, 0).toVar()
-    for (const w of SEA_DETAIL_SLOPE) {
-      const ph = wp.x.mul(w.dx).add(wp.z.mul(w.dz)).mul(w.k).sub(uTime.mul(w.omega))
-      ds.addAssign(vec2(w.dx * w.slope, w.dz * w.slope).mul(cos(ph)))
+    const addCapillarySlope = () => {
+      for (const w of SEA_DETAIL_SLOPE) {
+        const ph = wp.x.mul(w.dx).add(wp.z.mul(w.dz)).mul(w.k).sub(uTime.mul(w.omega))
+        ds.addAssign(vec2(w.dx * w.slope, w.dz * w.slope).mul(cos(ph)))
+      }
     }
+    if (ENABLE_WATER_DISTANCE_LOD) If(nearFade.greaterThan(0.001), addCapillarySlope)
+    else addCapillarySlope()
     const detailAmt = nearFade.mul(float(1).add(storm.mul(0.55)))
     // Whatever the capillary band stops contributing as a normal, it keeps
     // contributing as roughness. That continuity is why the transition from
@@ -452,20 +463,28 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     let N = normalize(vec3(Nwave.x.sub(ds.x.mul(detailAmt)), Nwave.y, Nwave.z.sub(ds.y.mul(detailAmt))))
 
     // ---- photographic micro-normal, two scales, counter-drifting ----------
-    const driftA = xz.mul(0.075).add(vec2(uTime.mul(0.016), uTime.mul(0.011)))
-    const driftB = xz.mul(0.021).sub(vec2(uTime.mul(0.009), uTime.mul(-0.013)))
-    const tnA = texture(waterNormal, driftA).xyz.mul(2).sub(1)
-    const tnB = texture(waterNormal, driftB).xyz.mul(2).sub(1)
-    const tn = tnA.mul(0.65).add(tnB.mul(0.5))
-    const ns = uWaterNormalStrength.mul(texFade)
-    N = normalize(vec3(N.x.sub(tn.x.mul(ns)), N.y, N.z.sub(tn.y.mul(ns))))
-    mss.addAssign(float(0.004).mul(float(1).sub(texFade.mul(texFade))))
+    const addPhotographicNormal = () => {
+      const driftA = xz.mul(0.075).add(vec2(uTime.mul(0.016), uTime.mul(0.011)))
+      const driftB = xz.mul(0.021).sub(vec2(uTime.mul(0.009), uTime.mul(-0.013)))
+      const tnA = texture(waterNormal, driftA).xyz.mul(2).sub(1)
+      const tnB = texture(waterNormal, driftB).xyz.mul(2).sub(1)
+      const tn = tnA.mul(0.65).add(tnB.mul(0.5))
+      const ns = uWaterNormalStrength.mul(texFade)
+      N = normalize(vec3(N.x.sub(tn.x.mul(ns)), N.y, N.z.sub(tn.y.mul(ns))))
+      mss.addAssign(float(0.004).mul(float(1).sub(texFade.mul(texFade))))
+    }
+    if (ENABLE_WATER_DISTANCE_LOD) If(texFade.greaterThan(0.001), addPhotographicNormal)
+    else addPhotographicNormal()
 
     // Rain stipples the near water; a squall is visibly rougher than a shower.
     const rainNear = float(1).sub(smoothstep(float(20), float(240), dist)).mul(uRainRipple)
-    const rp = xz.mul(0.9).add(vec2(uTime.mul(0.7), uTime.mul(-0.9)))
-    const rn = texture(foamTex, rp).xyz.mul(2).sub(1)
-    N = normalize(vec3(N.x.sub(rn.x.mul(rainNear.mul(0.35))), N.y, N.z.sub(rn.y.mul(rainNear.mul(0.35)))))
+    const addRainNormal = () => {
+      const rp = xz.mul(0.9).add(vec2(uTime.mul(0.7), uTime.mul(-0.9)))
+      const rn = texture(foamTex, rp).xyz.mul(2).sub(1)
+      N = normalize(vec3(N.x.sub(rn.x.mul(rainNear.mul(0.35))), N.y, N.z.sub(rn.y.mul(rainNear.mul(0.35)))))
+    }
+    if (ENABLE_WATER_DISTANCE_LOD) If(rainNear.greaterThan(0.001), addRainNormal)
+    else addRainNormal()
 
     // Past the last detail band the surface is a plane and the roughness owns
     // everything. Without this the horizon crawls.
@@ -596,26 +615,30 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     // *through* it. Needs all three of a thin crest, a steep face, and the sun
     // on the far side — take any one away and it reads as a glow, not glass.
     const L = uSunDir
-    const backDir = normalize(L.add(N.mul(0.32)))
-    const through = pow(saturate(V.dot(negate(backDir))), float(2.4))
-    // Wave-scale face, not the capillary normal: light transmits through the
-    // body of a crest, and a ripple on its flank is not a thickness. Range is
-    // the measured one — 1 - Nwave.y runs 0.002 median to 0.011 at the 99th.
-    const steepFace = smoothstep(float(0.0015), float(0.008), float(1).sub(Nwave.y))
-    const lowSun = oneMinus(smoothstep(float(0.02), float(0.72), L.y))
-    const thickness = crest.mul(float(0.35).add(thin.mul(0.65))).mul(steepFace)
-    const sss = through.mul(thickness).mul(float(0.5).add(lowSun.mul(1.6))).mul(shadeFade)
-    // Daylight scatter is the crest colour driven hard; a low sun drags it warm.
-    const sssTint = mix(
-      uCrestColor.mul(2.6).add(vec3(0.02, 0.12, 0.09)),
-      uSunColor.mul(vec3(1.0, 0.62, 0.3)).mul(1.6).add(uCrestColor),
-      lowSun
-    )
-    col.addAssign(sssTint.mul(sss).mul(1.25))
-    // Wrap term: even a high sun bleeds a little light through a crest edge.
-    col.addAssign(
-      uCrestColor.mul(uSunColor).mul(crest.mul(thin).mul(saturate(L.y)).mul(0.35)).mul(shadeFade)
-    )
+    const addSubsurface = () => {
+      const backDir = normalize(L.add(N.mul(0.32)))
+      const through = pow(saturate(V.dot(negate(backDir))), float(2.4))
+      // Wave-scale face, not the capillary normal: light transmits through the
+      // body of a crest, and a ripple on its flank is not a thickness. Range is
+      // the measured one — 1 - Nwave.y runs 0.002 median to 0.011 at the 99th.
+      const steepFace = smoothstep(float(0.0015), float(0.008), float(1).sub(Nwave.y))
+      const lowSun = oneMinus(smoothstep(float(0.02), float(0.72), L.y))
+      const thickness = crest.mul(float(0.35).add(thin.mul(0.65))).mul(steepFace)
+      const sss = through.mul(thickness).mul(float(0.5).add(lowSun.mul(1.6))).mul(shadeFade)
+      // Daylight scatter is the crest colour driven hard; a low sun drags it warm.
+      const sssTint = mix(
+        uCrestColor.mul(2.6).add(vec3(0.02, 0.12, 0.09)),
+        uSunColor.mul(vec3(1.0, 0.62, 0.3)).mul(1.6).add(uCrestColor),
+        lowSun
+      )
+      col.addAssign(sssTint.mul(sss).mul(1.25))
+      // Wrap term: even a high sun bleeds a little light through a crest edge.
+      col.addAssign(
+        uCrestColor.mul(uSunColor).mul(crest.mul(thin).mul(saturate(L.y)).mul(0.35)).mul(shadeFade)
+      )
+    }
+    if (ENABLE_WATER_DISTANCE_LOD) If(shadeFade.greaterThan(0.001), addSubsurface)
+    else addSubsurface()
 
     // ---- specular: a slope distribution, not a shininess ------------------
     //
@@ -632,12 +655,28 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
       // Smith-ish masking; without it grazing angles fire off arbitrarily.
       return min(d.mul(saturate(dir.dot(N))).div(NdV.mul(4).add(0.05)), float(24))
     }
+    const cheapSpecLobe = (dir) => {
+      const H = normalize(dir.add(V))
+      return pow(saturate(N.dot(H)), float(8)).mul(saturate(dir.dot(N))).mul(1.8)
+    }
+    const sunSpec = float(0).toVar()
+    const moonSpec = float(0).toVar()
+    const addFullSpecular = () => {
+      sunSpec.assign(specLobe(uSunDir))
+      moonSpec.assign(specLobe(uMoonDir))
+    }
+    if (ENABLE_WATER_DISTANCE_LOD) {
+      If(nearFade.greaterThan(0.02), addFullSpecular).Else(() => {
+        sunSpec.assign(cheapSpecLobe(uSunDir))
+        moonSpec.assign(cheapSpecLobe(uMoonDir))
+      })
+    } else addFullSpecular()
     const sunUp = smoothstep(float(-0.07), float(0.10), uSunDir.y)
-    col.addAssign(uSunColor.mul(specLobe(uSunDir)).mul(fresnel).mul(sunUp).mul(1.5))
+    col.addAssign(uSunColor.mul(sunSpec).mul(fresnel).mul(sunUp).mul(1.5))
     const moonTint = vec3(0.66, 0.76, 0.95)
     col.addAssign(
       moonTint
-        .mul(specLobe(uMoonDir))
+        .mul(moonSpec)
         .mul(fresnel)
         .mul(smoothstep(float(-0.05), float(0.10), uMoonDir.y))
         .mul(uMoonBright)
@@ -719,43 +758,42 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     // crest leaves a trail rather than a spot). Sampling this in world XZ gives
     // round blobs of one size, which is most of what makes a foam field read as
     // a stipple rather than as foam.
-    const drift = uTime.mul(1.1)
-    const wa = along.sub(drift)
-    const fa = texture(foamTex, vec2(wa.mul(0.034), across.mul(0.125)))
-    const fb = texture(foamTex, vec2(wa.mul(0.011), across.mul(0.044)).add(vec2(0.37, 0.11)))
-    const fc = texture(foamTex, vec2(wa.mul(0.15), across.mul(0.44)).add(vec2(0.71, 0.53)))
-    // Weighted-averaging decorrelated noise pulls hard toward 0.5, and a
-    // threshold sweeping a distribution that narrow snaps from bare water to
-    // full cover over a few percent of coverage. Stretch it back out.
-    const pattern = fa.x
-      .mul(0.42)
-      .add(fb.y.mul(0.34))
-      .add(fc.w.mul(0.24))
-      .sub(0.5)
-      .mul(1.7)
-      .add(0.5)
-    // Where to cut it. `1 - cover` looks like the obvious threshold and is not:
-    // the pattern above is a weighted mix of three decorrelated noises and,
-    // measured off a debug shot, essentially all of its mass lands inside
-    // [0.12, 0.88]. A threshold sweeping [0, 1] therefore spends its whole top
-    // half above anything the pattern ever reaches — coverage under about 0.12
-    // renders literally nothing, and everything above it arrives in a rush.
-    // That is why a calm sea and a full gale looked equally foamy: both were
-    // riding the same narrow usable slice.
-    //
-    // Mapping the cut across the range the pattern actually occupies makes foam
-    // *area* track coverage over the whole range. The `pow` biases the travel
-    // toward the low end, where every calm-weather frame lives.
-    const edge = mix(float(0.90), float(0.06), pow(cover, float(0.9)))
-    let foam = smoothstep(edge.sub(0.06), edge.add(0.26), pattern)
-    // Dissipation. Old foam is filaments and holes, so a second finer noise
-    // eats into it — but only where the cap is no longer fresh, or breaking
-    // crests would come out moth-eaten too.
-    foam = foam.mul(mix(smoothstep(float(0.18), float(0.72), fc.z), float(1), fresh))
-    // Individual caps go sub-pixel long before the sea does. Converge on a
-    // dimmed mean rather than carrying full-strength speckle to the horizon.
-    foam = mix(cover.mul(cover).mul(0.45), foam, foamFade).mul(shadeFade)
-    foam = saturate(foam)
+    const pattern = float(0).toVar()
+    let foam = cover.mul(cover).mul(0.45).toVar()
+    const addDetailedFoam = () => {
+      const drift = uTime.mul(1.1)
+      const wa = along.sub(drift)
+      const fa = texture(foamTex, vec2(wa.mul(0.034), across.mul(0.125)))
+      const fb = texture(foamTex, vec2(wa.mul(0.011), across.mul(0.044)).add(vec2(0.37, 0.11)))
+      const fc = texture(foamTex, vec2(wa.mul(0.15), across.mul(0.44)).add(vec2(0.71, 0.53)))
+      // Weighted-averaging decorrelated noise pulls hard toward 0.5, and a
+      // threshold sweeping a distribution that narrow snaps from bare water to
+      // full cover over a few percent of coverage. Stretch it back out.
+      const sampledPattern = fa.x
+        .mul(0.42)
+        .add(fb.y.mul(0.34))
+        .add(fc.w.mul(0.24))
+        .sub(0.5)
+        .mul(1.7)
+        .add(0.5)
+      pattern.assign(sampledPattern)
+      // Where to cut it. `1 - cover` looks like the obvious threshold and is not:
+      // the pattern above is a weighted mix of three decorrelated noises and,
+      // measured off a debug shot, essentially all of its mass lands inside
+      // [0.12, 0.88]. A threshold sweeping [0, 1] therefore spends its whole top
+      // half above anything the pattern ever reaches — coverage under about 0.12
+      // renders literally nothing, and everything above it arrives in a rush.
+      const edge = mix(float(0.90), float(0.06), pow(cover, float(0.9)))
+      let detailed = smoothstep(edge.sub(0.06), edge.add(0.26), sampledPattern)
+      // Dissipation. Old foam is filaments and holes, so a second finer noise
+      // eats into it — but only where the cap is no longer fresh.
+      detailed = detailed.mul(mix(smoothstep(float(0.18), float(0.72), fc.z), float(1), fresh))
+      foam.assign(mix(cover.mul(cover).mul(0.45), detailed, foamFade))
+    }
+    if (ENABLE_WATER_DISTANCE_LOD) If(foamFade.greaterThan(0.001), addDetailedFoam)
+    else addDetailedFoam()
+    foam.mulAssign(shadeFade)
+    foam.assign(saturate(foam))
 
     // Foam is a bright diffuse solid sitting on the water, not an emissive
     // wash: it takes sun and sky like snow, and it is dark on its shaded side.
@@ -798,19 +836,23 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     if (DEBUG === 'spec') return uSunColor.mul(specLobe(uSunDir)).mul(fresnel).mul(sunUp).mul(1.5)
 
     // ---- searchlight ------------------------------------------------------
-    const toLight = uSearchPos.sub(wp)
-    const sDist = length(toLight)
-    const SL = toLight.div(max(sDist, float(0.05)))
-    const beamNoise = texture(foamTex, wp.xz.mul(0.0047).add(vec2(13.7, 4.1))).w
-    const raggedOuter = uSearchCosOuter.add(beamNoise.sub(0.5).mul(0.004))
-    const cone = smoothstep(raggedOuter, uSearchCosInner, negate(SL).dot(uSearchDir))
-    const mask = cone
-      .mul(float(1).sub(smoothstep(uSearchRange.mul(0.4), uSearchRange, sDist)))
-      .mul(float(1).div(float(1).add(sDist.mul(float(2.2).div(max(uSearchRange, float(1)))))))
-      .mul(uSearchIntensity)
-      .mul(smoothstep(float(0.05), float(0.5), sDist))
-    col.addAssign(uSearchColor.mul(specLobe(SL)).mul(mask).mul(mix(float(0.6), float(1.6), fresnel)).mul(2.2))
-    col.addAssign(uSearchColor.mul(mask).mul(foam).mul(0.35))
+    const addSearchlight = () => {
+      const toLight = uSearchPos.sub(wp)
+      const sDist = length(toLight)
+      const SL = toLight.div(max(sDist, float(0.05)))
+      const beamNoise = texture(foamTex, wp.xz.mul(0.0047).add(vec2(13.7, 4.1))).w
+      const raggedOuter = uSearchCosOuter.add(beamNoise.sub(0.5).mul(0.004))
+      const cone = smoothstep(raggedOuter, uSearchCosInner, negate(SL).dot(uSearchDir))
+      const mask = cone
+        .mul(float(1).sub(smoothstep(uSearchRange.mul(0.4), uSearchRange, sDist)))
+        .mul(float(1).div(float(1).add(sDist.mul(float(2.2).div(max(uSearchRange, float(1)))))))
+        .mul(uSearchIntensity)
+        .mul(smoothstep(float(0.05), float(0.5), sDist))
+      col.addAssign(uSearchColor.mul(specLobe(SL)).mul(mask).mul(mix(float(0.6), float(1.6), fresnel)).mul(2.2))
+      col.addAssign(uSearchColor.mul(mask).mul(foam).mul(0.35))
+    }
+    if (ENABLE_WATER_DISTANCE_LOD) If(nearFade.greaterThan(0.001), addSearchlight)
+    else addSearchlight()
 
     return col
   })()
