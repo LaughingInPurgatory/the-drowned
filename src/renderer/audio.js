@@ -9,6 +9,7 @@ let musicVolume = 1
 let seaVolume = 1
 let masterGain = null
 let sfxBusGain = null
+let drySfxGain = null
 let seaBusGain = null
 /** Shared glue compressor + makeup — refined under combat density. */
 let masterComp = null
@@ -118,8 +119,17 @@ function getMasterDestination() {
 
     sfxBusGain.connect(masterGain)
     seaBusGain.connect(masterGain)
+    // Close animal vocals skip the sea-hall send so cries stay dry.
+    drySfxGain = audio.createGain()
+    drySfxGain.gain.value = sfxVolume
+    drySfxGain.connect(masterComp)
   }
   return sfxBusGain
+}
+
+function getDrySfxDestination() {
+  getMasterDestination()
+  return drySfxGain ?? sfxBusGain
 }
 
 function getSeaDestination() {
@@ -161,6 +171,7 @@ function applySeaVolume() {
 
 function applySfxMute() {
   if (sfxBusGain) sfxBusGain.gain.value = sfxVolume
+  if (drySfxGain) drySfxGain.gain.value = sfxVolume
   if (!sfxEnabled && window.speechSynthesis) {
     try { window.speechSynthesis.cancel() } catch { /* */ }
     try { stopAnnounceBed() } catch { /* */ }
@@ -284,7 +295,31 @@ const SFX_FILES = [
   // Sounding (P) — CC0 Freesound samples; see public/audio/sfx/SONAR_CREDITS.txt
   'sonar_ping.ogg', 'sonar_return.ogg',
   ...THUNDER_FILES,
-  ...ON_FOOT_LANDING_FILES
+  ...ON_FOOT_LANDING_FILES,
+  'wildlife/dog_bark.mp3',
+  'wildlife/dog_bark_angry.mp3',
+  'wildlife/dog_whimper.mp3',
+  'wildlife/cat_cry.mp3',
+  'wildlife/cat_yowl.mp3',
+  'wildlife/pig_grunt.mp3',
+  'wildlife/pig_squeal.mp3',
+  'wildlife/squeak.mp3',
+  'wildlife/squeak2.mp3',
+  'wildlife/animal_bleat.mp3',
+  'wildlife/deer_bark.mp3',
+  'wildlife/boar_growl.mp3',
+  'wildlife/boar_snarl.mp3',
+  'wildlife/beast_growl.mp3',
+  'wildlife/flesh_hit.mp3',
+  'wildlife/impact_thud.mp3',
+  'wildlife/flesh_chunk.mp3',
+  'wildlife/flesh_wet.mp3',
+  'wildlife/flesh_body.mp3',
+  'wildlife/punch_hit.mp3',
+  'wildlife/crunch_hit.mp3',
+  'wildlife/body_hit.mp3',
+  'wildlife/dog_bite.mp3',
+  'wildlife/bite_crunch.mp3'
 ]
 
 // Fantozzi's CC0 pack gives the island two useful footstep families: the
@@ -331,6 +366,11 @@ export function preloadThunderSounds() {
   return Promise.all(THUNDER_FILES.map(loadSfxFile))
 }
 
+/** Decode wildlife, weapons, footsteps and thunder on the title / session start. */
+export function preloadGameSounds() {
+  return ensureSfx()
+}
+
 // One-shot or looping sample. Returns { source, gain, volume } or null if not loaded.
 function playSample(name, {
   volume = 0.5,
@@ -341,7 +381,9 @@ function playSample(name, {
   duration = 0,
   offset = 0,
   lowpassHz = 0,
-  lowpassQ = 0.6
+  lowpassQ = 0.6,
+  highpassHz = 0,
+  dry = false
 } = {}) {
   const buf = sfxBuffers.get(name)
   if (!buf) return null
@@ -352,29 +394,51 @@ function playSample(name, {
   source.playbackRate.value = rate
   const gain = audio.createGain()
   const now = audio.currentTime + delay
+  const playFor = duration > 0 && !loop ? duration : 0
+  const fadeOut = playFor > 0 ? Math.min(0.07, playFor * 0.28) : 0
   if (fadeIn > 0) {
     gain.gain.setValueAtTime(0.0001, now)
     gain.gain.linearRampToValueAtTime(volume, now + fadeIn)
   } else {
-    gain.gain.setValueAtTime(volume, audio.currentTime)
+    gain.gain.setValueAtTime(volume, now)
+  }
+  if (fadeOut > 0) {
+    gain.gain.setValueAtTime(volume, now + playFor - fadeOut)
+    gain.gain.linearRampToValueAtTime(0.0001, now + playFor)
   }
   source.connect(gain)
+  const dest = dry ? getDrySfxDestination() : getMasterDestination()
+  let node = gain
+  const filters = []
+  if (highpassHz > 0) {
+    const highpass = audio.createBiquadFilter()
+    highpass.type = 'highpass'
+    highpass.frequency.value = highpassHz
+    node.connect(highpass)
+    node = highpass
+    filters.push(highpass)
+  }
   if (lowpassHz > 0) {
     const lowpass = audio.createBiquadFilter()
     lowpass.type = 'lowpass'
     lowpass.frequency.value = lowpassHz
     lowpass.Q.value = lowpassQ
-    gain.connect(lowpass).connect(getMasterDestination())
+    node.connect(lowpass)
+    node = lowpass
+    filters.push(lowpass)
+  }
+  node.connect(dest)
+  if (filters.length) {
     source.addEventListener('ended', () => {
-      try { lowpass.disconnect() } catch { /* already disconnected */ }
+      for (const filter of filters) {
+        try { filter.disconnect() } catch { /* already disconnected */ }
+      }
     }, { once: true })
-  } else {
-    gain.connect(getMasterDestination())
   }
   const startOffset = Math.max(0, Math.min(Number(offset) || 0, Math.max(0, buf.duration - 0.01)))
-  if (duration > 0 && !loop) source.start(now, startOffset, duration)
+  if (playFor > 0) source.start(now, startOffset, playFor)
   else source.start(now, startOffset)
-  if (duration > 0 && !loop && startOffset === 0) source.stop(now + duration)
+  if (playFor > 0 && startOffset === 0) source.stop(now + playFor)
   // Store target volume — AudioParam.value is unreliable after ramps, and
   // stopSampleNodes needs a real peak to fade from (not the 0.0001 floor).
   return { source, gain, volume }
@@ -413,6 +477,136 @@ export function playGullSquawk() {
   tone({ type: 'triangle', freq: 2100, freqEnd: 820, duration: 0.17, peak: 0.34 })
   tone({ type: 'triangle', freq: 2450, freqEnd: 980, duration: 0.15, peak: 0.3, delay: 0.12 })
   noiseBurst({ duration: 0.045, filterFreq: 3600, peak: 0.12, drive: 1.1, delay: 0.02 })
+  return true
+}
+
+function wildlifeDistanceGain(distance, fullRange, silentRange) {
+  const d = Math.max(0, Number(distance) || 0)
+  if (d >= silentRange) return 0
+  if (d <= fullRange) return 1
+  return 1 - (d - fullRange) / (silentRange - fullRange)
+}
+
+/** A close wild-dog bark — the original Mixkit bark, dry, one full yap. */
+export function playDogBark({ distance = 4 } = {}) {
+  const gain = wildlifeDistanceGain(distance, 7, 30)
+  if (gain <= 0) return false
+  ensureSfx()
+  if (playSample('wildlife/dog_bark.mp3', {
+    volume: 0.66 * gain,
+    rate: 0.96 + Math.random() * 0.08,
+    duration: 0.75,
+    dry: true
+  })) return true
+  tone({ type: 'sawtooth', freq: 270, freqEnd: 128, duration: 0.17, peak: 0.22 * gain, destination: getDrySfxDestination() })
+  return true
+}
+
+export function playWildlifeThreat(species, { distance = 4 } = {}) {
+  if (species === 'dog') return playDogBark({ distance })
+  const gain = wildlifeDistanceGain(distance, 7, 28)
+  if (gain <= 0) return false
+  ensureSfx()
+  const file = Math.random() < 0.55 ? 'wildlife/boar_growl.mp3' : 'wildlife/beast_growl.mp3'
+  if (playSample(file, {
+    volume: 0.56 * gain,
+    rate: 0.78 + Math.random() * 0.12,
+    offset: 0.08,
+    duration: 0.85,
+    dry: true
+  })) return true
+  tone({ type: 'sawtooth', freq: 160, freqEnd: 80, duration: 0.22, peak: 0.18 * gain, destination: getDrySfxDestination() })
+  return true
+}
+
+/** Species death cry — sampled. Windows skip the silent Mixkit lead-ins. */
+export function playWildlifeDeath(species, { distance = 4 } = {}) {
+  const gain = wildlifeDistanceGain(distance, 8, 34)
+  if (gain <= 0) return false
+  ensureSfx()
+  const files = {
+    dog: ['wildlife/dog_whimper.mp3', 0.82, 0.98, 0, 0.9],
+    cat: ['wildlife/cat_yowl.mp3', 0.7, 1.0, 0.14, 0.9],
+    deer: ['wildlife/deer_bark.mp3', 0.78, 0.94, 0, 0.82],
+    boar: ['wildlife/boar_snarl.mp3', 0.72, 0.84, 0.12, 0.9],
+    rabbit: ['wildlife/squeak2.mp3', 0.62, 1.12, 0, 0.55],
+    rat: ['wildlife/squeak2.mp3', 0.6, 1.28, 0, 0.5],
+    ferret: ['wildlife/squeak.mp3', 0.6, 1.22, 0.08, 0.5],
+    stoat: ['wildlife/squeak2.mp3', 0.6, 1.32, 0, 0.5]
+  }
+  const [file, volume, rate, offset, duration] = files[species] ?? files.rabbit
+  if (playSample(file, {
+    volume: volume * gain,
+    rate: rate + Math.random() * 0.06,
+    offset,
+    duration,
+    dry: true
+  })) return true
+  tone({ type: 'triangle', freq: 900, freqEnd: 280, duration: 0.16, peak: 0.16 * gain, destination: getDrySfxDestination() })
+  return true
+}
+
+/** Dull body hit when a bullet strikes an animal or its corpse. */
+export function playWildlifeFleshHit({ distance = 4 } = {}) {
+  const gain = wildlifeDistanceGain(distance, 12, 40)
+  if (gain <= 0) return false
+  ensureSfx()
+  playSample('wildlife/flesh_body.mp3', {
+    volume: 0.55 * gain,
+    rate: 0.9 + Math.random() * 0.08,
+    dry: true
+  })
+  // A hint of wet, cut short so it does not read as a gore squelch.
+  playSample('wildlife/flesh_wet.mp3', {
+    volume: 0.16 * gain,
+    rate: 0.84 + Math.random() * 0.06,
+    duration: 0.07,
+    lowpassHz: 700,
+    dry: true
+  })
+  return true
+}
+
+/** Actual teeth closing — Mixkit bite, dry, no metal punch. */
+export function playDogBite({ distance = 2 } = {}) {
+  const gain = wildlifeDistanceGain(distance, 5, 16)
+  if (gain <= 0) return false
+  ensureSfx()
+  playSample('wildlife/dog_bite.mp3', {
+    volume: 0.7 * gain,
+    rate: 0.92 + Math.random() * 0.08,
+    dry: true
+  })
+  playSample('wildlife/bite_crunch.mp3', {
+    volume: 0.28 * gain,
+    rate: 0.86 + Math.random() * 0.08,
+    dry: true
+  })
+  return true
+}
+
+/** Paw/hoof on soil — same samples as the player, audible when close. */
+export function playWildlifeFootstep(species, { distance = 4, surface = 'grass' } = {}) {
+  const gain = wildlifeDistanceGain(distance, 8, 18)
+  if (gain <= 0) return false
+  ensureSfx()
+  const small = species === 'rabbit' || species === 'cat' || species === 'rat' || species === 'ferret' || species === 'stoat'
+  const family = surface === 'stone' || surface === 'wood' ? 'Stone' : 'Sand'
+  const side = Math.random() < 0.5 ? 'L' : 'R'
+  const index = 1 + Math.floor(Math.random() * 3)
+  const file = `footsteps/Fantozzi-${family}${side}${index}.ogg`
+  // Same bus as player footsteps. Volume sits at or above a player walk when
+  // the animal is within a few metres.
+  if (playSample(file, {
+    volume: (small ? 0.208 : 0.325) * gain,
+    rate: (small ? 1.28 : 0.96) + Math.random() * 0.1
+  })) return true
+  noiseBurst({
+    duration: small ? 0.04 : 0.055,
+    filterFreq: small ? 1100 : 1400,
+    peak: (small ? 0.091 : 0.143) * gain,
+    drive: 0.6
+  })
   return true
 }
 

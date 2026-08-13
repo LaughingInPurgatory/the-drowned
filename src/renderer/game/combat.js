@@ -765,6 +765,7 @@ export function updateProjectiles(gameState, dt, onHit, onWorldImpact) {
           wildlifeImpact: !!impact.wildlifeImpact,
           wildlifeId: impact.wildlifeId ?? null,
           wildlifeKilled: !!impact.wildlifeKilled,
+          wildlifeCorpse: !!impact.wildlifeCorpse,
           waterImpact: !!impact.waterImpact,
           silentImpact: !!proj.gullHit,
           ownerId: proj.ownerId,

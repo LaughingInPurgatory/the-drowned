@@ -79,8 +79,9 @@ function buoyancyWeight(len) {
 }
 
 /**
- * The wave spectrum: a rough Pierson-Moskowitz shape, twelve components from
- * long distant swell down to capillary chop.
+ * The wave spectrum: a rough Pierson-Moskowitz shape, eight components from
+ * long distant swell down to short chop. Capillary sparkle lives in the
+ * shader-only slope band, not here.
  *
  * - `len`    crest-to-crest distance in metres. Speed is *not* listed: deep
  *            water disperses, long waves outrun short ones, and hardcoding a
@@ -105,11 +106,7 @@ export const SEA_WAVES = [
   { len: 84, amp: 0.4, spread: -0.87, q: 0.82 },
   { len: 59, amp: 0.32, spread: 0.73, q: 0.9 },
   { len: 41, amp: 0.24, spread: -0.24, q: 0.96 },
-  { len: 28, amp: 0.16, spread: 1.12, q: 1.0 },
-  { len: 19.5, amp: 0.11, spread: -1.05, q: 1.0 },
-  { len: 13, amp: 0.075, spread: 0.56, q: 1.0 },
-  { len: 8.8, amp: 0.05, spread: -1.36, q: 1.0 },
-  { len: 5.9, amp: 0.032, spread: 1.53, q: 1.0 }
+  { len: 28, amp: 0.2, spread: 1.12, q: 1.0 }
 ]
 
 /** Tallest possible crest — used for camera/cull margins, not per-frame maths. */
@@ -281,15 +278,9 @@ export function snapToSea(entityState, t) {
  * the long components leave behind.
  */
 export const SEA_DETAIL_SLOPE = [
-  { len: 6.4, slope: 0.058, spread: 0.95 },
-  { len: 4.3, slope: 0.055, spread: -1.9 },
-  { len: 3.1, slope: 0.05, spread: 2.35 },
-  { len: 2.15, slope: 0.045, spread: -0.75 },
-  { len: 1.45, slope: 0.04, spread: 1.25 },
-  { len: 0.97, slope: 0.034, spread: -2.7 },
-  { len: 0.63, slope: 0.028, spread: 0.35 },
-  { len: 0.41, slope: 0.022, spread: 2.95 },
-  { len: 0.27, slope: 0.016, spread: -1.35 }
+  { len: 6.2, slope: 0.078, spread: 0.95 },
+  { len: 2.6, slope: 0.058, spread: -1.9 },
+  { len: 1.1, slope: 0.042, spread: 2.35 }
 ].map(({ len, slope, spread }) => {
   const bearing = WIND_BEARING + spread
   const k = (Math.PI * 2) / len

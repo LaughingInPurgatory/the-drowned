@@ -7,11 +7,11 @@ import { waveHeight } from '../world/sea.js'
  */
 
 const RING_SEGMENTS = 160
-const RING_LIFETIME_S = 4.2
+const RING_LIFETIME_S = 3.4
 const RING_REACH = 420
 /** Match main.js sounding cadence so rings land with the movie pings. */
 const RING_COUNT = 4
-const RING_INTERVAL_S = 1.55
+const RING_INTERVAL_S = 1.25
 const RING_LIFT = 0.4
 
 function buildRingGeometry() {

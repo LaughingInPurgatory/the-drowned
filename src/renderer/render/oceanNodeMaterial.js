@@ -65,8 +65,7 @@ import {
   RepeatWrapping,
   ClampToEdgeWrapping,
   LinearFilter,
-  LinearMipmapLinearFilter,
-  Box3
+  LinearMipmapLinearFilter
 } from 'three/webgpu'
 import {
   uniform,
@@ -111,18 +110,6 @@ import { getWaterNormalMap } from './textures.js'
 /** Unit wind vector in XZ — foam streaks and drift all hang off this. */
 const WIND_X = Math.sin(WIND_BEARING)
 const WIND_Z = Math.cos(WIND_BEARING)
-
-/**
- * How far back in time the second Jacobian sample is taken, in seconds.
- *
- * Foam is not instantaneous: a crest breaks and the bubbles stay on the water
- * for a few seconds behind it. Sampling the fold at `t` and again at `t - LAG`
- * and taking the union costs no transcendentals — the phase shift per component
- * is a constant, so `sin(ph + w)` expands to the sines and cosines already in
- * hand — and it is the difference between foam that trails a breaking crest and
- * foam that flickers on top of one.
- */
-const FOAM_LAG = 1.6
 
 /**
  * Diagnostic channel isolator. `null` in every shipping build.
@@ -398,16 +385,16 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
 
     // Distance bands. Everything expensive rides one of these to zero, and the
     // roughness picks up what they drop so nothing simply vanishes.
-    const nearFade = float(1).sub(smoothstep(float(80), float(1100), dist))
-    const texFade = float(1).sub(smoothstep(float(140), float(2600), dist))
-    const foamFade = float(1).sub(smoothstep(float(300), float(2600), dist))
-    const shadeFade = float(1).sub(smoothstep(float(7000), float(19000), dist))
+    const nearFade = float(1).sub(smoothstep(float(70), float(900), dist))
+    const texFade = float(1).sub(smoothstep(float(120), float(1800), dist))
+    const foamFade = float(1).sub(smoothstep(float(240), float(1700), dist))
+    const shadeFade = float(1).sub(smoothstep(float(6000), float(17000), dist))
 
     // Normal LOD cut runs a little finer than the geometry's — the shading can
     // resolve slope the tessellation cannot.
     const nCut = mix(float(0), float(48), pow(smoothstep(float(90), float(5200), dist), 0.8))
 
-    // ---- wave field: exact tangents, Jacobian now and a moment ago ---------
+    // ---- wave field: exact tangents + Jacobian in one spectrum pass --------
     //
     // e is the derivative of the horizontal (trochoidal) offset, g the height
     // gradient. Both come out of one pass over the spectrum, which is a third
@@ -415,7 +402,6 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     // than approximate — and the Jacobian determinant, the whitecap mask, is
     // then free.
     const e = vec3(0, 0, 0).toVar()
-    const eOld = vec3(0, 0, 0).toVar()
     const g = vec2(0, 0).toVar()
     // Mean square slope of everything the LOD has dropped. This is the shader's
     // roughness: the waves are still there, they are just smaller than a pixel,
@@ -426,13 +412,8 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
       const ph = vParam.x.mul(w.dx).add(vParam.y.mul(w.dz)).mul(w.k).sub(uTime.mul(w.omega))
       const s = sin(ph).mul(gate)
       const c = cos(ph).mul(gate)
-      // sin(ph + omega*LAG) without a second transcendental.
-      const cw = Math.cos(w.omega * FOAM_LAG)
-      const sw = Math.sin(w.omega * FOAM_LAG)
-      const sOld = s.mul(cw).add(c.mul(sw))
       const jac = vec3(w.qak * w.dx * w.dx, w.qak * w.dx * w.dz, w.qak * w.dz * w.dz)
       e.addAssign(jac.mul(s))
-      eOld.addAssign(jac.mul(sOld))
       g.addAssign(vec2(w.ak * w.dx, w.ak * w.dz).mul(c))
       mss.addAssign(float(0.5 * w.ak * w.ak).mul(float(1).sub(gate.mul(gate))))
     }
@@ -441,7 +422,6 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     const tz = vec3(negate(e.y), g.y, float(1).sub(e.z))
     const Nwave = normalize(cross(tz, tx))
     const fold = float(1).sub(e.x).mul(float(1).sub(e.z)).sub(e.y.mul(e.y))
-    const foldOld = float(1).sub(eOld.x).mul(float(1).sub(eOld.z)).sub(eOld.y.mul(eOld.y))
 
     // ---- capillary band: slope only, so buoyancy never sees it ------------
     const ds = vec2(0, 0).toVar()
@@ -462,16 +442,13 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
 
     let N = normalize(vec3(Nwave.x.sub(ds.x.mul(detailAmt)), Nwave.y, Nwave.z.sub(ds.y.mul(detailAmt))))
 
-    // ---- photographic micro-normal, two scales, counter-drifting ----------
+    // ---- photographic micro-normal (one scale; roughness covers the rest) --
     const addPhotographicNormal = () => {
-      const driftA = xz.mul(0.075).add(vec2(uTime.mul(0.016), uTime.mul(0.011)))
-      const driftB = xz.mul(0.021).sub(vec2(uTime.mul(0.009), uTime.mul(-0.013)))
-      const tnA = texture(waterNormal, driftA).xyz.mul(2).sub(1)
-      const tnB = texture(waterNormal, driftB).xyz.mul(2).sub(1)
-      const tn = tnA.mul(0.65).add(tnB.mul(0.5))
+      const driftA = xz.mul(0.06).add(vec2(uTime.mul(0.014), uTime.mul(0.01)))
+      const tn = texture(waterNormal, driftA).xyz.mul(2).sub(1)
       const ns = uWaterNormalStrength.mul(texFade)
       N = normalize(vec3(N.x.sub(tn.x.mul(ns)), N.y, N.z.sub(tn.y.mul(ns))))
-      mss.addAssign(float(0.004).mul(float(1).sub(texFade.mul(texFade))))
+      mss.addAssign(float(0.005).mul(float(1).sub(texFade.mul(texFade))))
     }
     if (ENABLE_WATER_DISTANCE_LOD) If(texFade.greaterThan(0.001), addPhotographicNormal)
     else addPhotographicNormal()
@@ -704,9 +681,7 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
     const breakThresh = float(0.792).add(storm.mul(0.42))
     const breakWidth = float(0.15).add(storm.mul(0.14))
     const breaking = oneMinus(smoothstep(breakThresh.sub(breakWidth), breakThresh, fold))
-    const trailing = oneMinus(
-      smoothstep(breakThresh.sub(breakWidth), breakThresh.sub(0.02), foldOld)
-    ).mul(0.55)
+    const trailing = breaking.mul(0.42)
     // Shoreline surf. Not a constant ring: it is waves *breaking on the shore*,
     // so it surges with the crest arriving and drains back in the trough.
     const surf = oneMinus(smoothstep(float(0), float(26), shoreGap)).mul(
@@ -765,29 +740,11 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
       const wa = along.sub(drift)
       const fa = texture(foamTex, vec2(wa.mul(0.034), across.mul(0.125)))
       const fb = texture(foamTex, vec2(wa.mul(0.011), across.mul(0.044)).add(vec2(0.37, 0.11)))
-      const fc = texture(foamTex, vec2(wa.mul(0.15), across.mul(0.44)).add(vec2(0.71, 0.53)))
-      // Weighted-averaging decorrelated noise pulls hard toward 0.5, and a
-      // threshold sweeping a distribution that narrow snaps from bare water to
-      // full cover over a few percent of coverage. Stretch it back out.
-      const sampledPattern = fa.x
-        .mul(0.42)
-        .add(fb.y.mul(0.34))
-        .add(fc.w.mul(0.24))
-        .sub(0.5)
-        .mul(1.7)
-        .add(0.5)
+      const sampledPattern = fa.x.mul(0.58).add(fb.y.mul(0.42)).sub(0.5).mul(1.7).add(0.5)
       pattern.assign(sampledPattern)
-      // Where to cut it. `1 - cover` looks like the obvious threshold and is not:
-      // the pattern above is a weighted mix of three decorrelated noises and,
-      // measured off a debug shot, essentially all of its mass lands inside
-      // [0.12, 0.88]. A threshold sweeping [0, 1] therefore spends its whole top
-      // half above anything the pattern ever reaches — coverage under about 0.12
-      // renders literally nothing, and everything above it arrives in a rush.
       const edge = mix(float(0.90), float(0.06), pow(cover, float(0.9)))
       let detailed = smoothstep(edge.sub(0.06), edge.add(0.26), sampledPattern)
-      // Dissipation. Old foam is filaments and holes, so a second finer noise
-      // eats into it — but only where the cap is no longer fresh.
-      detailed = detailed.mul(mix(smoothstep(float(0.18), float(0.72), fc.z), float(1), fresh))
+      detailed = detailed.mul(mix(smoothstep(float(0.18), float(0.72), fb.z), float(1), fresh))
       foam.assign(mix(cover.mul(cover).mul(0.45), detailed, foamFade))
     }
     if (ENABLE_WATER_DISTANCE_LOD) If(foamFade.greaterThan(0.001), addDetailedFoam)
@@ -895,8 +852,8 @@ export function createOceanNodeMaterial({ sunDirection, skyColor, fogColor } = {
 
 const OCEAN_RADIUS = 24000
 const INNER_RADIUS = 3.5
-const RINGS = 200
-const SEGMENTS = 240
+const RINGS = 108
+const SEGMENTS = 152
 // Recentring the disc every frame makes each vertex sample a different world
 // point each frame, which shimmers. Snapping the centre holds them still.
 const CENTER_SNAP = 4
@@ -992,8 +949,6 @@ export function createOcean(opts = {}) {
 
   const _shoreScratch = []
   const _floatScratch = []
-  const _box = new Box3()
-  const _size = new Vector3()
 
   /**
    * Sweep the scene for coastlines and hulls.
@@ -1037,34 +992,8 @@ export function createOcean(opts = {}) {
       ) {
         if (d2 > FLOAT_RANGE * FLOAT_RANGE) continue
         let radius = child.userData.oceanFoamRadius
-        if (radius === undefined) {
-          // Roughly a half-beam — the collar is a disc, and one sized off the
-          // longest axis swells and shrinks as the boat turns under it.
-          // Measured once per vessel and cached; Box3 over a whole ship group
-          // is not a per-frame cost.
-          _box.setFromObject(child)
-          _box.getSize(_size)
-          // Two things make this a heuristic rather than a measurement, and
-          // both err *large* — hence the coefficient well under a half, and the
-          // cap:
-          //
-          //  - Box3 is axis-aligned in **world** space, so a hull on a diagonal
-          //    heading reports `min(x, z)` of about 0.7x its *length*, not its
-          //    beam. Measured on the `open` preset: two 44 m boats came back
-          //    with 24 m "beams".
-          //  - A ship group is not only its hull. Masts, rigging and
-          //    running-light glows all land in the same box.
-          //
-          // The collar reaches a multiple of this radius, so an over-read
-          // throws a disc of foam tens of metres across open water — which is
-          // what it was doing, and which was the actual cause of the "sea
-          // covered edge to edge in whitecaps" defect. The Jacobian whitecaps
-          // were never the problem; a `vec3(breaking, surf, hullNear)` debug
-          // split showed the near field solid blue and the crests sparse.
-          //
-          // ponytail: heuristic, not a beam. A hull wanting an exact collar can
-          // publish `userData.oceanFoamRadius` itself — this respects it.
-          radius = Math.min(9, Math.max(1.5, Math.min(_size.x, _size.z) * 0.35))
+        if (!(radius > 0)) {
+          radius = 4
           child.userData.oceanFoamRadius = radius
         }
         _floatScratch.push({ x: child.position.x, z: child.position.z, radius, strength: 1, d2 })

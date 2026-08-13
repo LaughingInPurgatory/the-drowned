@@ -7,10 +7,15 @@ import { ensureBlueprintMaps, updateCraftingJobs } from './crafting.js'
 import { applyOfflineTime, reanchorGameClock } from './gameClock.js'
 import { ensureDrones } from './drones.js'
 import { ensureLawStanding } from './security.js'
-import { getWorld, normalizeCoastalPortPositions } from '../procgen/world.js'
+import { generateWorld, getWorld, CANONICAL_WORLD_SEED } from '../procgen/world.js'
+import { seedMissionsForGalaxy } from '../data/missionTemplates.js'
+import { mulberry32 } from '../procgen/prng.js'
 import { tickGalaxyAnomalies } from './systemScan.js'
 import { ensureSkills } from './skills.js'
 import { normalizeAvatarSelection, randomAvatarSelection } from '../render/playerAvatarVariants.js'
+
+/** Player/assets-only save. Older files that embed `galaxy` are version 1. */
+export const SAVE_VERSION = 2
 
 /** Remap qty map keys through a resolver, merging collisions. */
 function remapCountMap(map, resolveKey) {
@@ -127,52 +132,155 @@ function migrateLegacyIds(gameState) {
   }
 }
 
+function isLegacyWorldSave(data) {
+  if (!data || typeof data !== 'object') return false
+  if (data.galaxy && typeof data.galaxy === 'object') return true
+  return (Number(data.version) || 1) < SAVE_VERSION
+}
+
+function emptyHarbourStorage() {
+  return {
+    cargo: {},
+    miningHold: {},
+    shipParts: 0,
+    ships: [],
+    weapons: {},
+    accessories: {},
+    blueprints: {},
+    drones: {}
+  }
+}
+
+function addCountMap(target, source) {
+  if (!source || typeof source !== 'object') return
+  for (const [id, qty] of Object.entries(source)) {
+    const n = Number(qty) || 0
+    if (n <= 0) continue
+    target[id] = (target[id] ?? 0) + n
+  }
+}
+
+function mergeHarbourStorage(target, source) {
+  if (!source) return
+  addCountMap(target.cargo ??= {}, source.cargo)
+  addCountMap(target.miningHold ??= {}, source.miningHold)
+  addCountMap(target.weapons ??= {}, source.weapons)
+  addCountMap(target.accessories ??= {}, source.accessories)
+  addCountMap(target.blueprints ??= {}, source.blueprints)
+  addCountMap(target.drones ??= {}, source.drones)
+  target.shipParts = (Number(target.shipParts) || 0) + (Number(source.shipParts) || 0)
+  target.ships = [...(target.ships ?? []), ...(source.ships ?? [])]
+}
+
+function homePortOf(world, galaxy) {
+  return (
+    world?.bodies?.find((b) => b.id === galaxy?.homePortId) ??
+    world?.bodies?.find((b) => b.kind === 'port' && b.name === 'Port Haven') ??
+    world?.bodies?.find((b) => b.kind === 'port') ??
+    null
+  )
+}
+
+/** One-time: old world-saves drop at Port Haven. Assets stay put. */
+function portCaptainToHome(gameState, homePort) {
+  if (!homePort || !gameState?.player) return
+  const world = getWorld(gameState.galaxy)
+  const player = gameState.player
+  player.homePortId = homePort.id
+  if (world?.id) {
+    player.currentSystemId = world.id
+    player.startingSystemId = world.id
+  }
+  player.dockedBodyId = homePort.id
+  player.dockedExteriorPosition = null
+  player.dockedApproachDir = null
+  player.waypointBodyId = null
+  player.waypointPosition = null
+  player.combatEngagedNpcIds = {}
+  if (player.onFoot) {
+    player.onFoot.active = false
+    player.onFoot.bodyId = null
+  }
+  const ship = player.ship
+  if (ship) {
+    ship.position = [homePort.position[0], 0, homePort.position[2]]
+    ship.velocity = [0, 0, 0]
+    ship.heading = 0
+    ship.throttle = 0
+  }
+}
+
+/** Storage / jobs whose harbour no longer exists land at Port Haven. */
+function rehomeOrphanedAssets(gameState, homePortId) {
+  if (!homePortId) return
+  const world = getWorld(gameState.galaxy)
+  const live = new Set((world?.bodies ?? []).map((b) => b.id))
+  const storage = gameState.stationStorage ?? {}
+  for (const [bodyId, pile] of Object.entries(storage)) {
+    if (live.has(bodyId)) continue
+    mergeHarbourStorage((storage[homePortId] ??= emptyHarbourStorage()), pile)
+    delete storage[bodyId]
+  }
+  for (const job of gameState.craftingJobs ?? []) {
+    if (job && !live.has(job.bodyId)) job.bodyId = homePortId
+  }
+}
+
 export function serializeGameState(gameState) {
   // Snapshot clock at save so load can apply offline wall time.
   const nowMs = Date.now()
   if (gameState.simClockOriginMs != null) {
     gameState.simTime = Math.max(0, (nowMs - gameState.simClockOriginMs) / 1000)
   }
-  return {
-    version: gameState.version,
+  const payload = {
+    version: SAVE_VERSION,
     seed: gameState.seed,
+    galaxySeed: gameState.galaxySeed ?? CANONICAL_WORLD_SEED,
     createdAt: gameState.createdAt,
     player: gameState.player,
-    galaxy: gameState.galaxy,
-    economyOverrides: gameState.economyOverrides,
-    marketStock: gameState.marketStock ?? {},
-    missions: gameState.missions,
-    visitedBodyIds: gameState.visitedBodyIds,
-    probedBodyIds: gameState.probedBodyIds,
-    probeCounts: gameState.probeCounts ?? {},
-    stationStorage: gameState.stationStorage,
-    // Wall-clock industry jobs — must persist so crafts finish offline.
+    stationStorage: gameState.stationStorage ?? {},
     craftingJobs: gameState.craftingJobs ?? [],
-    // Campaign clock + rock depletion (respawn after offline hours).
     simTime: gameState.simTime ?? 0,
     savedAtWallMs: nowMs,
-    asteroids: gameState.asteroids ?? {},
     flags: gameState.flags
   }
+  if (gameState.galaxyOpts) payload.galaxyOpts = gameState.galaxyOpts
+  return payload
 }
 
 export function deserializeGameState(data) {
-  // probedBodyIds falls back to [] for saves written before probe missions existed.
-  // probeCounts falls back to {} for older saves (re-probes start from 0).
-  // wrecks/npcs/projectiles stay ephemeral. Asteroids + simTime persist so
-  // belts and other sim-clock systems catch up after offline time.
+  const galaxySeed = data.galaxySeed ?? CANONICAL_WORLD_SEED
+  const galaxyOpts = data.galaxyOpts
+  const galaxy = generateWorld(galaxySeed, galaxyOpts)
+  const world = getWorld(galaxy)
+  const homePort = homePortOf(world, galaxy)
+  const legacy = isLegacyWorldSave(data)
+  const careerSeed = Number.isFinite(Number(data.seed)) ? Number(data.seed) : 0
+  const availableMissions = seedMissionsForGalaxy(mulberry32(careerSeed + 1), galaxy)
+
   const gameState = {
-    ...data,
+    version: SAVE_VERSION,
+    seed: careerSeed,
+    galaxySeed,
+    galaxyOpts,
+    createdAt: data.createdAt,
+    player: data.player,
+    galaxy,
+    economyOverrides: {},
+    marketStock: {},
+    missions: { available: availableMissions, active: [] },
+    visitedBodyIds: [],
+    probedBodyIds: [],
+    probeCounts: {},
+    stationStorage: data.stationStorage ?? {},
+    craftingJobs: data.craftingJobs ?? [],
     npcs: [],
     projectiles: [],
     wrecks: [],
-    asteroids: data.asteroids ?? {},
+    asteroids: {},
     inCombat: false,
     simTime: data.simTime ?? 0,
-    probedBodyIds: data.probedBodyIds ?? [],
-    probeCounts: data.probeCounts ?? {},
-    craftingJobs: data.craftingJobs ?? [],
-    marketStock: data.marketStock ?? {}
+    flags: data.flags ?? { alive: true, startingSystemPeaceBroken: false }
   }
   if (gameState.player?.avatar) gameState.player.avatar = normalizeAvatarSelection(gameState.player.avatar)
   else if (gameState.player) gameState.player.avatar = randomAvatarSelection()
@@ -243,25 +351,12 @@ export function deserializeGameState(data) {
     }
   }
   ensureBlueprintMaps(gameState)
-  // All stations always have a full shipyard (ships + armoury). Older saves
-  // only rolled ~60% of stations with hasShipyard — force true on load.
-  for (const system of gameState.galaxy?.systems ?? []) {
-    for (const body of system.bodies ?? []) {
-      if (body.kind === 'port') body.hasShipyard = true
-    }
-  }
-  const world = getWorld(gameState.galaxy)
-  // Older saves placed harbours well offshore. Keep their stored world usable
-  // after the shoreline layout change; floating outposts are untouched.
-  normalizeCoastalPortPositions(world, gameState.player)
   // One sea — both ids always name it, whatever a save happened to store.
   gameState.player.currentSystemId = world?.id ?? gameState.player.currentSystemId
   gameState.player.startingSystemId = world?.id ?? gameState.player.startingSystemId
   gameState.player.waypointPosition ??= null
-  gameState.player.homePortId ??=
-    gameState.galaxy?.homePortId ?? world?.bodies.find((b) => b.isHome)?.id ?? null
-  // Fixed world layout seed (layout is regenerated only on New Game).
-  gameState.galaxySeed ??= data.galaxySeed ?? data.seed ?? null
+  gameState.player.homePortId ??= homePort?.id ?? galaxy.homePortId ?? null
+  gameState.galaxySeed = galaxySeed
   // Pre-docking-save fields: null = was flying when saved.
   gameState.player.dockedBodyId ??= null
   gameState.player.dockedExteriorPosition ??= null
@@ -313,8 +408,14 @@ export function deserializeGameState(data) {
   delete ship.lastHitAt
   gameState.flags.startingSystemPeaceBroken ??= false
 
+  if (legacy) {
+    portCaptainToHome(gameState, homePort)
+    rehomeOrphanedAssets(gameState, homePort?.id)
+    gameState._portedFromLegacySave = true
+  }
+
   const nowMs = Date.now()
-  // Advance campaign clock by real time since save (asteroid respawns, etc.).
+  // Advance campaign clock by real time since save (Industry already uses wall time).
   const offlineS = applyOfflineTime(gameState, nowMs, data.savedAtWallMs ?? null)
   gameState._offlineSecondsApplied = offlineS
   reanchorGameClock(gameState, nowMs)

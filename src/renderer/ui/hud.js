@@ -273,11 +273,19 @@ const STYLE = `
   pointer-events: none; display: none;
 }
 #hud .target-panel.visible { display: block; }
+/* Full red outline on hostile locks (land wildlife or sea contacts).
+   !important beats the global worn-plate border in index.html. */
+html #hud .target-panel.hostile,
 #hud .target-panel.hostile {
-  border-color: rgba(224,90,90,0.55); border-left-color: #e05a5a;
+  border: 1px solid #e05a5a !important;
   box-shadow:
-    0 2px 4px rgba(0,0,0,0.85),
-    0 6px 14px rgba(0,0,0,0.55);
+    inset 0 1px 0 rgba(224, 90, 90, 0.45),
+    inset 1px 0 0 rgba(224, 90, 90, 0.2),
+    inset -1px 0 0 rgba(224, 90, 90, 0.2),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.65),
+    0 0 0 1px #e05a5a,
+    0 2px 4px rgba(0, 0, 0, 0.85),
+    0 6px 14px rgba(0, 0, 0, 0.55) !important;
 }
 #hud .target-panel .tp-tag {
   font-size: 9px; letter-spacing: 2px; text-transform: uppercase;
@@ -628,7 +636,7 @@ export function createHud(container) {
      *   armor?:number, maxArmor?:number,
      *   hull?:number, maxHull?:number,
      *   oreLeft?:number, oreMax?:number,
-     *   kind?:string
+     *   living?:boolean
      * }} info
      */
     updateTarget(info) {
@@ -661,7 +669,7 @@ export function createHud(container) {
         parts.push(barRow('Armour', info.armor ?? 0, info.maxArmor, 'armor'))
       }
       if (info.maxHull != null && info.maxHull > 0) {
-        parts.push(barRow('Hull', info.hull ?? 0, info.maxHull, 'hull'))
+        parts.push(barRow(info.living ? 'Health' : 'Hull', info.hull ?? 0, info.maxHull, 'hull'))
       }
       if (info.oreMax != null && info.oreMax > 0) {
         parts.push(barRow('Salvage', info.oreLeft ?? 0, info.oreMax, 'ore'))

@@ -2181,14 +2181,15 @@ export function offerShipNavAreaLights(mesh, pool) {
   }
 }
 
-/** 0 by day, 1 deep night — soft ramp through twilight for light fade. */
+/** 0 by day, 1 deep night — follows the same day/night fade as the sky. */
 export function nightLightFactorFromDay(day) {
   if (!day) return 0
+  if (Number.isFinite(day.dayAmount)) return 1 - day.dayAmount
   const el = day.elevation ?? 0
-  // Full on below horizon; fully off once the sun is clearly up.
-  if (el <= -0.06) return 1
-  if (el >= 0.14) return 0
-  return 1 - (el + 0.06) / 0.2
+  if (el <= -0.18) return 1
+  if (el >= 0.28) return 0
+  const t = (el + 0.18) / 0.46
+  return 1 - t * t * (3 - 2 * t)
 }
 
 export function buildShipMesh(shipClass, opts = {}) {
@@ -2447,6 +2448,8 @@ export function buildShipMesh(shipClass, opts = {}) {
     }
   })
   group.userData.premiumHull = premium
+  const beam = Math.max(...(shipClass.hull?.stationWidths ?? [2.4]))
+  group.userData.oceanFoamRadius = Math.min(9, Math.max(1.5, beam * 0.45))
   return group
 }
 

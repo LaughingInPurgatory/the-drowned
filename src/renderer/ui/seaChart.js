@@ -181,15 +181,15 @@ export function createSeaChart(container, gameState, hooks = {}) {
   function worldToScreen(x, z) {
     const rect = canvas.getBoundingClientRect()
     const k = scale()
-    // The sea's +Z axis is north: charts are conventional north-up, so +Z
-    // moves toward smaller canvas Y (the top edge).
-    return [rect.width / 2 + (x - centreX) * k, rect.height / 2 - (z - centreZ) * k]
+    // North-up: +Z is north (up). +X is west in this world (port when the bow
+    // is north), so X is mirrored to keep west on the left and east on the right.
+    return [rect.width / 2 - (x - centreX) * k, rect.height / 2 - (z - centreZ) * k]
   }
 
   function screenToWorld(px, py) {
     const rect = canvas.getBoundingClientRect()
     const k = scale()
-    return [centreX + (px - rect.width / 2) / k, centreZ - (py - rect.height / 2) / k]
+    return [centreX - (px - rect.width / 2) / k, centreZ - (py - rect.height / 2) / k]
   }
 
   function bodies() {
@@ -397,12 +397,12 @@ export function createSeaChart(container, gameState, hooks = {}) {
     }
 
     // You — bright yellow mark with heading.
-    // Chart maps world +X → right, +Z → up; ship heading 0 is +Z / north.
+    // +Z / heading 0 is north (up). X is mirrored, so canvas yaw is -heading.
     {
       const p = playerPosition()
       const [x, y] = worldToScreen(p[0], p[2])
       const heading = Number(playerHeading())
-      const yaw = Number.isFinite(heading) ? heading : 0
+      const yaw = Number.isFinite(heading) ? -heading : 0
       ctx.save()
       // Soft glow under the arrow
       const glow = ctx.createRadialGradient(x, y, 0, x, y, 16)
@@ -542,7 +542,7 @@ export function createSeaChart(container, gameState, hooks = {}) {
     drag.y = e.clientY
     drag.moved += Math.abs(dx) + Math.abs(dy)
     const k = scale()
-    centreX -= dx / k
+    centreX += dx / k
     centreZ += dy / k
     draw()
   })

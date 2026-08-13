@@ -33,9 +33,10 @@ export function createGameState({
   const availableMissions = seedMissionsForGalaxy(missionRng, galaxy)
 
   const gameState = {
-    version: 1,
+    version: 2,
     seed,
     galaxySeed,
+    galaxyOpts,
     createdAt: new Date().toISOString(),
     player: {
       name: characterName,

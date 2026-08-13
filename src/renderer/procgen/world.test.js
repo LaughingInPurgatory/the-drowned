@@ -38,6 +38,17 @@ test('generation is deterministic for a seed', () => {
   )
 })
 
+test('cached worlds are isolated clones, not a shared object', () => {
+  const a = generateWorld(99, TEST_WORLD_OPTS)
+  const b = generateWorld(99, TEST_WORLD_OPTS)
+  assert.notEqual(a, b)
+  assert.notEqual(getWorld(a), getWorld(b))
+  getWorld(a).securityRating = 0
+  getWorld(a).bodies[0].name = 'mutated'
+  assert.notEqual(getWorld(b).securityRating, 0)
+  assert.notEqual(getWorld(b).bodies[0].name, 'mutated')
+})
+
 test('every body floats at sea level inside the world edge', () => {
   for (const body of getWorld(world()).bodies) {
     assert.equal(body.position[1], 0, `${body.name} is not at sea level`)

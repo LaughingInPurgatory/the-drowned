@@ -20,229 +20,51 @@ const DAY_START_PHASE = 0.2
 const SUN_TILT = 0.42
 
 /**
- * Palette keyframes by sun elevation (-1 below, +1 overhead). Between these the
- * values are interpolated, so dawn and dusk get their colour for free rather
- * than needing their own branch.
- *
- * Tuned for a damaged post-nuclear sky: deep zenith blues by day (not holiday
- * postcard cyan), dusty warm horizons.
- *
- * Twilight is deliberately stretched. The keys between elevation -0.03 and
- * -0.52 cover what is really the first 18° below the horizon, i.e. about 70
- * minutes at this latitude — but the day here is 1500 s, so honestly-placed
- * keys would give a dusk lasting five seconds and the sky would snap from
- * sunset to a full star field. Spreading the blue hour across a third of the
- * sun's downward arc is what buys an evening you can actually sail through.
- * `stars` rides the same curve: zero while the sky is still bright, then in
- * gradually, so the field arrives brightest-first rather than all at once.
+ * Two palettes only. Dawn and dusk are a brightness fade, not a colour show —
+ * no orange belt, no magenta blue hour. `dayAmount(elevation)` is the single
+ * mix (1 = noon, 0 = night).
  */
-const KEYS = [
-  {
-    // Deep night. Moon and starlight only.
-    at: -0.72,
-    zenith: 0x02040b,
-    horizon: 0x070c17,
-    fog: 0x080d17,
-    fogDensity: 0.00038,
-    sun: 0x9fb4d8,
-    sunIntensity: 0.13,
-    hemiSky: 0x18212f,
-    hemiGround: 0x070a0e,
-    hemiIntensity: 0.33,
-    env: 0.19,
-    seaDeep: 0x02070e,
-    seaCrest: 0x081625,
-    cloud: 0x0c1119,
-    cloudLit: 0x222c3b,
-    stars: 1
-  },
-  {
-    // Astronomical twilight. Night everywhere but a cold floor low in the west,
-    // and the first of the faint stars are still arriving.
-    at: -0.52,
-    zenith: 0x040915,
-    horizon: 0x0b1730,
-    fog: 0x0a1426,
-    fogDensity: 0.00037,
-    sun: 0x8291bc,
-    sunIntensity: 0.17,
-    hemiSky: 0x1d2b45,
-    hemiGround: 0x090d13,
-    hemiIntensity: 0.37,
-    env: 0.23,
-    seaDeep: 0x030a15,
-    seaCrest: 0x0c1d31,
-    cloud: 0x111726,
-    cloudLit: 0x2b3750,
-    stars: 0.8
-  },
-  {
-    // Late nautical twilight. Deep saturated blue still owns the whole dome;
-    // the horizon keeps a thin cold glow where the sun went down.
-    at: -0.34,
-    zenith: 0x061033,
-    horizon: 0x142250,
-    fog: 0x111e40,
-    fogDensity: 0.00036,
-    sun: 0x6c7cb4,
-    sunIntensity: 0.3,
-    hemiSky: 0x2b3b68,
-    hemiGround: 0x0d1118,
-    hemiIntensity: 0.46,
-    env: 0.33,
-    seaDeep: 0x040f20,
-    seaCrest: 0x112742,
-    cloud: 0x18223e,
-    cloudLit: 0x445074,
-    stars: 0.45
-  },
-  {
-    // The blue hour. Cobalt overhead running down to a warm ember, with the
-    // Belt of Venus between them. This is the frame the evening exists for, so
-    // it is held far longer in sun elevation than the real thing — on a 25
-    // minute day a physically honest dusk is over in seconds.
-    at: -0.2,
-    zenith: 0x0d2a6e,
-    horizon: 0x6e3a56,
-    fog: 0x2c2440,
-    fogDensity: 0.00035,
-    sun: 0xa8688c,
-    sunIntensity: 0.46,
-    hemiSky: 0x3d4c7c,
-    hemiGround: 0x11131c,
-    hemiIntensity: 0.54,
-    env: 0.4,
-    seaDeep: 0x051228,
-    seaCrest: 0x172f52,
-    cloud: 0x232a48,
-    cloudLit: 0x8c5a72,
-    stars: 0.15
-  },
-  {
-    // Civil twilight. Rich blue zenith, magenta belt, hot ember on the skyline.
-    at: -0.1,
-    zenith: 0x14418c,
-    horizon: 0xa8523e,
-    fog: 0x5c3840,
-    fogDensity: 0.00034,
-    sun: 0xe0784c,
-    sunIntensity: 0.85,
-    hemiSky: 0x556090,
-    hemiGround: 0x1a1618,
-    hemiIntensity: 0.62,
-    env: 0.54,
-    seaDeep: 0x071626,
-    seaCrest: 0x1e3a58,
-    cloud: 0x33304a,
-    cloudLit: 0xc0704e,
-    stars: 0.03
-  },
-  {
-    // Afterglow at its brightest — the horizon burns and the zenith is still a
-    // proper daylight blue. No stars yet; the sky is far too bright for them.
-    at: -0.03,
-    zenith: 0x1e5aa4,
-    horizon: 0xe07434,
-    fog: 0x936050,
-    fogDensity: 0.00034,
-    sun: 0xff9046,
-    sunIntensity: 1.35,
-    hemiSky: 0x6d7c9c,
-    hemiGround: 0x261f1a,
-    hemiIntensity: 0.7,
-    env: 0.68,
-    seaDeep: 0x0a1a2a,
-    seaCrest: 0x28485f,
-    cloud: 0x3d3546,
-    cloudLit: 0xf08a54,
-    stars: 0
-  },
-  {
-    // First light / last light. Horizon burns; zenith stays cold.
-    // Stronger key vs fill so long golden shadows and wet-plate rims read.
-    at: 0.04,
-    zenith: 0x2166a8,
-    horizon: 0xe07830,
-    fog: 0xa06848,
-    fogDensity: 0.00034,
-    sun: 0xff9440,
-    sunIntensity: 1.65,
-    hemiSky: 0x6a6474,
-    hemiGround: 0x2a221c,
-    hemiIntensity: 0.72,
-    env: 0.78,
-    seaDeep: 0x0a1522,
-    seaCrest: 0x2c3c4e,
-    cloud: 0x3e303c,
-    cloudLit: 0xff9a58,
-    stars: 0
-  },
-  {
-    // Low sun. Dust in the air does most of the work — warm band, still a
-    // real blue overhead. Directional punch for harbour contact shadows.
-    at: 0.22,
-    zenith: 0x2a6a9c,
-    horizon: 0xd8a070,
-    fog: 0xa89078,
-    fogDensity: 0.00029,
-    sun: 0xffd0a0,
-    sunIntensity: 2.4,
-    hemiSky: 0x8ea6bc,
-    hemiGround: 0x36483e,
-    hemiIntensity: 0.78,
-    env: 1.05,
-    seaDeep: 0x081c2e,
-    seaCrest: 0x1c4c66,
-    // Darker body + warm lit face so the deck reads volume, not cotton.
-    cloud: 0x524e60,
-    cloudLit: 0xffd4a8,
-    stars: 0
-  },
-  {
-    // Full day. Saturated zenith blue, dusty warm horizon — not holiday cyan,
-    // not overcast grey. Lower hemi + hotter key for directional wet metal.
-    // Cloud body stays slate so undersides can go dark.
-    at: 0.75,
-    zenith: 0x1470b0,
-    // Dusty, but not golden. A yellow-green horizon at noon plus a warm fog
-    // reads as late afternoon in every screenshot; the haze here is airborne
-    // dust over water, which scatters pale and slightly cool, not tan.
-    horizon: 0xa6b3b4,
-    fog: 0x93a1a0,
-    fogDensity: 0.00024,
-    sun: 0xfff0d8,
-    sunIntensity: 3.0,
-    hemiSky: 0x96b4c8,
-    hemiGround: 0x364c44,
-    hemiIntensity: 0.72,
-    env: 1.18,
-    seaDeep: 0x0a2136,
-    seaCrest: 0x216580,
-    cloud: 0x4e5a68,
-    cloudLit: 0xf8f4ea,
-    stars: 0
-  }
-]
+const NIGHT = {
+  zenith: 0x02040b,
+  horizon: 0x070c17,
+  fog: 0x080d17,
+  fogDensity: 0.00038,
+  sun: 0x9fb4d8,
+  sunIntensity: 0.13,
+  hemiSky: 0x18212f,
+  hemiGround: 0x070a0e,
+  hemiIntensity: 0.33,
+  env: 0.19,
+  seaDeep: 0x02070e,
+  seaCrest: 0x081625,
+  cloud: 0x0c1119,
+  cloudLit: 0x222c3b
+}
+
+const DAY = {
+  zenith: 0x1470b0,
+  horizon: 0xa6b3b4,
+  fog: 0x93a1a0,
+  fogDensity: 0.00024,
+  sun: 0xfff0d8,
+  sunIntensity: 3.0,
+  hemiSky: 0x96b4c8,
+  hemiGround: 0x364c44,
+  hemiIntensity: 0.72,
+  env: 1.18,
+  seaDeep: 0x0a2136,
+  seaCrest: 0x216580,
+  cloud: 0x4e5a68,
+  cloudLit: 0xf8f4ea
+}
 
 const _a = new THREE.Color()
 const _b = new THREE.Color()
 
-function lerpKeys(elevation) {
-  let lo = KEYS[0]
-  let hi = KEYS[KEYS.length - 1]
-  for (let i = 0; i < KEYS.length - 1; i++) {
-    if (elevation >= KEYS[i].at && elevation <= KEYS[i + 1].at) {
-      lo = KEYS[i]
-      hi = KEYS[i + 1]
-      break
-    }
-  }
-  if (elevation < KEYS[0].at) return { lo: KEYS[0], hi: KEYS[0], t: 0 }
-  if (elevation > hi.at && hi === KEYS[KEYS.length - 1]) {
-    return { lo: hi, hi, t: 0 }
-  }
-  const span = hi.at - lo.at
-  return { lo, hi, t: span > 1e-6 ? (elevation - lo.at) / span : 0 }
+/** 1 at full day, 0 at full night. Smooth across the horizon, no colour keys. */
+export function dayAmountFromElevation(elevation) {
+  const t = Math.min(1, Math.max(0, (elevation + 0.18) / 0.46))
+  return t * t * (3 - 2 * t)
 }
 
 function mixColor(out, a, b, t) {
@@ -278,7 +100,8 @@ const _out = {
   /** 0 new, 1 full — drives the lit fraction of the disc. */
   moonPhase: 1,
   starOpacity: 0,
-  isNight: false
+  isNight: false,
+  dayAmount: 1
 }
 
 /**
@@ -320,25 +143,26 @@ export function daylightAt(t) {
   // Illuminated fraction is just how opposed the moon is to the sun.
   _out.moonPhase = 0.5 - 0.5 * _out.moonDirection.dot(_out.sunDirection)
 
-  const { lo, hi, t: k } = lerpKeys(elevation)
+  const k = dayAmountFromElevation(elevation)
   _out.phase = phase
   _out.elevation = elevation
-  mixColor(_out.zenith, lo.zenith, hi.zenith, k)
-  mixColor(_out.horizon, lo.horizon, hi.horizon, k)
-  mixColor(_out.fog, lo.fog, hi.fog, k)
-  _out.fogDensity = mixNum(lo.fogDensity, hi.fogDensity, k)
-  mixColor(_out.sunColor, lo.sun, hi.sun, k)
-  _out.sunIntensity = mixNum(lo.sunIntensity, hi.sunIntensity, k)
-  mixColor(_out.hemiSky, lo.hemiSky, hi.hemiSky, k)
-  mixColor(_out.hemiGround, lo.hemiGround, hi.hemiGround, k)
-  _out.hemiIntensity = mixNum(lo.hemiIntensity, hi.hemiIntensity, k)
-  _out.envIntensity = mixNum(lo.env, hi.env, k)
-  mixColor(_out.seaDeep, lo.seaDeep, hi.seaDeep, k)
-  mixColor(_out.seaCrest, lo.seaCrest, hi.seaCrest, k)
-  mixColor(_out.cloudColor, lo.cloud, hi.cloud, k)
-  mixColor(_out.cloudLit, lo.cloudLit, hi.cloudLit, k)
-  _out.starOpacity = mixNum(lo.stars, hi.stars, k)
-  _out.isNight = elevation < 0
+  _out.dayAmount = k
+  mixColor(_out.zenith, NIGHT.zenith, DAY.zenith, k)
+  mixColor(_out.horizon, NIGHT.horizon, DAY.horizon, k)
+  mixColor(_out.fog, NIGHT.fog, DAY.fog, k)
+  _out.fogDensity = mixNum(NIGHT.fogDensity, DAY.fogDensity, k)
+  mixColor(_out.sunColor, NIGHT.sun, DAY.sun, k)
+  _out.sunIntensity = mixNum(NIGHT.sunIntensity, DAY.sunIntensity, k)
+  mixColor(_out.hemiSky, NIGHT.hemiSky, DAY.hemiSky, k)
+  mixColor(_out.hemiGround, NIGHT.hemiGround, DAY.hemiGround, k)
+  _out.hemiIntensity = mixNum(NIGHT.hemiIntensity, DAY.hemiIntensity, k)
+  _out.envIntensity = mixNum(NIGHT.env, DAY.env, k)
+  mixColor(_out.seaDeep, NIGHT.seaDeep, DAY.seaDeep, k)
+  mixColor(_out.seaCrest, NIGHT.seaCrest, DAY.seaCrest, k)
+  mixColor(_out.cloudColor, NIGHT.cloud, DAY.cloud, k)
+  mixColor(_out.cloudLit, NIGHT.cloudLit, DAY.cloudLit, k)
+  _out.starOpacity = (1 - k) * (1 - k)
+  _out.isNight = k < 0.5
   return _out
 }
 

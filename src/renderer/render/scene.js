@@ -136,7 +136,7 @@ export async function createScene(container) {
   // bias it needs. The pass is depth-only and runs on a 2-8 frame cadence
   // (see updateEnvironment), so the extra fill is affordable; drop it back to
   // 1024 in the `low` tier if a weak GPU ever needs it.
-  sun.shadow.mapSize.set(2048, 2048)
+  sun.shadow.mapSize.set(1536, 1536)
   const shadowCam = sun.shadow.camera
   // Layer 1 is reserved for the local first-person body: it is excluded from
   // the view camera, but included in the sun's shadow pass so the survivor's
@@ -452,7 +452,7 @@ export async function createScene(container) {
     // halved while the sunset band was still burning across the sky. That is
     // why 18:00 came back as a black sea with blown-white specular: night
     // exposure applied to daylight-range highlights.
-    const nightF = smoothstep01((0.02 - day.elevation) / 0.74)
+    const nightF = 1 - (day.dayAmount ?? 0)
     // Expose *up* at night and light *down*, instead of flat exposure with a
     // lifted ambient. The old floors (moon key 1.45, hemi 0.9, env 0.72 — half
     // a noon sun) are why the hillside at 21:00 read as a tan daylit slope while
@@ -544,7 +544,7 @@ export async function createScene(container) {
     // the shadow pass bounded without leaving a visibly stale avatar/ship.
     const cameraMoved =
       !haveShadowHistory || sun.target.position.distanceToSquared(lastEnvironmentTarget) > 0.0025
-    const shadowCadence = cameraMoved ? 2 : 8
+    const shadowCadence = cameraMoved ? 4 : 8
     const modeChanged = keyMode !== lastCelestialMode || shadowEnabled !== lastShadowEnabled
     const extentChanged = Math.abs(shadowExtent - lastShadowExtent) > 0.01
     const shadowDue = shadowFrame - lastShadowMapFrame >= shadowCadence

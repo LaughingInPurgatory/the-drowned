@@ -88,11 +88,10 @@ import { chromaticAberration } from 'three/addons/tsl/display/ChromaticAberratio
 const BYPASS_CHAIN = false
 
 export const POST_QUALITY = {
-  // `ssaa` must be a whole number — see the note in createPostFx. 2 is the only
-  // useful step up from 1, and it costs 4x the fragment work, so it is the first
-  // thing to drop on a weak GPU.
-  ultra: { ssaa: 2, ao: true, aoScale: 1, dof: true, sharpen: true },
-  high: { ssaa: 2, ao: true, aoScale: 1, dof: true, sharpen: true },
+  // `ssaa` must be a whole number — see the note in createPostFx. 1 plus
+  // sharpen is the default; 2 costs 4x the fragment work.
+  ultra: { ssaa: 1, ao: true, aoScale: 0.5, dof: true, sharpen: true },
+  high: { ssaa: 1, ao: true, aoScale: 0.5, dof: true, sharpen: true },
   medium: { ssaa: 1, ao: true, aoScale: 0.5, dof: false, sharpen: true },
   low: { ssaa: 1, ao: false, aoScale: 0.5, dof: false, sharpen: false }
 }

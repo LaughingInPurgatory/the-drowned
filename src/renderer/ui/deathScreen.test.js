@@ -2,9 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ACIDIC_SEA_DEATH_PUNS,
+  DEATH_HEADLINES,
+  classifyDeath,
   describeOnFootDeath,
   formatDeathCause,
   formatFaction,
+  pickDeathHeadline,
   pickDeathPun,
   shouldShowDeathContact
 } from './deathScreen.js'
@@ -50,6 +53,36 @@ test('acidic seawater deaths choose from twenty dedicated puns', () => {
   for (let i = 0; i < 20; i++) {
     assert.ok(ACIDIC_SEA_DEATH_PUNS.includes(pickDeathPun('Killed by acidic seawater')))
   }
+})
+
+test('death headlines include the requested skipper / nap lines', () => {
+  assert.ok(DEATH_HEADLINES.generic.includes('This skipper is deceased'))
+  assert.ok(DEATH_HEADLINES.sea.includes('You took a water nap'))
+  assert.ok(DEATH_HEADLINES.land.includes('You took a dirt nap'))
+})
+
+test('death kind follows how and where the player went down', () => {
+  assert.equal(classifyDeath('Killed by acidic seawater'), 'acid')
+  assert.equal(classifyDeath('Rammed by Coastguard Cutter Piloted by Wren'), 'ram')
+  assert.equal(classifyDeath('Mauled by a wild dog', { onFoot: true }), 'dog')
+  assert.equal(classifyDeath('Gored by a wild boar', { onFoot: true }), 'boar')
+  assert.equal(classifyDeath('stumbled and fell...a lot', { onFoot: true }), 'fall')
+  assert.equal(classifyDeath('Killed ashore by naval gunfire from Cutter', { onFoot: true }), 'gunfire')
+  assert.equal(classifyDeath('Ship destroyed in combat'), 'sea')
+  assert.equal(classifyDeath(null, { onFoot: true }), 'land')
+})
+
+test('a forced roll can pick a how-you-died headline', () => {
+  const alwaysFirst = () => 0
+  assert.equal(pickDeathHeadline('Killed by acidic seawater', { random: alwaysFirst }), 'You took a water nap')
+  assert.equal(
+    pickDeathHeadline('stumbled and fell...a lot', { onFoot: true, random: alwaysFirst }),
+    'Gravity collected'
+  )
+  assert.equal(
+    pickDeathHeadline('Ship destroyed in combat', { random: alwaysFirst }),
+    'You took a water nap'
+  )
 })
 
 test('on-foot death cause names the attacking vessel when known', () => {

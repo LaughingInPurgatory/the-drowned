@@ -422,8 +422,29 @@ function buildHomeArchipelago(rng, bodies, nextId, usedNames) {
  *
  * Returns the same `{ seed, systems, species }` shape the space build used, with
  * exactly one entry in `systems` — see the note at the top of this file.
+ *
+ * Canonical (and any other seed+opts pair) is built once and cloned. The title
+ * already pays for the playable sea; New Game must not spend another 1.5s+
+ * placing 300 bodies. Callers get an isolated copy so play can mutate
+ * security, breakwaters, etc. without poisoning the cache.
  */
+const _generatedWorldCache = new Map()
+
+function worldCacheKey(seed, opts) {
+  return [
+    seed,
+    opts.portCount ?? DEFAULT_PORT_COUNT,
+    opts.outpostCount ?? DEFAULT_OUTPOST_COUNT,
+    opts.wreckFieldCount ?? DEFAULT_WRECK_FIELD_COUNT,
+    opts.speciesCount ?? DEFAULT_SPECIES_COUNT
+  ].join('|')
+}
+
 export function generateWorld(seed = CANONICAL_WORLD_SEED, opts = {}) {
+  const cacheKey = worldCacheKey(seed, opts)
+  const cached = _generatedWorldCache.get(cacheKey)
+  if (cached) return structuredClone(cached)
+
   const {
     portCount = DEFAULT_PORT_COUNT,
     outpostCount = DEFAULT_OUTPOST_COUNT,
@@ -503,7 +524,9 @@ export function generateWorld(seed = CANONICAL_WORLD_SEED, opts = {}) {
     species.push({ id: `faction-${i}`, name: generateSpeciesName(rng), leader: generateHumanName(rng) })
   }
 
-  return { seed, systems: [world], species, homePortId: homePort.id, _nextBodyId: idCounter }
+  const generated = { seed, systems: [world], species, homePortId: homePort.id, _nextBodyId: idCounter }
+  _generatedWorldCache.set(cacheKey, generated)
+  return structuredClone(generated)
 }
 
 /** Smaller world for tests — same generator, fewer bodies. */

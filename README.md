@@ -113,7 +113,7 @@ There is no roll, pitch or vertical thrust input for the boat. You are driving a
 
 The main menu and pause menu both include **Settings** with separate **Sound & Volume**, **UI Colour** and **Controls** panels. Sound & Volume has independent Sound Effects, Music and Sea Sound sliders; each updates live, and moving a volume to 0 mutes that channel. Preferences are saved for the next launch.
 
-Saves are manual and persistent. They remember your ship, local harbour storage, market stock, crafting jobs, depleted wreck material, campaign time, waypoints, notoriety and on-foot state. Saving while ashore restores both the player’s island position and the ship’s parked position. NPCs, projectiles and temporary combat wrecks are not saved. The ocean world is a new-game world, so old space-era saves are not compatible.
+Saves are manual and persistent. They remember the captain: the active ship and its cargo, harbour storage (goods, parked hulls, weapons, blueprints), Industry jobs, credits, law standing, and on-foot or at-sea pose. The sea itself is regenerated from the fixed world seed — markets, wreck fields, mission boards and traffic are not stored. Saving while ashore restores both the player’s island position and the ship’s parked position. Older world-saves are imported once: you arrive at Port Haven with every asset still in your holds and warehouses.
 
 ## Development
 

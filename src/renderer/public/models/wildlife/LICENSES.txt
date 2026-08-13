@@ -1,9 +1,15 @@
-All four wildlife meshes are CC0 assets downloaded from OpenGameArt:
+Wildlife meshes and coats:
 
-Rabbit: https://opengameart.org/content/rabbit-0
-Deer: https://opengameart.org/content/deer-low-poly-rigged
-Dog: https://opengameart.org/content/dog-low-poly-rigged
-Cat: https://opengameart.org/content/simple-cat
+Rabbit: https://opengameart.org/content/rabbit-0 (CC0) plus generated coat.jpg
+Deer / wild dog: Quaternius Ultimate Animated Animal Pack (CC0)
+  https://quaternius.com/packs/ultimateanimatedanimals.html
+  Stag.glb, Wolf.glb — walk cycles included
+  Photoreal coat.jpg albedo applied over generated tiling UVs
+Cat: https://opengameart.org/content/simple-cat (CC0) plus generated coat.jpg
+Rat / boar / ferret / stoat: in-engine silhouettes with photoreal coat.jpg maps
 
-The extracted files are used as runtime art assets. No attribution is required
-under CC0, but the source links are retained here for provenance.
+True AAA scanned animals are not available under a shippable free license.
+These are the best CC0 game-ready meshes plus photoreal pelt albedos.
+
+The extracted files are runtime art. No attribution is required under CC0,
+but the source links are kept here for provenance.

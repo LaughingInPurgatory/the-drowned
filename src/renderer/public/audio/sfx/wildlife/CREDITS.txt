@@ -1,0 +1,20 @@
+Sampled wildlife one-shots from Mixkit (royalty-free for games):
+https://mixkit.co/free-sound-effects/animals/
+https://mixkit.co/free-sound-effects/dog/
+
+dog_bark.mp3          Dog barking twice
+dog_bark_angry.mp3    Medium size angry dog bark
+dog_whimper.mp3       Dog whimper
+cat_cry.mp3 / cat_yowl.mp3
+boar_growl.mp3 / boar_snarl.mp3 / beast_growl.mp3
+squeak.mp3 / squeak2.mp3
+animal_bleat.mp3
+deer_bark.mp3         Freesound CC0 — ferventtorpor "Deer_Bark_5_s"
+                      https://freesound.org/people/ferventtorpor/sounds/696776/
+flesh_hit.mp3 / impact_thud.mp3 / punch_hit.mp3 / crunch_hit.mp3 / body_hit.mp3
+flesh_chunk.mp3       Trim of impact_thud.mp3 (unused; kept for reference)
+flesh_wet.mp3         Trim/lowpass of Mixkit "Sword cutting flesh"
+flesh_body.mp3        Trim/lowpass of Mixkit "Soft quick punch"
+dog_bite.mp3          Trim of Mixkit "Human bites a juicy sausage"
+bite_crunch.mp3       Trim of Mixkit "Eating and biting crunchy food"
+dog_whimper.mp3       Trimmed to the whimper; original Mixkit file has ~2.3s of silence

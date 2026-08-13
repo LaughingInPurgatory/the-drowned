@@ -286,15 +286,20 @@ export function createSkyNodeMaterial() {
     const turb = float(3.4)
     const rayAmt = float(2.1)
     const tone = (x) => oneMinus(exp(x.mul(-1.65)))
-    const physRef = tone(atmosphere(refDir, sunDir, turb, rayAmt))
-    const physZen = tone(atmosphere(vec3(0, 1, 0), sunDir, turb, rayAmt))
-    const physDir = tone(atmosphere(d, sunDir, turb, rayAmt))
-    const tintH = clamp(uHorizon.div(max(physRef, vec3(0.015))), 0.2, 4.5)
-    const tintZ = clamp(uZenith.div(max(physZen, vec3(0.015))), 0.2, 4.5)
-    const tint = mix(tintH, tintZ, pow(clamp(elev, 0, 1), 0.5))
-    const physSky = physDir.mul(tint)
-    // Physics leads by day; the palette owns twilight and night, where Preetham
-    // has nothing to say.
+    const physSky = grad.toVar()
+    const addPhysicalSky = () => {
+      const physRef = tone(atmosphere(refDir, sunDir, turb, rayAmt))
+      const physZen = tone(atmosphere(vec3(0, 1, 0), sunDir, turb, rayAmt))
+      const physDir = tone(atmosphere(d, sunDir, turb, rayAmt))
+      const tintH = clamp(uHorizon.div(max(physRef, vec3(0.015))), 0.2, 4.5)
+      const tintZ = clamp(uZenith.div(max(physZen, vec3(0.015))), 0.2, 4.5)
+      const tint = mix(tintH, tintZ, pow(clamp(elev, 0, 1), 0.5))
+      physSky.assign(physDir.mul(tint))
+    }
+    // Preetham is a day model. Skip it once the sun is down — night is the
+    // palette gradient plus stars, and those three atmosphere() calls were
+    // wasted on every sky pixel after dark.
+    If(dayAmt.greaterThan(0.02), addPhysicalSky)
     const c = mix(grad, physSky, dayAmt.mul(0.72)).toVar()
 
     // --- 2. Night sky: stars, milky way, damaged-atmosphere gas -----------

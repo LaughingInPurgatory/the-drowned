@@ -2,8 +2,8 @@
  * Island vegetation models.
  *
  * Primary: Quaternius Ultimate Nature Pack (CC0) — low-poly trees, bushes,
- * plants, grass. Source FBX is solid-colour Phong (Wood / Green / DarkGreen)
- * with no UVs; we bake PBR maps (grass foliage + bark trunks) via triplanar UVs.
+ * plants, grass. Converted GLBs keep the solid-colour Phong groups (Wood /
+ * Green / DarkGreen); we bake PBR maps via triplanar UVs.
  * A textured CC0 broadleaf is retained separately for the closest canopy layer;
  * its alpha-cut leaves and bark maps are intentionally kept intact.
  * Fallback: Kenney Nature Kit GLBs if Quaternius fails to load.
@@ -11,7 +11,6 @@
  */
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js'
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js'
 import { getPlantTextures, retileUVsTriplanar } from './textures.js'
 
@@ -94,13 +93,6 @@ function loadGltf(url) {
   const loader = new GLTFLoader()
   return new Promise((resolve, reject) => {
     loader.load(url, (gltf) => resolve(gltf.scene), undefined, reject)
-  })
-}
-
-function loadFbx(url) {
-  const loader = new FBXLoader()
-  return new Promise((resolve, reject) => {
-    loader.load(url, (obj) => resolve(obj), undefined, reject)
   })
 }
 
@@ -359,7 +351,7 @@ async function loadPackQuaternius() {
   const jobs = []
   for (const name of QUAT_TREES) {
     jobs.push(
-      loadFbx(`${QUAT_BASE}/${name}.fbx`)
+      loadGltf(`${QUAT_BASE}/${name}.glb`)
         .then((scene) => {
           // Normalize tree height to 2 units — placement scales from this.
           cache.set(`tree:${name}`, bakePlantRoot(scene, { targetH: 2, dry: false }))
@@ -369,7 +361,7 @@ async function loadPackQuaternius() {
   }
   for (const name of QUAT_BUSHES) {
     jobs.push(
-      loadFbx(`${QUAT_BASE}/${name}.fbx`)
+      loadGltf(`${QUAT_BASE}/${name}.glb`)
         .then((scene) => {
           cache.set(`bush:${name}`, bakePlantRoot(scene, { targetH: 1.2, dry: false }))
         })
@@ -378,7 +370,7 @@ async function loadPackQuaternius() {
   }
   for (const name of QUAT_GRASS) {
     jobs.push(
-      loadFbx(`${QUAT_BASE}/${name}.fbx`)
+      loadGltf(`${QUAT_BASE}/${name}.glb`)
         .then((scene) => {
           const prep = bakePlantRoot(scene, { targetH: 1, dry: false, isGrass: true })
           cache.set(`grass:${name}`, prep)

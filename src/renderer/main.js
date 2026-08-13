@@ -15,11 +15,15 @@ import { buildHarbourMesh, updateHarbourMesh, offerHarbourAreaLights } from './r
 import { buildHarbourNpcGroup, updateHarbourNpcGroup } from './render/harbourNpcs.js'
 import {
   buildIslandMesh,
+  buildIslandLodMesh,
+  buildIslandTerrainMesh,
+  dressIslandMesh,
   islandMaxShoreline,
   islandGroundYAt,
   islandTerrainYAt,
   islandShorelineToward
 } from './render/islandMesh.js'
+import { getTerrainMaterial } from './render/terrainMaterial.js'
 import {
   buildPlayerAvatarMesh,
   updatePlayerAvatarMesh,
@@ -45,6 +49,7 @@ import { createGullFlock, tryHitGullFlock, updateGullFlock } from './render/seag
 import {
   buildWildlifeMesh,
   createWildlifeBlood,
+  createWildlifeBloodPool,
   loadWildlifeModels,
   updateWildlifeMesh,
   wildlifeModelReady
@@ -148,7 +153,9 @@ import {
   hitWildlifeSegment,
   respawnWildlife,
   updateWildlife,
-  updateWildlifeDogAttacks
+  updateWildlifeDogAttacks,
+  wildlifeStepInterval,
+  WILDLIFE_SPECIES
 } from './game/wildlife.js'
 import {
   ensureLawStanding,
@@ -494,11 +501,11 @@ const AUTOPILOT_DOCK_INNER_SLACK = 120
 const MOORING_STANDOFF = 5
 // Probe flight: fly out → scan 10s → return → yield results.
 /** How long a sounding takes from first ping to reading the return. */
-const PROBE_SCAN_S = 6.5
+const PROBE_SCAN_S = 5.2
 /** Pings per sounding, and the gap between them. Matches render/sonarPulse.js. */
-// Spaced for a long movie-style ping tail (see audio.playSonarPing).
+// Spaced for a movie-style ping tail (see audio.playSonarPing).
 const SONAR_PING_COUNT = 4
-const SONAR_PING_INTERVAL_S = 1.55
+const SONAR_PING_INTERVAL_S = 1.25
 
 const appEl = document.getElementById('app')
 const sessionLoadingEl = document.createElement('div')
@@ -524,6 +531,7 @@ sessionLoadingEl.innerHTML = `
       <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:session-loading-pulse 1.05s ease-in-out 0.18s infinite"></i>
       <i style="width:4px;height:4px;border-radius:50%;background:#ffe6a0;animation:session-loading-pulse 1.05s ease-in-out 0.36s infinite"></i>
     </span></div>
+    <div id="session-loading-stage" style="font:500 12px/1.35 monospace;letter-spacing:0.08em;color:rgba(255,230,160,0.62);min-height:1.35em;text-transform:none;max-width:28em;text-align:center"></div>
   </div>`
 sessionLoadingEl.style.cssText = [
   'position:fixed',
@@ -538,8 +546,28 @@ sessionLoadingEl.style.cssText = [
   'pointer-events:auto'
 ].join(';')
 appEl.appendChild(sessionLoadingEl)
-function setSessionLoading(visible) {
+function setSessionLoadingStage(stage = '') {
+  const el = document.getElementById('session-loading-stage')
+  if (el) el.textContent = stage
+}
+
+function setSessionLoading(visible, stage = '') {
+  sessionLoading = !!visible
   sessionLoadingEl.style.display = visible ? 'grid' : 'none'
+  if (!visible) setSessionLoadingStage('')
+  else if (stage) setSessionLoadingStage(stage)
+}
+
+async function showSessionLoadingStage(stage) {
+  setSessionLoadingStage(stage)
+  await waitForLoadingPaint()
+}
+
+/** Two frames so the opaque veil can paint before we block the main thread. */
+function waitForLoadingPaint() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve))
+  })
 }
 
 const titleLoadingEl = document.createElement('div')
@@ -2112,7 +2140,19 @@ function updateHitImpactEffects(dt) {
 }
 
 function buildBodyMesh(body) {
-  if (body.kind === 'island') return buildIslandMesh(body)
+  const parked = parkedBodyMeshes.get(body.id)
+  if (parked) {
+    parkedBodyMeshes.delete(body.id)
+    if (body.kind === 'island' && !parked.userData.dressed) {
+      islandBuildQueue.push({ id: body.id, phase: parked.userData.lod ? 'terrain' : 'dress' })
+    }
+    return parked
+  }
+  if (body.kind === 'island') {
+    const lod = buildIslandLodMesh(body)
+    islandBuildQueue.push({ id: body.id, phase: 'terrain' })
+    return lod
+  }
   // Hulk grade (and so its tint) comes from where the field lies — see
   // game/mining.js oreTierForField.
   if (body.kind === 'wreckField') return buildAsteroidFieldMesh(body)
@@ -2150,8 +2190,54 @@ function floatOnWaterline(mesh) {
  * after Continue. Far geometry is disposed; fog already hides the horizon.
  */
 const BODY_CULL_DISTANCE = 16000
+/** First session frame: port + host island, not the whole 16 km stream ring. */
+const BODY_START_DISTANCE = 4500
 /** Unload hysteresis so sailing the edge doesn't thrash builds. */
 const BODY_UNLOAD_DISTANCE = BODY_CULL_DISTANCE + 4000
+/** Keep a few session meshes across menu/death so the next start is not a rebuild. */
+const PARKED_BODY_MESH_MAX = 48
+const islandBuildQueue = []
+
+function pumpIslandBuilds(budget = 1) {
+  let n = 0
+  while (n < budget && islandBuildQueue.length) {
+    const job = islandBuildQueue[0]
+    const mesh = bodyMeshes.get(job.id)
+    const body = findBody(gameState?.galaxy, job.id)
+    if (!mesh || !body || mesh.userData.dressed) {
+      islandBuildQueue.shift()
+      continue
+    }
+    try {
+      if (job.phase === 'terrain') {
+        const terrain = buildIslandTerrainMesh(body)
+        terrain.position.copy(mesh.position)
+        scene.remove(mesh)
+        disposeObject3D(mesh)
+        bodyMeshes.delete(job.id)
+        placeBodyMesh(body, terrain)
+        job.phase = 'dress'
+        n++
+        continue
+      }
+      dressIslandMesh(mesh, body)
+      islandBuildQueue.shift()
+      n++
+    } catch (err) {
+      console.warn('[island] upgrade failed', job.id, err)
+      islandBuildQueue.shift()
+    }
+  }
+}
+
+function trimParkedBodyMeshes() {
+  if (parkedBodyMeshes.size <= PARKED_BODY_MESH_MAX) return
+  const extra = parkedBodyMeshes.size - PARKED_BODY_MESH_MAX
+  const ids = [...parkedBodyMeshes.keys()]
+  for (let i = 0; i < extra; i++) removeBodyMesh(ids[i], { dispose: true })
+}
+const parkedBodyMeshes = new Map()
+let sessionWorldReady = false
 const _cullPos = new THREE.Vector3()
 let _bodyStreamAcc = 0
 let _bodyStreamBusy = false
@@ -2172,7 +2258,8 @@ function disposeObject3D(root) {
         : [obj.material]
       : []
     for (const m of mats) {
-      // Shared textures live in the global cache — only free the material.
+      // Shared world terrain material must outlive any one island mesh.
+      if (m === getTerrainMaterial()) continue
       try {
         m.dispose?.()
       } catch {
@@ -2182,17 +2269,42 @@ function disposeObject3D(root) {
   })
 }
 
-function removeBodyMesh(id) {
-  const mesh = bodyMeshes.get(id)
+function detachHarbourPedestrians(mesh) {
+  const pedestrians = mesh?.userData?.harbourPedestrians
+  if (!pedestrians) return
+  try {
+    scene.remove(pedestrians)
+  } catch {
+    /* */
+  }
+  mesh.userData.harbourPedestrians = null
+}
+
+function removeBodyMesh(id, { dispose = true } = {}) {
+  const mesh = bodyMeshes.get(id) ?? parkedBodyMeshes.get(id)
   if (!mesh) return
   try {
     scene.remove(mesh)
   } catch {
     /* */
   }
-  disposeObject3D(mesh)
+  detachHarbourPedestrians(mesh)
   bodyMeshes.delete(id)
   surfaceSettlements.delete(id)
+  for (let i = islandBuildQueue.length - 1; i >= 0; i--) {
+    if (islandBuildQueue[i].id === id) islandBuildQueue.splice(i, 1)
+  }
+  if (dispose) {
+    parkedBodyMeshes.delete(id)
+    disposeObject3D(mesh)
+    return
+  }
+  parkedBodyMeshes.set(id, mesh)
+}
+
+function parkLiveBodyMeshes() {
+  for (const id of [...bodyMeshes.keys()]) removeBodyMesh(id, { dispose: false })
+  trimParkedBodyMeshes()
 }
 
 function placeBodyMesh(body, mesh) {
@@ -2259,7 +2371,8 @@ function syncNearbyBodyMeshes({ immediate = false } = {}) {
   _bodyStreamBusy = true
   try {
     const [focusX, focusZ] = bodyFocusXZ()
-    const loadR2 = BODY_CULL_DISTANCE * BODY_CULL_DISTANCE
+    const loadR = immediate ? BODY_START_DISTANCE : BODY_CULL_DISTANCE
+    const loadR2 = loadR * loadR
     const unloadR2 = BODY_UNLOAD_DISTANCE * BODY_UNLOAD_DISTANCE
     const priority = bodyPriorityIds()
     const want = new Set(priority)
@@ -2280,7 +2393,7 @@ function syncNearbyBodyMeshes({ immediate = false } = {}) {
       }
       const dx = (body.position?.[0] ?? 0) - focusX
       const dz = (body.position?.[2] ?? 0) - focusZ
-      if (dx * dx + dz * dz > unloadR2) removeBodyMesh(id)
+      if (dx * dx + dz * dz > unloadR2) removeBodyMesh(id, { dispose: false })
     }
 
     // Build missing near bodies (all at once on session start, else drip-feed).
@@ -2305,6 +2418,8 @@ function syncNearbyBodyMeshes({ immediate = false } = {}) {
         console.warn('[bodies] mesh failed', body?.id, err)
       }
     }
+    trimParkedBodyMeshes()
+    pumpIslandBuilds(immediate ? 3 : 1)
   } finally {
     _bodyStreamBusy = false
   }
@@ -2316,8 +2431,7 @@ function syncNearbyBodyMeshes({ immediate = false } = {}) {
  */
 function loadBodiesForCurrentSystem() {
   currentTarget = null
-  for (const id of [...bodyMeshes.keys()]) removeBodyMesh(id)
-  surfaceSettlements.clear()
+  parkLiveBodyMeshes()
   syncNearbyBodyMeshes({ immediate: true })
   refreshStationPolicePatrols()
 }
@@ -2330,6 +2444,7 @@ function updateBodyVisibility() {
     if (_bodyStreamAcc >= 15) {
       _bodyStreamAcc = 0
       syncNearbyBodyMeshes({ immediate: false })
+      pumpIslandBuilds(1)
     }
   } catch (err) {
     console.warn('[bodies] stream failed', err)
@@ -2884,14 +2999,41 @@ function onProjectileHit({
   worldImpact,
   wildlifeImpact,
   wildlifeKilled,
+  wildlifeCorpse,
+  wildlifeId,
   waterImpact,
   silentImpact
 }) {
   if (wildlifeImpact) {
-    // A small burst at the actual hit point, then the creature remains as a
-    // grounded corpse for the wildlife simulation's short harvest window.
     spawnWildlifeBloodFx(position)
-    if (wildlifeKilled) spawnWildlifeBloodFx(position)
+    const creature = gameState.wildlife?.find((item) => item.id === wildlifeId)
+    const listenFrom = targetingOriginPosition()
+    const hitDist = Math.hypot(
+      (position?.[0] ?? 0) - (listenFrom?.[0] ?? 0),
+      (position?.[2] ?? 0) - (listenFrom?.[2] ?? 0)
+    )
+    try {
+      audio.playWildlifeFleshHit({ distance: hitDist })
+    } catch {
+      /* */
+    }
+    if (wildlifeKilled || (wildlifeCorpse && creature?.state === 'dead')) {
+      spawnWildlifeBloodPool(creature?.position ?? position, creature?.species, creature?.id, {
+        extra: !!wildlifeCorpse
+      })
+    }
+    if (wildlifeKilled) {
+      const listenFrom = targetingOriginPosition()
+      const deathDist = Math.hypot(
+        (position?.[0] ?? 0) - (listenFrom?.[0] ?? 0),
+        (position?.[2] ?? 0) - (listenFrom?.[2] ?? 0)
+      )
+      try {
+        audio.playWildlifeDeath(creature?.species ?? 'rabbit', { distance: deathDist })
+      } catch {
+        /* */
+      }
+    }
     return
   }
   if (onFootImpact) {
@@ -3459,8 +3601,10 @@ function maybeSpawnMiningPirateAmbush() {
   }
 }
 
-function startNewGameSession({ characterName, shipInstanceName, portraitDataUrl } = {}) {
+async function startNewGameSession({ characterName, shipInstanceName, portraitDataUrl } = {}) {
   // Career seed only diversifies missions; galaxy + home system are fixed.
+  setSessionLoading(true, 'Charting the sea')
+  await waitForLoadingPaint()
   const seed = Math.floor(Math.random() * 1e9)
   const newState = DEV_TEST_SETUP
     ? createDevTestGameState({ characterName, shipInstanceName, seed })
@@ -3494,8 +3638,11 @@ const menu = createMenu(appEl, {
   onNewGame: startNewGameSession,
   onLoadGame: async () => {
     try {
+      setSessionLoading(true, 'Reading the log')
+      await waitForLoadingPaint()
       const loaded = await persistLoadGame()
       if (!loaded) {
+        setSessionLoading(false)
         menu.show(await hasSave())
         flashToast?.('No save found')
         return
@@ -3524,10 +3671,8 @@ const menu = createMenu(appEl, {
   }
 })
 
-function clearSession() {
-  sessionLoading = false
-  setSessionLoading(false)
-  sceneWarmPromise = null
+function clearSession({ keepLoading = false } = {}) {
+  if (!keepLoading) setSessionLoading(false)
   playerHealthRegenElapsed = 0
   if (camera.near !== WORLD_CAMERA_NEAR) {
     camera.near = WORLD_CAMERA_NEAR
@@ -3570,9 +3715,7 @@ function clearSession() {
     })
   }
   wildlifeBloodFx.length = 0
-  for (const mesh of bodyMeshes.values()) scene.remove(mesh)
-  bodyMeshes.clear()
-  surfaceSettlements.clear()
+  parkLiveBodyMeshes()
   for (const mesh of projectileMeshes.values()) scene.remove(mesh)
   projectileMeshes.clear()
   for (const mesh of wreckMeshes.values()) scene.remove(mesh)
@@ -4051,32 +4194,49 @@ function warmOnFootWeapon() {
 }
 
 /** Compile the shared scene pipeline while the title screen is already up. */
+let sceneWarmFirstPromise = null
 function warmScenePipelines() {
   if (sceneWarmPromise) return sceneWarmPromise
+  let markFirstView
+  sceneWarmFirstPromise = new Promise((resolve) => {
+    markFirstView = resolve
+  })
   sceneWarmPromise = Promise.resolve()
     .then(async () => {
-      // compileAsync is frustum-aware on this renderer. A single compile from
-      // the starting view leaves the first turn into a new quadrant to pay for
-      // those materials and light combinations. Compile four headings behind
-      // the loading veil; the camera never changes, and the extra work is paid
-      // once per session instead of as a hitch during play.
+      // compileAsync is frustum-aware. One heading is enough to lift the
+      // session veil; the other three keep going so the first look-around
+      // does not hitch.
       const warmCamera = new THREE.PerspectiveCamera(camera.fov, camera.aspect, camera.near, camera.far)
       warmCamera.position.copy(camera.position)
       warmCamera.layers.mask = camera.layers.mask
       const up = new THREE.Vector3(0, 1, 0)
       const yaw = new THREE.Quaternion()
-      for (const angle of [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5]) {
-        yaw.setFromAxisAngle(up, angle)
+      const headings = [0, Math.PI * 0.5, Math.PI, Math.PI * 1.5]
+      for (let i = 0; i < headings.length; i++) {
+        yaw.setFromAxisAngle(up, headings[i])
         warmCamera.quaternion.copy(yaw).multiply(camera.quaternion)
         warmCamera.updateMatrixWorld(true)
         await renderer.compileAsync(scene, warmCamera)
+        if (i === 0) {
+          sessionWorldReady = true
+          markFirstView()
+        }
       }
     })
     .catch((error) => {
       sceneWarmPromise = null
+      sceneWarmFirstPromise = null
       console.warn('[scene] pipeline warm-up failed', error)
     })
+    .finally(() => {
+      markFirstView()
+    })
   return sceneWarmPromise
+}
+
+function warmSceneFirstView() {
+  void warmScenePipelines()
+  return sceneWarmFirstPromise ?? Promise.resolve()
 }
 
 /** Keep the first shot from compiling a new projectile family during play. */
@@ -4317,7 +4477,8 @@ function resolveProjectileWorldImpact({ from, to, projectile = null }) {
       position: wildlifeHit.position,
       wildlifeImpact: true,
       wildlifeId: wildlifeHit.creature.id,
-      wildlifeKilled: wildlifeHit.killed
+      wildlifeKilled: wildlifeHit.killed,
+      wildlifeCorpse: !!wildlifeHit.corpse
     }
   }
   if (closest && closest.distance <= waterDistance) return { position: closest.point.toArray() }
@@ -4351,7 +4512,11 @@ function islandSurfaceYAt(body, x, z) {
 // the same terrain field used to build the island, so reserve exact mesh
 // validation for spawn/respawn placement only.
 function wildlifeSurfaceYAt(body, x, z) {
-  return islandGroundYAt(body, x, z) ?? islandTerrainYAt(body, x, z)
+  // Never fall back to the submerged shelf — that is how animals walked into the sea.
+  const y = islandGroundYAt(body, x, z)
+  if (!Number.isFinite(y)) return null
+  if (y <= waveHeight(x, z, gameState?.simTime ?? 0) + 0.7) return null
+  return y
 }
 
 function wildlifeTargetForIsland(body) {
@@ -4361,20 +4526,40 @@ function wildlifeTargetForIsland(body) {
 }
 
 function wildlifeSpeciesFor(body) {
+  const radius = Number(body?.radius) || 0
   const roll = Math.random()
-  if ((Number(body?.radius) || 0) > 700 && roll > 0.82) return 'deer'
-  if (roll < 0.38) return 'rabbit'
-  if (roll < 0.65) return 'cat'
+  if (radius > 700 && roll > 0.88) return 'deer'
+  if (radius > 520 && roll > 0.78) return 'boar'
+  if (roll < 0.16) return 'rat'
+  if (roll < 0.34) return 'rabbit'
+  if (roll < 0.46) return 'ferret'
+  if (roll < 0.56) return 'stoat'
+  if (roll < 0.72) return 'cat'
   return 'dog'
 }
 
 function wildlifePointOnIsland(body) {
   const maxRadius = Math.max(12, Math.min(islandMaxShoreline(body) * 0.78, (Number(body.radius) || 0) * 0.82))
-  for (let attempt = 0; attempt < 18; attempt++) {
-    const angle = Math.random() * Math.PI * 2
-    const radius = Math.sqrt(Math.random()) * maxRadius
-    const x = Number(body.position?.[0] || 0) + Math.cos(angle) * radius
-    const z = Number(body.position?.[2] || 0) + Math.sin(angle) * radius
+  const focus = gameState.player.onFoot?.active
+    ? gameState.player.onFoot.position
+    : gameState.player.ship?.position
+  const focusX = Number(focus?.[0])
+  const focusZ = Number(focus?.[2])
+  const nearPlayer = Number.isFinite(focusX) && Number.isFinite(focusZ)
+  for (let attempt = 0; attempt < 24; attempt++) {
+    let x
+    let z
+    if (nearPlayer && attempt < 16) {
+      const angle = Math.random() * Math.PI * 2
+      const radius = 28 + Math.random() * 160
+      x = focusX + Math.cos(angle) * radius
+      z = focusZ + Math.sin(angle) * radius
+    } else {
+      const angle = Math.random() * Math.PI * 2
+      const radius = Math.sqrt(Math.random()) * maxRadius
+      x = Number(body.position?.[0] || 0) + Math.cos(angle) * radius
+      z = Number(body.position?.[2] || 0) + Math.sin(angle) * radius
+    }
     const y = wildlifeSurfaceYAt(body, x, z)
     if (!Number.isFinite(y)) continue
     if (y <= waveHeight(x, z, gameState.simTime) + 0.7) continue
@@ -4400,13 +4585,40 @@ function spawnWildlifeBloodFx(position) {
   wildlifeBloodFx.push(fx)
 }
 
+function spawnWildlifeBloodPool(position, species, creatureId, { extra = false } = {}) {
+  if (creatureId) {
+    const pools = wildlifeBloodFx.filter((fx) => fx.pool && fx.creatureId === creatureId)
+    if (!extra && pools.length) return
+    if (extra && pools.length >= 8) return
+  }
+  const origin = Array.isArray(position) ? [...position] : [0, 0, 0]
+  if (extra) {
+    const angle = Math.random() * Math.PI * 2
+    const dist = 0.12 + Math.random() * 0.38
+    origin[0] += Math.cos(angle) * dist
+    origin[2] += Math.sin(angle) * dist
+  }
+  const fx = createWildlifeBloodPool(origin, species)
+  fx.creatureId = creatureId ?? null
+  scene.add(fx.group)
+  wildlifeBloodFx.push(fx)
+}
+
 function updateWildlifeBloodFx(dt) {
+  const liveCorpses = new Set(
+    (gameState?.wildlife ?? []).filter((creature) => creature.state === 'dead').map((creature) => creature.id)
+  )
   for (let i = wildlifeBloodFx.length - 1; i >= 0; i--) {
     const fx = wildlifeBloodFx[i]
-    fx.ttl -= dt
-    for (const child of fx.group.children) {
-      child.position.y -= dt * 0.75
-      if (child.material) child.material.opacity = Math.max(0, fx.ttl / 0.42)
+    if (fx.pool) {
+      if (fx.creatureId && !liveCorpses.has(fx.creatureId)) fx.ttl = Math.min(fx.ttl, 0.4)
+      fx.ttl -= dt
+    } else {
+      fx.ttl -= dt
+      for (const child of fx.group.children) {
+        child.position.y -= dt * 0.75
+        if (child.material) child.material.opacity = Math.max(0, fx.ttl / 0.42)
+      }
     }
     if (fx.ttl > 0) continue
     scene.remove(fx.group)
@@ -4452,19 +4664,62 @@ function updateWildlifeRuntime(dt) {
       else creature.respawnAt = now + 8
     }
     updateWildlife(group, dt, now, surfaceAt)
+    const hearFrom = focus
+    for (const creature of group) {
+      if (creature.state !== 'alive' || !creature.moving) {
+        creature.stepCool = 0
+        continue
+      }
+      const stepDist = Math.hypot(
+        (creature.position?.[0] ?? 0) - (hearFrom?.[0] ?? 0),
+        (creature.position?.[2] ?? 0) - (hearFrom?.[2] ?? 0)
+      )
+      if (stepDist > 18) {
+        creature.stepCool = 0
+        continue
+      }
+      creature.stepCool = (Number(creature.stepCool) || 0) + dt
+      if (creature.stepCool < wildlifeStepInterval(creature.species)) continue
+      creature.stepCool = 0
+      try {
+        audio.playWildlifeFootstep(creature.species, { distance: stepDist })
+      } catch {
+        /* */
+      }
+    }
     let slots = wildlifeTargetForIsland(body) - group.length
-    while (slots > 0 && gameState.wildlife.length < WILDLIFE_MAX_ACTIVE) {
+    let spawnAttempts = 0
+    while (slots > 0 && gameState.wildlife.length < WILDLIFE_MAX_ACTIVE && spawnAttempts < 12) {
+      spawnAttempts++
       const creature = spawnWildlifeOnIsland(body)
-      if (!creature) break
+      if (!creature) continue
       group.push(creature)
       slots--
     }
   }
 
   if (gameState.player.onFoot?.active) {
-    for (const { creature, damage } of updateWildlifeDogAttacks(gameState.wildlife, gameState.player.onFoot.position, now)) {
+    const hearFrom = gameState.player.onFoot.position
+    for (const { creature, damage, threat } of updateWildlifeDogAttacks(gameState.wildlife, hearFrom, now)) {
+      const barkDist = Math.hypot(
+        (creature.position?.[0] ?? 0) - (hearFrom?.[0] ?? 0),
+        (creature.position?.[2] ?? 0) - (hearFrom?.[2] ?? 0)
+      )
+      try {
+        if (threat === 'grunt') audio.playWildlifeThreat(creature.species, { distance: barkDist })
+        else audio.playDogBark({ distance: barkDist })
+      } catch {
+        /* */
+      }
+      if (!(damage > 0)) continue
+      try {
+        if (creature.species === 'dog') audio.playDogBite({ distance: barkDist })
+      } catch {
+        /* */
+      }
       gameState.player.onFoot.health = Math.max(0, Number(gameState.player.onFoot.health) - damage)
-      gameState.player.onFoot.lastDeathCause = 'Mauled by a wild dog'
+      gameState.player.onFoot.lastDeathCause =
+        creature.species === 'boar' ? 'Gored by a wild boar' : 'Mauled by a wild dog'
       gameState.inCombat = true
       gameState.lastCombatContactAt = gameState.simTime
       pulseDamageVignette(creature.position)
@@ -4480,8 +4735,12 @@ function updateWildlifeRuntime(dt) {
     const body = bodies.find((candidate) => candidate.id === creature.bodyId)
     if (!body || !nearby.includes(body)) continue
     liveMeshIds.add(creature.id)
-    if (!wildlifeModelReady(creature.species)) continue
     let mesh = wildlifeMeshes.get(creature.id)
+    if (mesh?.userData?.wildlifeFallback && wildlifeModelReady(creature.species)) {
+      scene.remove(mesh)
+      wildlifeMeshes.delete(creature.id)
+      mesh = null
+    }
     if (!mesh) {
       mesh = buildWildlifeMesh(creature)
       if (!mesh) continue
@@ -5052,16 +5311,16 @@ async function startSession(newGameState, { enterFlightMode = false } = {}) {
 }
 
 async function startSessionInner(newGameState, { enterFlightMode = false } = {}) {
-  clearSession()
+  clearSession({ keepLoading: true })
   stopMenuBackground()
   setTitleLoading(false)
   gameState = newGameState
-  sessionLoading = true
-  setSessionLoading(true)
+  setSessionLoading(true, 'Mustering traffic')
+  await waitForLoadingPaint()
   nextGullCallAt = gameState.simTime + 2
   gameState.npcs ??= []
   gameState.wildlife ??= []
-  const thunderWarmPromise = audio.preloadThunderSounds()
+  const thunderWarmPromise = audio.preloadGameSounds()
   // Model fetches are deliberately asynchronous; the first session frame is
   // not held hostage by four animal assets loading from disk. Boot also starts
   // this preload on the title screen, so entering an island does not pay the
@@ -5090,6 +5349,7 @@ async function startSessionInner(newGameState, { enterFlightMode = false } = {})
   } catch {
     /* non-fatal */
   }
+  await showSessionLoadingStage('Fitting the hull')
   rebuildPlayerShipMesh()
   rebuildPlayerAvatarMesh()
   rebuildOnFootWeapon()
@@ -5119,6 +5379,7 @@ async function startSessionInner(newGameState, { enterFlightMode = false } = {})
     addNpcMesh(npc)
   }
   // Near bodies first; far map streams in. Seats camera before distant islands.
+  await showSessionLoadingStage('Raising nearby islands')
   loadBodiesForCurrentSystem()
 
   hud = createHud(appEl)
@@ -5511,6 +5772,10 @@ async function startSessionInner(newGameState, { enterFlightMode = false } = {})
   if (anomaliesRefreshedOffline) {
     flashToast('Anomalous signals refreshed while you were away', 4.5)
   }
+  if (gameState._portedFromLegacySave) {
+    delete gameState._portedFromLegacySave
+    flashToast('Save updated — returned to Port Haven. Your ships and cargo are intact.', 6)
+  }
 
   // Restore free-flight pose or re-dock at the station saved in the file.
   restoreSessionLocation()
@@ -5529,22 +5794,25 @@ async function startSessionInner(newGameState, { enterFlightMode = false } = {})
     if (!enterFlightMode) reenterFlightMode()
   }
 
-  // Finish the expensive first-use work behind the loading veil. This keeps
-  // Continue/Load from hitching when the first wildlife, gun, projectile or
-  // impact shader is encountered in live play.
-  await Promise.allSettled([
+  // Thunder / wildlife / Fixo keep warming in the background. New Game starts
+  // berthed, so those first-use compiles have the title + the walk to shore.
+  void Promise.allSettled([
     thunderWarmPromise,
     wildlifeWarmPromise,
     warmOnFootWeapon()
   ])
   updateWildlifeRuntime(0)
-  const projectileWarmup = addRepresentativeProjectileWarmup()
-  try {
-    await warmScenePipelines()
-  } finally {
-    scene.remove(projectileWarmup)
+  if (!sessionWorldReady) {
+    await showSessionLoadingStage('Lighting the water')
+    const projectileWarmup = addRepresentativeProjectileWarmup()
+    try {
+      await warmSceneFirstView()
+      if (renderer?.compileAsync) await renderer.compileAsync(scene, camera)
+    } finally {
+      scene.remove(projectileWarmup)
+    }
+    sessionWorldReady = true
   }
-  sessionLoading = false
   setSessionLoading(false)
 
   // Paint one frame immediately so Load never leaves a black canvas while the
@@ -6867,7 +7135,8 @@ function handlePlayerDeath({ cause: requestedCause = null, drowned = false } = {
     killerPilot: killer?.pilotName ?? null,
     killerShip: killer?.shipName ?? null,
     killerFaction: killer?.faction ?? null,
-    killerMethod: killer?.method ?? null
+    killerMethod: killer?.method ?? null,
+    onFoot: !!drowned
   }
   const pos = drowned
     ? [...(gameState.player.onFoot?.position ?? gameState.player.ship.position)]
@@ -7359,6 +7628,22 @@ function getTargetableEntities() {
     if (dist <= TARGET_RANGE) entities.push({ kind: 'wreck', id: wreck.id, position: wreck.position, dist, radius: 0 })
   }
 
+  const wildlifeRange = gameState.player.onFoot?.active ? 220 : 90
+  for (const creature of gameState.wildlife ?? []) {
+    if (creature.state !== 'alive') continue
+    const def = WILDLIFE_SPECIES[creature.species] ?? WILDLIFE_SPECIES.rabbit
+    const dist = playerPos.distanceTo(new THREE.Vector3().fromArray(creature.position))
+    if (dist > wildlifeRange) continue
+    entities.push({
+      kind: 'wildlife',
+      id: creature.id,
+      position: creature.position,
+      dist,
+      radius: def.radius,
+      name: def.label
+    })
+  }
+
   const currentSystem = getSystem(gameState.galaxy, gameState.player.currentSystemId)
 
   for (const body of currentSystem.bodies) {
@@ -7584,6 +7869,25 @@ function resolveTarget() {
       reticle: 'hostile'
     }
   }
+  if (currentTarget.kind === 'wildlife') {
+    const creature = (gameState.wildlife ?? []).find((item) => item.id === currentTarget.id && item.state === 'alive')
+    if (!creature) return null
+    const def = WILDLIFE_SPECIES[creature.species] ?? WILDLIFE_SPECIES.rabbit
+    return {
+      position: creature.position,
+      name: def.label,
+      hostile: !!creature.hostile,
+      hullPct: Math.max(0, creature.health / def.health),
+      hull: creature.health,
+      maxHull: def.health,
+      isAsteroid: false,
+      reticle: 'wildlife',
+      kindLabel: 'wildlife',
+      living: true,
+      wildlifeId: creature.id,
+      wildlifeHeight: def.height
+    }
+  }
   if (currentTarget.kind === 'wreck') {
     const wreck = gameState.wrecks.find((w) => w.id === currentTarget.id)
     return wreck
@@ -7723,7 +8027,8 @@ function updateTargetHud() {
     hull: target.hull,
     maxHull: target.maxHull,
     oreLeft: target.oreLeft,
-    oreMax: target.oreMax
+    oreMax: target.oreMax,
+    living: !!target.living
   })
 }
 
@@ -7738,6 +8043,7 @@ function targetReticleColor(target) {
   if (target.reticle === 'anomaly') return '#d080ff'
   if (target.reticle === 'nodule') return '#60f0ff'
   if (target.reticle === 'alien_base') return '#ff6040'
+  if (target.reticle === 'wildlife') return target.hostile ? '#e05a5a' : '#c8e08a'
   return 'var(--ui-text)'
 }
 
@@ -7756,7 +8062,19 @@ function targetReticleWorldPos(target, out = _reticleMark) {
   else if (target.reticle === 'wreck') lift = 7
   else if (target.reticle === 'asteroid') lift = 10
   else if (target.reticle === 'anomaly' || target.reticle === 'nodule') lift = 14
-  else if (target.reticle === 'alien_base') lift = 18
+  else if (target.reticle === 'wildlife') {
+    const mesh = target.wildlifeId ? wildlifeMeshes.get(target.wildlifeId) : null
+    if (mesh) {
+      mesh.updateWorldMatrix?.(true, false)
+      mesh.updateMatrixWorld?.(true)
+      const box = new THREE.Box3().setFromObject(mesh)
+      if (Number.isFinite(box.min.y) && Number.isFinite(box.max.y)) {
+        box.getCenter(out)
+        return out
+      }
+    }
+    lift = Math.max(0.18, (target.wildlifeHeight ?? 0.5) * 0.52)
+  } else if (target.reticle === 'alien_base') lift = 18
   else if (target.reticle === 'hostile' || target.hostile) lift = 12
   else if (target.reticle === 'nav') lift = 8
   // Prefer the entity’s own Y when it is already above the sea (e.g. a rock
@@ -8195,6 +8513,9 @@ function animate() {
   const now = performance.now()
   const dt = Math.min((now - lastTime) / 1000, 0.1)
   lastTime = now
+  // Opaque veil — skip GPU work so compileAsync is not fighting the frame loop.
+  if (sessionLoading) return
+
   if (!gameState) {
     spray.clear()
     ocean.setSearchlight(null)
@@ -8206,15 +8527,6 @@ function animate() {
     updateMenuBackground(dt)
     tickWeather(dt, menuAnimT)
     refreshEnvironment(menuAnimT)
-    render()
-    return
-  }
-
-  // Session setup is deliberately asynchronous: keep presenting the covered
-  // scene, but do not advance combat, weather, or player movement underneath
-  // the loading veil while pipelines and models are being warmed.
-  if (sessionLoading) {
-    refreshEnvironment(gameState.simTime)
     render()
     return
   }
@@ -9287,7 +9599,8 @@ const titleAssetsPromise = Promise.allSettled([
   loadSoundPreference(),
   loadUiThemePreference(),
   preloadNatureModels(),
-  loadWildlifeModels()
+  loadWildlifeModels(),
+  audio.preloadGameSounds()
 ])
 const rebuildTitleAfterAssets = () => {
   if (menuActive && !gameState) {

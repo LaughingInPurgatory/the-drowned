@@ -1176,11 +1176,8 @@ function smooth01(x, a, b) {
   return t * t * (3 - 2 * t)
 }
 
-export function buildIslandMesh(body) {
+export function buildIslandTerrainMesh(body) {
   const { archetype, surfaces, landform, radius, height, heightAt, cliffAt } = getIslandProfile(body)
-  // Fresh stream per build, keyed only by the island — vegetation/ruins must
-  // match whether this mesh is for the title orbit or the sailing world.
-  const rng = mulberry32(hashString(`${body?.id ?? body?.name ?? 'island'}:props`))
 
   const positions = []
   const uvs = []
@@ -1295,19 +1292,101 @@ export function buildIslandMesh(body) {
   mesh.userData.kind = "island"
   mesh.userData.archetype = archetype
   mesh.userData.landform = landform
+  mesh.userData.dressed = false
+  return mesh
+}
 
-  // Props on every island mesh (title orbit and in-game share this builder).
-  // Cover is rolled per island: some rocks are bare, some hold a few trees,
-  // some still have buildings, and a few are both wooded and ruined.
+/** Vegetation, ruins, talus and stacks — the expensive second pass. */
+export function dressIslandMesh(mesh, body) {
+  if (!mesh || mesh.userData.dressed) return mesh
+  const { archetype, surfaces, landform, radius, height, heightAt, cliffAt } = getIslandProfile(body)
+  const rng = mulberry32(hashString(`${body?.id ?? body?.name ?? 'island'}:props`))
   mesh.add(
     buildVegetation(rng, radius, height, heightAt, archetype, landform, body?.name === 'Haven Reach')
   )
   mesh.add(buildRuins(rng, radius, height, heightAt, archetype, landform, body?.name === 'Haven Reach'))
-  // Loose rock at the foot of anything steep (always for mountain tips).
   if (landform === 'stack' || landform === 'mesa' || landform === 'spire' || rng() < 0.5) {
     mesh.add(buildTalus(rng, radius, height, heightAt, surfaces.body, landform))
   }
   mesh.add(buildSeaStacks(rng, radius, height, heightAt, landform, cliffAt))
+  mesh.userData.dressed = true
+  return mesh
+}
+
+export function buildIslandMesh(body) {
+  return dressIslandMesh(buildIslandTerrainMesh(body), body)
+}
+
+/** Cheap distant stand-in: same height field, few triangles, no props. */
+export function buildIslandLodMesh(body) {
+  const { archetype, landform, radius, height, heightAt, cliffAt } = getIslandProfile(body)
+  const rings = 24
+  const segs = 48
+  const positions = []
+  const uvs = []
+  const colors = []
+  const blends = []
+  const terrain = []
+  const heights = []
+  const meadowSurface = archetype === 'scrub'
+  for (let i = 0; i <= rings + 2; i++) {
+    const onLand = i <= rings
+    const u = onLand ? i / rings : 1
+    const t = onLand ? 1 - Math.pow(1 - u, 1.65) : 1
+    const shelfK = onLand ? 0 : (i - rings) / 2
+    const rr = t + shelfK * 0.04
+    for (let s = 0; s <= segs; s++) {
+      const theta = (s / segs) * Math.PI * 2
+      const x = Math.cos(theta) * radius * rr
+      const z = Math.sin(theta) * radius * rr
+      let y = coastalGroundY(Math.min(1, t), theta, height, heightAt, landform, cliffAt)
+      if (!onLand) y = COAST_FOOT_Y + (-80 - COAST_FOOT_Y) * shelfK
+      positions.push(x, y, z)
+      heights.push(y)
+      uvs.push(x / 80, z / 80)
+      colors.push(1, 1, 1)
+      blends.push(0)
+      terrain.push(0, 0, 0, 0)
+    }
+  }
+  const indices = []
+  const row = segs + 1
+  for (let i = 0; i < rings + 2; i++) {
+    for (let s = 0; s < segs; s++) {
+      const a = i * row + s
+      const b = a + row
+      indices.push(a, a + 1, b)
+      indices.push(a + 1, b + 1, b)
+    }
+  }
+  const geometry = new THREE.BufferGeometry()
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3))
+  geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2))
+  geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3))
+  geometry.setAttribute('aBlend', new THREE.Float32BufferAttribute(blends, 1))
+  geometry.setAttribute('aTerrain', new THREE.Float32BufferAttribute(terrain, 4))
+  geometry.setIndex(indices)
+  geometry.computeVertexNormals()
+  paintTerrainWeights({
+    geometry,
+    heights,
+    positions,
+    radius,
+    height,
+    landform,
+    archetype,
+    meadowSurface,
+    seed: hashString(`${body?.id ?? 'island'}:lod`)
+  })
+  geometry.computeBoundingSphere()
+  const material = getTerrainMaterial() ?? new THREE.MeshStandardMaterial({ color: 0x4a5c3c, roughness: 0.92 })
+  const mesh = new THREE.Mesh(geometry, material)
+  mesh.castShadow = true
+  mesh.receiveShadow = true
+  mesh.userData.kind = 'island'
+  mesh.userData.archetype = archetype
+  mesh.userData.landform = landform
+  mesh.userData.lod = true
   return mesh
 }
 

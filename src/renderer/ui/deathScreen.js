@@ -156,13 +156,14 @@ html #death-screen .panel-top,
 }
 #death-screen .death-smoke .smoke-text {
   display: block;
-  margin: 0;
+  margin: 0 auto;
   padding: 0.08em 0.06em;
+  max-width: min(92vw, 16em);
   font-family: "Impact", "Haettenschweiler", "Arial Narrow Bold", "Helvetica Neue", sans-serif;
   font-weight: 900;
-  font-size: clamp(36px, 7.5vw, 64px);
-  letter-spacing: 0.14em;
-  line-height: 1.05;
+  font-size: clamp(28px, 6.4vw, 64px);
+  letter-spacing: 0.12em;
+  line-height: 1.08;
   text-transform: uppercase;
   color: #1a0c08;
   -webkit-text-fill-color: #1a0c08;
@@ -206,7 +207,7 @@ html #death-screen .panel-bottom,
 }
 
 /*
- * "YOU HAVE DIED" — as close to the painted title wordmark as CSS can get:
+ * Death wordmark — as close to the painted title as CSS can get:
  * scorched metal + ember gradient, heavy erosion, dark rim lift, fire halo.
  */
 /* Never put CSS filter on this h1: it flattens to a rectangular surface over
@@ -216,10 +217,12 @@ html #death-screen .panel-bottom,
   z-index: 2;
   margin: 0;
   padding: 0.08em 0.06em;
-  font-size: clamp(36px, 7.5vw, 64px);
-  letter-spacing: 0.14em;
-  line-height: 1.05;
+  font-size: clamp(28px, 6.4vw, 64px);
+  letter-spacing: 0.12em;
+  line-height: 1.08;
   text-transform: uppercase;
+  max-width: min(92vw, 16em);
+  white-space: normal;
   /* Never a plate behind the glyphs — only the letters paint. */
   background-color: transparent !important;
   border: none !important;
@@ -468,6 +471,103 @@ export function pickDeathPun(cause = null) {
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
+/** Short wordmark lines. CSS uppercases them. */
+export const DEATH_HEADLINES = {
+  generic: [
+    'You have died',
+    'This skipper is deceased',
+    'That is all, captain',
+    'End of the watch',
+    'Permanently off duty',
+    'The log is closed',
+    'Lights out, skipper',
+    'No longer underway',
+    'Paid in full',
+    'Your last command'
+  ],
+  sea: [
+    'You took a water nap',
+    'Gone to Davy Jones',
+    'Sleeping with the fishes',
+    'Down with the ship',
+    'Sent to the deep',
+    'Joined the wrecks',
+    'Keel-up forever',
+    'Now part of the chart'
+  ],
+  land: [
+    'You took a dirt nap',
+    'Permanently ashore',
+    'Planted on the island',
+    'Grounded for good',
+    'That was your last walk',
+    'No more shore leave',
+    'The island kept you'
+  ],
+  acid: [
+    'You took a water nap',
+    'Dissolved on duty',
+    'The water bit back',
+    'Pickled in place',
+    'Melted into the tide'
+  ],
+  ram: [
+    'Folded like a deckchair',
+    'Hit by a hull',
+    'Bow-first into forever',
+    'That was a kiss'
+  ],
+  dog: [
+    'The dog won',
+    'Chewed out of command',
+    'Dog food, skipper',
+    'You took a dirt nap'
+  ],
+  boar: [
+    'Lost to a pig',
+    'Gored on the job',
+    'The boar kept the island',
+    'You took a dirt nap'
+  ],
+  fall: [
+    'Gravity collected',
+    'Missed the last step',
+    'A spectacular trip',
+    'You took a dirt nap'
+  ],
+  gunfire: [
+    'Caught in the open',
+    'Should have stayed aboard',
+    'Shore battery got you',
+    'You took a dirt nap'
+  ]
+}
+
+export function classifyDeath(cause = null, { onFoot = false, method = null } = {}) {
+  const text = String(cause || '')
+  if (/acidic seawater/i.test(text)) return 'acid'
+  if (method === 'ram' || /^Rammed by/i.test(text)) return 'ram'
+  if (/Mauled|wild dog/i.test(text)) return 'dog'
+  if (/Gored|wild boar/i.test(text)) return 'boar'
+  if (/stumbled|fell/i.test(text)) return 'fall'
+  if (/naval gunfire|Killed ashore/i.test(text)) return 'gunfire'
+  if (onFoot || /ashore|while ashore/i.test(text)) return 'land'
+  return 'sea'
+}
+
+export function pickDeathHeadline(cause = null, {
+  onFoot = false,
+  method = null,
+  random = Math.random
+} = {}) {
+  const kind = classifyDeath(cause, { onFoot, method })
+  const specific = DEATH_HEADLINES[kind] ?? []
+  const generic = DEATH_HEADLINES.generic
+  const useSpecific = specific.length > 0 && random() < 0.68
+  const pool = useSpecific ? specific : generic
+  return pool[Math.floor(random() * pool.length)]
+}
+
 /**
  * Faction ids are internal; these are what the player is told sank them.
  * `police` in particular has to read as the Coast Guard, not as police.
@@ -556,7 +656,8 @@ export function createDeathScreen(container, onReturnToMenu) {
       killerShip = null,
       killerFaction = null,
       killerMethod = null,
-      cause = null
+      cause = null,
+      onFoot = false
     }) {
       const pilot = killerPilot || killerName
 
@@ -596,6 +697,10 @@ export function createDeathScreen(container, onReturnToMenu) {
       `
 
       root.querySelector('.pun').textContent = pickDeathPun(cause)
+
+      const headline = pickDeathHeadline(cause, { onFoot, method: killerMethod })
+      root.querySelector('h1').textContent = headline
+      for (const smoke of root.querySelectorAll('.smoke-text')) smoke.textContent = headline
 
       root.style.display = 'flex'
       root.style.pointerEvents = 'none' /* only .return re-enables */

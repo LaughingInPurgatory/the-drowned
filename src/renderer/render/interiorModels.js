@@ -15,22 +15,11 @@ const QUAT_BASE = 'models/interiors/quaternius'
 const MEGAKIT_BASE = 'models/interiors/megakit'
 
 const KENNEY_FILES = [
-  'structure', 'structure-panel', 'structure-barrier', 'structure-barrier-high',
-  'wall', 'wall-detail', 'wall-pillar', 'wall-window', 'wall-window-frame',
-  'wall-door', 'wall-door-wide', 'wall-corner', 'wall-corner-round',
-  'wall-banner', 'wall-switch', 'wall-door-edge',
-  'floor', 'floor-detail', 'floor-panel', 'floor-panel-straight',
-  'container', 'container-tall', 'container-wide', 'container-flat', 'container-flat-open',
-  'computer', 'computer-screen', 'computer-system', 'computer-wide',
-  'display-wall', 'display-wall-wide',
-  'table', 'table-large', 'table-display', 'table-display-small', 'table-display-planet', 'table-inset',
-  'chair', 'chair-armrest', 'chair-cushion',
-  'pipe', 'pipe-bend', 'pipe-end', 'pipe-ring', 'pipe-end-colored', 'pipe-ring-colored',
-  'rail', 'rail-narrow',
-  'door-double', 'door-single', 'door-double-closed',
-  'stairs', 'stairs-handrail', 'stairs-ramp',
-  'balcony-rail', 'balcony-floor',
-  'skip', 'skip-rocks', 'rocks'
+  'wall', 'wall-detail', 'wall-banner',
+  'container', 'container-tall', 'container-wide', 'container-flat',
+  'computer-system', 'computer-screen', 'display-wall-wide',
+  'table-display', 'table-display-planet',
+  'chair', 'pipe', 'skip', 'skip-rocks', 'rocks'
 ]
 
 const QUAT_FILES = [
@@ -38,21 +27,17 @@ const QUAT_FILES = [
   'spaceship_a', 'spaceship_b', 'spaceship_c', 'spaceship_d',
   'mech_a', 'mech_b', 'mech_c',
   'pickup_crate', 'solar_panel', 'solar_structure',
-  'base_large', 'roof_antenna', 'roof_radar',
-  'geodesic_dome', 'metal_support', 'connector',
-  'rover', 'round_rover', 'enemy_flying',
-  'building_l', 'stairs', 'ramp'
+  'roof_antenna', 'roof_radar',
+  'geodesic_dome', 'metal_support',
+  'rover', 'round_rover', 'enemy_flying'
 ]
 
-// Curated for a hangar bay: lighting, deck clutter, railings and structure.
 const MEGAKIT_FILES = [
-  'Prop_Light_Wide', 'Prop_Light_Floor', 'Prop_Light_Corner', 'Prop_Light_Small',
+  'Prop_Light_Wide',
   'Prop_Crate3', 'Prop_Crate4', 'Prop_Chest', 'Prop_Barrel_Large',
-  'Prop_Computer', 'Prop_AccessPoint', 'Prop_ItemHolder', 'Prop_Clamp',
-  'Prop_Rail_2', 'Prop_Rail_3', 'Prop_Rail_4',
-  'Prop_Vent_Big', 'Prop_Vent_Wide', 'Prop_Fan_Small',
-  'Prop_PipeHolder', 'Prop_Cable_1', 'Prop_Cable_3',
-  'Column_Astra', 'Column_Pipes', 'Column_MetalSupport', 'Column_Round'
+  'Prop_Computer', 'Prop_AccessPoint',
+  'Prop_Vent_Big', 'Prop_Vent_Wide',
+  'Column_Astra'
 ]
 
 /** @type {Map<string, { root: THREE.Object3D, size: THREE.Vector3, pack: string }>} */
