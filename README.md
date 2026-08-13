@@ -38,7 +38,7 @@ Somewhere beyond the safe water, the old military order called **the Drowned** i
 
 The Drowned is a small-boat open-world game about making a living on a flooded Earth. Sail by hand, line up the guns, take contracts, trade between harbours, strip wrecks, build a better vessel, and decide how much trouble you are willing to bring home.
 
-- **A whole sea, not a chain of levels.** The canonical world is one seamless **80 km-wide** ocean. It has roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields**, all in one coordinate space with no loading seam. The same seeded world is generated for every New Game.
+- **A whole sea, not a chain of levels.** The canonical world is one seamless **160 km-wide** ocean, with an 80 km radius from Haven Reach. It has roughly **140 islands**, **50 harbours**, **60 outposts** and **80 wreck fields**, all in one coordinate space with no loading seam. The same seeded world is generated for every New Game.
 - **Boats that feel like boats.** W/S controls throttle, A/D puts the helm over, and Q/E use the bow and stern thrusters to crab sideways onto a berth. The hull carries way when you come off the throttle, heels into a turn and follows the living wave field beneath it.
 - **A sea with a clock.** A full day lasts **25 minutes**. Sunlight, cloud, rain, thunder, fog, running lights and harbour lamps all move with the campaign clock. Wreck fields recover and Industry jobs keep running while you are away.
 - **Distance is the difficulty curve.** Haven Reach is watched. Farther out, security falls away, hostile ships become more dangerous and the salvage gets better. Open water between patrol zones belongs to whoever is strong enough to claim it.
@@ -117,7 +117,7 @@ Saves are manual and persistent. They remember your ship, local harbour storage,
 
 ## Development
 
-The game is an Electron desktop app with a plain DOM UI and a Three.js renderer. The renderer is split into procedural world generation, pure game logic, Three.js scene builders and small UI modules. The sea’s wave field is shared by simulation and rendering so boats sit on the water they appear to be floating on.
+The game is an Electron desktop app with a plain DOM UI and a WebGPU-backed Three.js renderer. The renderer is split into procedural world generation, pure game logic, Three.js scene builders and small UI modules. The sea’s wave field is shared by simulation and rendering so boats sit on the water they appear to be floating on.
 
 ### Run locally
 
@@ -127,6 +127,8 @@ npm run dev
 ```
 
 This starts Electron with hot module reloading. Editing `src/renderer/main.js` during `npm run dev` resets the current session to the main menu; that is expected. GitHub Actions uses Node.js 24 for builds and releases.
+
+The game requires a WebGPU-capable Electron/Chromium environment and has no WebGL fallback. If `navigator.gpu` is unavailable, the renderer cannot start.
 
 ### Build and package
 
