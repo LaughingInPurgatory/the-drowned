@@ -569,28 +569,28 @@ const sstep = (e0, e1, x) => {
 function makeRockLayer() {
   const n = makeTileableNoise(1471)
 
-  // Bedding warp — geology, not corduroy. Kept shallow: a warp of a tenth of
-  // the tile turns strata into a churned swirl.
-  const bedU = (x, y) => y + n.fbm(x, y, 3, 2, 3) * 0.055 + n.fbm(x, y, 9, 7, 3) * 0.018
-  /** Which bed a texel belongs to, and how hard that bed is. */
-  const bed = (x, y) => {
+  // Gentle organic flow — sedimentary drift without harsh parallel stripes
+  const bedU = (x, y) => y + n.fbm(x * 1.5, y * 0.8, 3, 2, 3) * 0.08 + n.fbm(x * 3, y * 2, 7, 5, 2) * 0.03
+  /** Multi-scale rock grain and mineral structure. */
+  const stonePattern = (x, y) => {
     const u = bedU(x, y)
-    const coarse = n.value(x * 5, u * 17, 5, 17)
-    const fine = n.value(x * 9, u * 41, 9, 41)
-    return { coarse, fine }
+    const grain = n.fbm(x * 4, u * 6, 4, 6, 3)
+    const crag = n.ridged(x * 2.5 + u * 0.5, u * 3.5, 8, 8, 3, 0.45)
+    const micro = n.fbm(x * 12, y * 12, 12, 12, 2)
+    return { grain, crag, micro }
   }
 
   /**
-   * Two scales of fracture. Rock breaks into blocks along its joints and then
-   * the blocks spall at their corners, and having both is the difference
-   * between a stone face and a crazed pot.
+   * Multi-scale rock fracture: primary joint blocks, edge spall, and fissure cracks.
    */
   const joints = (x, y) => {
-    const a = n.worley(x, y, 23, 18)
-    const b = n.worley(x + 0.37, y + 0.62, 51, 43)
+    const a = n.worley(x, y, 16, 14)
+    const b = n.worley(x + 0.41, y + 0.53, 36, 32)
+    const c = n.worley(x * 2 + 0.17, y * 2 + 0.82, 64, 56)
     return {
-      wide: 1 - sstep(0, 0.15, a.f2 - a.f1),
-      tight: 1 - sstep(0, 0.24, b.f2 - b.f1),
+      major: 1 - sstep(0, 0.18, a.f2 - a.f1),
+      minor: 1 - sstep(0, 0.22, b.f2 - b.f1),
+      crack: 1 - sstep(0, 0.12, c.f2 - c.f1),
       idA: a.id,
       idB: b.id,
       domeA: Math.min(1, a.f1),
@@ -599,57 +599,61 @@ function makeRockLayer() {
   }
 
   const heightFn = (x, y) => {
-    const b = bed(x, y)
+    const s = stonePattern(x, y)
     const j = joints(x, y)
-    // Differential erosion between beds — a 15 cm step at the world tile, not
-    // a shelf you could stand on.
-    const shelf = (sstep(0.36, 0.56, b.coarse) * 0.55 + sstep(0.5, 0.72, b.fine) * 0.45) * 0.3
-    // Blocks stand very slightly proud of their own joints.
-    const block = (1 - j.domeA) * 0.09 + (1 - j.domeB) * 0.06
-    const spall = n.ridged(x, y, 57, 49, 3) * 0.26
-    const chip = n.ridged(x + 1.3, y - 0.7, 127, 111, 2) * 0.13
-    const grain = n.fbm(x, y, 211, 187, 2) * 0.15
-    return shelf + block + spall + chip + grain - j.wide * 0.2 - j.tight * 0.09
+    // Layered cliff relief: broad rock shelves, craggy facets, and surface grain
+    const shelf = s.grain * 0.22 + s.crag * 0.28
+    const block = (1 - j.domeA) * 0.14 + (1 - j.domeB) * 0.08
+    const spall = n.ridged(x, y, 42, 38, 3) * 0.22
+    const chip = n.ridged(x + 1.3, y - 0.7, 96, 88, 2) * 0.12
+    const grain = s.micro * 0.14
+    return shelf + block + spall + chip + grain - j.major * 0.22 - j.minor * 0.12 - j.crack * 0.08
   }
 
   const shadeFn = (h, x, y, out) => {
-    const b = bed(x, y)
+    const s = stonePattern(x, y)
     const j = joints(x, y)
-    // Per-block tone. A face that spalled recently is paler and cooler than the
-    // weathered rock around it, and that facet-to-facet variation is most of
-    // what reads as stone rather than as brown paint.
-    const tone = j.idA * 0.55 + j.idB * 0.45
-    const iron = n.fbm(x + 0.31, y - 0.17, 13, 10, 3)
-    const lich = sstep(0.6, 0.87, n.fbm(x + 4.1, y - 2.7, 19, 17, 4)) * sstep(0.4, 0.82, h)
-    const soot = sstep(0.42, 0.82, n.fbm(x - 1.9, y + 3.3, 7, 21, 3))
-    const grit = sstep(0.68, 0.94, n.fbm(x + 2.2, y + 5.1, 205, 183, 2))
-    // Wide grey range: crushed dark in the joints, bright quartzy on lit faces.
-    const v = mixc(0.1, 0.64, h * h * 0.5 + h * 0.5) * mixc(0.84, 1.15, tone)
-    // Beds alternate warm buff and cool grey — that alternation is what reads
-    // as strata from a boat, long after the relief has mipped away.
-    let r = v * mixc(0.88, 1.14, b.coarse)
-    let g = v * mixc(0.95, 1.02, b.coarse)
-    let bl = v * mixc(1.1, 0.87, b.coarse)
-    const rust = sstep(0.6, 0.88, iron) * (1 - h * 0.45)
-    r = mixc(r, r * 1.5 + 0.09, rust * 0.55)
-    g = mixc(g, g * 1.07 + 0.02, rust * 0.55)
-    bl = mixc(bl, bl * 0.64, rust * 0.55)
-    // Water-streaked staining down the face.
-    r *= mixc(1, 0.74, soot * 0.45)
-    g *= mixc(1, 0.76, soot * 0.45)
-    bl *= mixc(1, 0.79, soot * 0.45)
-    // Quartz grit catching the light on the exposed grain.
-    r += grit * 0.09
-    g += grit * 0.09
-    bl += grit * 0.085
-    r = mixc(r, 0.26, lich * 0.5)
-    g = mixc(g, 0.31, lich * 0.5)
-    bl = mixc(bl, 0.19, lich * 0.5)
+    // Facet-to-facet tonal variety so cliffs read as fractured stone
+    const facetTone = j.idA * 0.6 + j.idB * 0.4
+    const iron = n.fbm(x + 0.31, y - 0.17, 10, 8, 3)
+    const lich = sstep(0.58, 0.88, n.fbm(x + 3.7, y - 2.1, 14, 14, 3)) * sstep(0.35, 0.8, h)
+    const soot = sstep(0.38, 0.82, n.fbm(x - 1.5, y + 2.8, 6, 16, 3))
+    const quartz = sstep(0.65, 0.93, n.fbm(x + 2.2, y + 5.1, 160, 140, 2))
+
+    // Base rock luminance: rich, tactile natural stone range (not muddy black)
+    const v = mixc(0.22, 0.76, h * 0.7 + s.crag * 0.3) * mixc(0.88, 1.12, facetTone)
+
+    // Warm sedimentary and cool slate stone tones
+    let r = v * mixc(0.94, 1.08, s.grain)
+    let g = v * mixc(0.92, 1.04, s.grain)
+    let bl = v * mixc(0.88, 1.02, s.grain)
+
+    // Mineral oxidation and iron tinting in weathered pockets
+    const rust = sstep(0.55, 0.88, iron) * (1 - h * 0.35)
+    r = mixc(r, r * 1.35 + 0.08, rust * 0.4)
+    g = mixc(g, g * 1.05 + 0.02, rust * 0.4)
+    bl = mixc(bl, bl * 0.75, rust * 0.4)
+
+    // Weathering stains and runoff down the cliff
+    r *= mixc(1, 0.78, soot * 0.4)
+    g *= mixc(1, 0.8, soot * 0.4)
+    bl *= mixc(1, 0.82, soot * 0.4)
+
+    // Sparkling quartz / crystalline mineral grain
+    r += quartz * 0.12
+    g += quartz * 0.12
+    bl += quartz * 0.11
+
+    // Moss / lichen in sheltered crannies
+    r = mixc(r, 0.28, lich * 0.45)
+    g = mixc(g, 0.35, lich * 0.45)
+    bl = mixc(bl, 0.22, lich * 0.45)
+
     out[0] = r
     out[1] = g
     out[2] = bl
-    // Sheltered joints stay damp and glossier; exposed faces are chalk-matte.
-    out[3] = mixc(0.6, 0.96, h) - lich * 0.08
+    // Fractured crevices are slightly damper/darker; exposed stone is dry matte
+    out[3] = mixc(0.72, 0.94, h) - lich * 0.06
   }
   return encodeTerrainLayer(TERRAIN_LAYER_SIZE, heightFn, shadeFn, 2.2)
 }

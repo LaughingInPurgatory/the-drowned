@@ -357,7 +357,7 @@ function loadSfxFile(name) {
 
 function ensureSfx() {
   if (sfxLoadPromise) return sfxLoadPromise
-  sfxLoadPromise = Promise.all([...SFX_FILES, ...FOOTSTEP_FILES].map(loadSfxFile))
+  sfxLoadPromise = Promise.all([...SFX_FILES, ...FOOTSTEP_FILES, ...THUNDER_FILES].map(loadSfxFile))
   return sfxLoadPromise
 }
 
@@ -368,6 +368,11 @@ export function preloadThunderSounds() {
 
 /** Decode wildlife, weapons, footsteps and thunder on the title / session start. */
 export function preloadGameSounds() {
+  try {
+    ensureRainBed()
+  } catch {
+    /* */
+  }
   return ensureSfx()
 }
 

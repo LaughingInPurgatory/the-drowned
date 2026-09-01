@@ -212,7 +212,10 @@ export function mineRock(gameState, shipClass, field, fieldId, index, amount = 1
   if (destroyed) state.destroyedAt = gameState.simTime
 
   const hold = gameState.player.ship.miningHold
-  const used = Object.values(hold).reduce((a, b) => a + b, 0)
+  let used = 0
+  if (hold) {
+    for (const k in hold) used += hold[k] || 0
+  }
   // Capacity includes Extra Salvage Hold accessory while equipped.
   const cap = effectiveMiningCapacity(gameState.player.ship, shipClass)
   const free = Math.max(0, cap - used)

@@ -1354,6 +1354,43 @@ export function createWeather() {
   }
 
   /**
+   * Pre-warm all WebGPU weather render pipelines, render targets, and shader passes
+   * during game boot/session start to completely eliminate mid-gameplay hitches when storms roll in.
+   */
+  async function preload(renderer) {
+    if (!renderer) return
+    try {
+      renderer.getDrawingBufferSize(drawingBufferSize)
+      const w = Math.max(320, drawingBufferSize.x || 1600)
+      const h = Math.max(180, drawingBufferSize.y || 900)
+      const [rWidth, rHeight] = rainRenderSize(w, h)
+      if (rWidth !== rainTargetWidth || rHeight !== rainTargetHeight) {
+        rainTarget.setSize(rWidth, rHeight)
+        rainTargetWidth = rWidth
+        rainTargetHeight = rHeight
+      }
+
+      // Pre-populate dummy bolt vertices so bolt buffer pipeline compiles
+      buildBolt(0, 1.6, 0.42)
+      glowMesh.visible = true
+      boltMesh.visible = true
+      rainMesh.visible = true
+
+      if (typeof renderer.compileAsync === 'function') {
+        await renderer.compileAsync(rainScene, overlayCamera)
+        await renderer.compileAsync(lightningScene, overlayCamera)
+      } else if (typeof renderer.compile === 'function') {
+        renderer.compile(rainScene, overlayCamera)
+        renderer.compile(lightningScene, overlayCamera)
+      }
+      clear()
+    } catch (err) {
+      console.warn('[weather] pre-warm failed', err)
+      clear()
+    }
+  }
+
+  /**
    * Title / main-menu mode: keep bolt paths and strike bloom out of the logo
    * and menu text. In-game storms leave this off.
    */
@@ -1368,6 +1405,7 @@ export function createWeather() {
     update,
     render,
     clear,
+    preload,
     weatherAt,
     setTitleSafe,
     get visible() {

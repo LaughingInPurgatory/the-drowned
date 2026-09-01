@@ -75,8 +75,12 @@ export function rockCollisionRadius(rock) {
  * here may touch Y.
  */
 function pushOutOfSphere(shipPos, shipState, center, solidRadius, shipRadius) {
-  const dx = shipPos.x - center.x
-  const dz = shipPos.z - center.z
+  const cx = Array.isArray(center) ? center[0] : (center?.x ?? center?.[0] ?? 0)
+  const cz = Array.isArray(center) ? center[2] : (center?.z ?? center?.[2] ?? 0)
+  const px = shipPos.x ?? shipPos[0]
+  const pz = shipPos.z ?? shipPos[2]
+  const dx = px - cx
+  const dz = pz - cz
   let dist = Math.hypot(dx, dz)
   const minDist = solidRadius + shipRadius
   if (dist >= minDist) return false
@@ -84,17 +88,30 @@ function pushOutOfSphere(shipPos, shipState, center, solidRadius, shipRadius) {
   // Dead centre — pick a default outward bearing.
   const nx = dist < 1e-8 ? 1 : dx / dist
   const nz = dist < 1e-8 ? 0 : dz / dist
-  shipPos.x = center.x + nx * minDist
-  shipPos.z = center.z + nz * minDist
-  shipState.position = shipPos.toArray()
+  const newX = cx + nx * minDist
+  const newZ = cz + nz * minDist
 
-  const velocity = shipState.velocity
-  // Cancel only the component driving into the obstruction, so way carried
-  // along the shore is kept and the hull slides rather than stopping dead.
-  const inward = velocity[0] * nx + velocity[2] * nz
-  if (inward < 0) {
-    velocity[0] -= inward * nx
-    velocity[2] -= inward * nz
+  if (Array.isArray(shipPos)) {
+    shipPos[0] = newX
+    shipPos[2] = newZ
+  } else {
+    shipPos.x = newX
+    shipPos.z = newZ
+    if (shipState?.position) {
+      shipState.position[0] = newX
+      shipState.position[2] = newZ
+    }
+  }
+
+  const velocity = shipState?.velocity
+  if (velocity) {
+    // Cancel only the component driving into the obstruction, so way carried
+    // along the shore is kept and the hull slides rather than stopping dead.
+    const inward = velocity[0] * nx + velocity[2] * nz
+    if (inward < 0) {
+      velocity[0] -= inward * nx
+      velocity[2] -= inward * nz
+    }
   }
   return true
 }
@@ -105,28 +122,46 @@ function pushOutOfSphere(shipPos, shipState, center, solidRadius, shipRadius) {
  */
 function resolveAsteroidFieldCollisions(shipState, shipPos, body, shipRadius, isRockAlive) {
   const fieldPos = body.position
+  const fieldRadius = body.radius ?? 500
+  const px = shipPos.x ?? shipPos[0]
+  const pz = shipPos.z ?? shipPos[2]
+  const fdx = px - fieldPos[0]
+  const fdz = pz - fieldPos[2]
+  const reach = fieldRadius + 60 + shipRadius
+  if (fdx * fdx + fdz * fdz >= reach * reach) return
+
   const rocks = getAsteroidRocks(body)
+  const scratchCenter = [0, 0, 0]
   for (let i = 0; i < rocks.length; i++) {
     if (isRockAlive && !isRockAlive(body.id, i)) continue
     const rock = rocks[i]
-    const center = new THREE.Vector3(
-      fieldPos[0] + rock.position[0],
-      fieldPos[1] + rock.position[1],
-      fieldPos[2] + rock.position[2]
-    )
-    pushOutOfSphere(shipPos, shipState, center, rockCollisionRadius(rock), shipRadius)
+    scratchCenter[0] = fieldPos[0] + rock.position[0]
+    scratchCenter[2] = fieldPos[2] + rock.position[2]
+    pushOutOfSphere(shipPos, shipState, scratchCenter, rockCollisionRadius(rock), shipRadius)
   }
 }
 
 /** Individual harbour mole rocks are solid; the gaps between them remain open. */
 function resolveBreakwaterCollisions(shipState, shipPos, body, shipRadius) {
   const rocks = body?.breakwaterRocks
-  if (!Array.isArray(rocks)) return
+  if (!Array.isArray(rocks) || !rocks.length) return
+  const px = shipPos.x ?? shipPos[0]
+  const pz = shipPos.z ?? shipPos[2]
+  const bodyPos = body.position ?? [0, 0, 0]
+  const fdx = px - bodyPos[0]
+  const fdz = pz - bodyPos[2]
+  const reach = PORT_EXTERIOR_RADIUS + 80 + shipRadius
+  if (fdx * fdx + fdz * fdz >= reach * reach) return
+
+  const scratchCenter = [0, 0, 0]
   for (const rock of rocks) {
-    if (!Number.isFinite(Number(rock?.x)) || !Number.isFinite(Number(rock?.z))) continue
-    const center = new THREE.Vector3(Number(rock.x), 0, Number(rock.z))
+    const rx = Number(rock?.x)
+    const rz = Number(rock?.z)
+    if (!Number.isFinite(rx) || !Number.isFinite(rz)) continue
+    scratchCenter[0] = rx
+    scratchCenter[2] = rz
     const radius = Math.max(0.25, Number(rock.radius) || 0)
-    pushOutOfSphere(shipPos, shipState, center, radius, shipRadius)
+    pushOutOfSphere(shipPos, shipState, scratchCenter, radius, shipRadius)
   }
 }
 
@@ -233,7 +268,7 @@ export function resolveShipCollisions(ships, onCollision = null) {
 // through. Wreck fields: per-hulk only (no field-wide invisible shell).
 // options.isRockAlive(fieldId, index) — optional; when set, stripped wrecks are ignored.
 export function resolveBodyCollisions(shipState, bodies, shipRadius, options = {}) {
-  const shipPos = new THREE.Vector3().fromArray(shipState.position)
+  const shipPos = shipState.position
   const isRockAlive = options.isRockAlive
   const shorelineShipRadius = Number.isFinite(Number(options.shorelineShipRadius))
     ? Math.max(0.5, Number(options.shorelineShipRadius))
@@ -251,24 +286,24 @@ export function resolveBodyCollisions(shipState, bodies, shipRadius, options = {
     // run right up onto a beach, nose into a bay, or slip through the gap in an
     // atoll — none of which a single radius around the whole disc allows.
     let bodyRadius
+    const bPos = body.position ?? [0, 0, 0]
     if (body.kind === 'island') {
       // Cheap reject first: nothing can be aground while outside the furthest
       // the land reaches, and this runs for every body every frame.
-      const dx = shipPos.x - body.position[0]
-      const dz = shipPos.z - body.position[2]
+      const dx = shipPos[0] - bPos[0]
+      const dz = shipPos[2] - bPos[2]
       const reach = islandMaxShoreline(body) + shorelineShipRadius
       if (dx * dx + dz * dz >= reach * reach) continue
-      bodyRadius = islandShorelineToward(body, shipPos.x, shipPos.z)
+      bodyRadius = islandShorelineToward(body, shipPos[0], shipPos[2])
     } else {
       bodyRadius = collisionRadiusFor(body)
     }
     if (bodyRadius == null) continue
 
-    const bodyPos = new THREE.Vector3(...body.position)
     pushOutOfSphere(
       shipPos,
       shipState,
-      bodyPos,
+      bPos,
       bodyRadius,
       body.kind === 'island' ? shorelineShipRadius : shipRadius
     )

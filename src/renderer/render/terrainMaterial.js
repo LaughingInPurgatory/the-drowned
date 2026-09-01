@@ -373,10 +373,10 @@ export function getTerrainMaterial() {
   }
   const pRock = planes(TILE.rock)
   const pGrass = planes(TILE.grass)
-  const pSandY = vec2(Pw.x, Pw.z).div(tileJitter.mul(TILE.sand)).toVar()
-  const pShinY = vec2(Pw.x, Pw.z).div(tileJitter.mul(TILE.shingle)).toVar()
+  const pSand = planes(TILE.sand)
+  const pShin = planes(TILE.shingle)
 
-  /** Full triplanar fetch — layers that appear on steep ground. */
+  /** Full triplanar fetch — all terrain layers. */
   const tri = (tex, p) =>
     texture(tex, p.x).mul(bw.x).add(texture(tex, p.y).mul(bw.y)).add(texture(tex, p.z).mul(bw.z))
 
@@ -422,12 +422,12 @@ export function getTerrainMaterial() {
 
   // map:       rgb albedo, a roughness
   // normalMap: rgb tangent normal, a height (this is what drives the mask)
-  const sandC = dissolve(texture(L.sand.map, pSandY), L.sand).toVar()
-  const shinC = dissolve(texture(L.shingle.map, pShinY), L.shingle).toVar()
+  const sandC = dissolve(tri(L.sand.map, pSand), L.sand).toVar()
+  const shinC = dissolve(tri(L.shingle.map, pShin), L.shingle).toVar()
   const grasC = dissolve(tri(L.grass.map, pGrass), L.grass).toVar()
   const rockC = dissolve(tri(L.rock.map, pRock), L.rock).toVar()
-  const sandH = flatten(texture(L.sand.normalMap, pSandY).w).toVar()
-  const shinH = flatten(texture(L.shingle.normalMap, pShinY).w).toVar()
+  const sandH = flatten(tri(L.sand.normalMap, pSand).w).toVar()
+  const shinH = flatten(tri(L.shingle.normalMap, pShin).w).toVar()
   const grasH = flatten(tri(L.grass.normalMap, pGrass).w).toVar()
   const rockH = flatten(tri(L.rock.normalMap, pRock).w).toVar()
 
@@ -618,39 +618,27 @@ export function getTerrainMaterial() {
   // 83 m noise field and the courses wandered up and down with it — long sinuous
   // ribbons rather than bedding.
   //
-  // Vertical jointing is the other half, and it is what stops the courses being
-  // a contour map. With the smooth warp alone every trace runs unbroken from one
-  // end of the headland to the other and hugs the dome exactly, which no sea
-  // cliff does and which announces the shader far louder than under-detail does:
-  // joint sets cut the beds every few tens of metres and the trace *steps*
-  // across each one. `floor` of a low-frequency noise gives irregular blocks
-  // with curved boundaries, and each block gets its own phase, so the courses
-  // are offset at the joint rather than merely bent. The discontinuity is only
-  // in XZ, so `gy` — which differences in Y — never sees it.
-  const joint = floor(vnoise(xz.mul(0.017).add(vec2(2.5, 8.1))).mul(6))
-  const bandWarp = vnoise(xz.mul(0.012))
-    .mul(0.62)
-    .add(vnoise(xz.mul(0.05)).mul(0.22))
-    .add(hash21(vec2(joint, 17.3)))
+  // ── Bedding / Sedimentary strata ──────────────────────────────────────────
+  // Natural geological strata: continuous, gently undulating sedimentary bands
+  // that follow the landform with organic warping, avoiding artificial zebra stripes.
+  const bandWarp = vnoise(xz.mul(0.008))
+    .mul(1.6)
+    .add(vnoise(xz.mul(0.032).add(vec2(5.3, -3.1))).mul(0.55))
     .toVar()
+
   /**
-   * Signed standoff of the course at height `y`, about -0.5..0.5.
-   *
-   * Each course gets its own hardness, and the profile goes to zero at both
-   * course boundaries so neighbours meet at a joint instead of stepping. The
-   * derivative of this is the relief; the value of it is the tone.
+   * Continuous sedimentary layering at height y, smoothly undulating with terrain.
    */
   const bedAt = (y) => {
-    const t = y.mul(0.16).add(bandWarp)
-    const f = fract(t)
-    return hash21(vec2(floor(t), 3.7))
-      .sub(0.5)
-      .mul(smoothstep(float(0), float(0.2), f))
-      .mul(float(1).sub(smoothstep(float(0.8), float(1), f)))
+    const yScaled = y.mul(0.08).add(bandWarp)
+    const wave1 = sin(yScaled.mul(Math.PI * 2)).mul(0.45)
+    const wave2 = sin(yScaled.mul(Math.PI * 4.2).add(1.1)).mul(0.25)
+    const drift = vnoise(vec2(yScaled.mul(1.2), bandWarp.mul(1.8))).sub(0.5).mul(0.3)
+    return wave1.add(wave2).add(drift)
   }
   const bed = bedAt(P.y).toVar()
-  /** Metres a hard course stands proud of a soft one. */
-  const BED_RELIEF = 0.9
+  /** Metres of subtle relief across sedimentary bands. */
+  const BED_RELIEF = 0.22
 
   // ── Colour ───────────────────────────────────────────────────────────────
   if (DEBUG) {
@@ -692,17 +680,14 @@ export function getTerrainMaterial() {
     // cliff — 100% rock, seen from a boat at a few degrees of incidence — the
     // same band spreads into a contour ribbon across half the frame. Constant-Y
     // content on a shallow slope viewed edge-on is a streak by definition.
-    const bedTone = float(1).add(bed.mul(0.5))
+    // Bedding tone: natural, subtle sedimentary layering without harsh artificial stripes
+    const bedTone = float(1).add(bed.mul(0.12))
     albedo = albedo.mul(mix(float(1), bedTone, rockShare.mul(strata).mul(steep)))
 
-    // Macro drift in value and in temperature. Value alone reads as the same
-    // colour with the brightness turned up and down.
-    // Wider than it looks safe: once the tiled layers dissolve to a flat mean
-    // at a few hundred metres, this is the only thing left varying, and a
-    // hillside with no variation reads as a painted backdrop.
-    albedo = albedo.mul(mix(float(0.66), float(1.36), macro))
-    albedo = albedo.mul(mix(vec3(0.9, 0.97, 1.09), vec3(1.12, 1.03, 0.86), macroC))
-    albedo = albedo.mul(mix(vec3(1.04, 1.0, 0.95), vec3(0.96, 1.0, 1.05), macroB))
+    // Macro drift in value and in temperature.
+    albedo = albedo.mul(mix(float(0.82), float(1.2), macro))
+    albedo = albedo.mul(mix(vec3(0.93, 0.98, 1.06), vec3(1.08, 1.02, 0.92), macroC))
+    albedo = albedo.mul(mix(vec3(1.03, 1.0, 0.96), vec3(0.97, 1.0, 1.04), macroB))
 
     albedo = mix(albedo, vec3(0.19, 0.24, 0.13), lichen)
 
@@ -745,16 +730,16 @@ export function getTerrainMaterial() {
   material.normalNode = Fn(() => {
     const decode = (tex, uvp) => texture(tex, uvp).xyz.mul(2).sub(1)
     // Blend the layers inside each projection plane, then blend the planes.
-    const plane = (gp, rp) =>
-      decode(L.sand.normalMap, pSandY)
+    const plane = (sp, hp, gp, rp) =>
+      decode(L.sand.normalMap, sp)
         .mul(bSand)
-        .add(decode(L.shingle.normalMap, pShinY).mul(bShin))
+        .add(decode(L.shingle.normalMap, hp).mul(bShin))
         .add(decode(L.grass.normalMap, gp).mul(bGras))
         .add(decode(L.rock.normalMap, rp).mul(bRock))
         .div(bSum)
-    const nX = plane(pGrass.x, pRock.x)
-    const nY = plane(pGrass.y, pRock.y)
-    const nZ = plane(pGrass.z, pRock.z)
+    const nX = plane(pSand.x, pShin.x, pGrass.x, pRock.x)
+    const nY = plane(pSand.y, pShin.y, pGrass.y, pRock.y)
+    const nZ = plane(pSand.z, pShin.z, pGrass.z, pRock.z)
 
     // Whiteout blend (Golus): reorient each plane's tangent normal against the
     // surface normal before combining, so a cliff face does not get its bumps
@@ -918,15 +903,15 @@ export function getRockPropMaterial() {
   const shore = shoreline(P)
 
   material.colorNode = Fn(() => {
-    const macro = vnoise(xz.mul(0.02)).mul(0.6).add(vnoise(xz.mul(0.004)).mul(0.4))
-    let albedo = rockC.rgb.mul(mix(float(0.74), float(1.18), macro))
-    albedo = albedo.mul(mix(float(1), float(0.4), shore.wet))
-    albedo = mix(albedo, vec3(0.05, 0.07, 0.045), shore.collar.mul(0.7))
-    const lichen = smoothstep(float(0.45), float(0.8), vnoise(xz.mul(0.4)))
-      .mul(smoothstep(float(0.35), float(0.9), Nw.y))
+    const macro = vnoise(xz.mul(0.025)).mul(0.6).add(vnoise(xz.mul(0.006)).mul(0.4))
+    let albedo = rockC.rgb.mul(mix(float(0.82), float(1.22), macro))
+    albedo = albedo.mul(mix(float(1), float(0.38), shore.wet))
+    albedo = mix(albedo, vec3(0.05, 0.07, 0.045), shore.collar.mul(0.75))
+    const lichen = smoothstep(float(0.42), float(0.78), vnoise(xz.mul(0.3).add(vec2(2.3, 5.7))))
+      .mul(smoothstep(float(0.3), float(0.88), Nw.y))
       .mul(float(1).sub(shore.wet))
-    albedo = mix(albedo, vec3(0.2, 0.25, 0.14), lichen.mul(0.4))
-    return albedo.mul(mix(float(0.6), float(1), rockH)).mul(mix(float(1), float(0.42), shore.sub))
+    albedo = mix(albedo, vec3(0.22, 0.28, 0.15), lichen.mul(0.45))
+    return albedo.mul(mix(float(0.68), float(1), rockH)).mul(mix(float(1), float(0.42), shore.sub))
   })()
 
   material.roughnessNode = Fn(() =>

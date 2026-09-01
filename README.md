@@ -54,9 +54,9 @@ The Drowned is a small-boat open-world game about making a living on a flooded E
 - **Salvage with consequences.** Wreck fields hold finite material and recover on the campaign clock. In low-security water, successful salvage hits can attract a pirate ambush. The farther out you go, the more valuable the wrecks become—and the more likely someone else is already watching them.
 - **Signals in the empty water.** Use the boat’s sonar pulse to survey nearby islands and wreck fields. Use **Region Sonar** to deploy scan probes and hunt Anomalous Signals: Drowned incursions, datacores, sealed sites and rare salvage caches.
 - **Contracts that pull you outward.** Take bounty, charting, survey, signal and haulage work from harbour boards. Objectives complete in the field, so a good contract can turn into the beginning of a longer voyage.
-- **A living weather deck.** Procedural islands, cloud cover, rain, storms, sea state, wakes and night lighting make the same route feel different on the second crossing. At night, a searchlight and a few distant lamps may be all you have.
+- **A living weather deck.** Cloud cover, rain, storms and night lighting make the same route feel different on the second crossing. The water itself is alive too: sharp-crested swell that rises into ridges, whitecaps where crests break, cloud reflections riding the surface and a low-sun glow through the back of each wave. At night, a searchlight and a few distant lamps may be all you have.
 - **A populated sea.** Four hundred civilian ships are distributed across the world and travel between ports, outposts and harbours. Distant traffic uses a lightweight route simulation while nearby and engaged ships retain full AI behaviour.
-- **Smooth first contact.** Model, texture and shader pipelines are warmed behind an animated loading screen before a session begins. The renderer also precompiles multiple camera headings to reduce the hitch when first looking around.
+- **Smooth first contact.** Model, texture, shader and weather pipelines are warmed behind an animated loading screen before a session begins, so a storm rolling in never stalls the frame. The renderer also precompiles several camera headings to avoid the hitch when you first look around.
 
 Harbours are generated from the same world seed as the islands around them: quays, jetties, warehouses, tanks, cranes, towers, moles and working lights. Come alongside to tie up and open the dockside Services UI; the water remains the centre of the game.
 
@@ -71,7 +71,7 @@ Harbours are generated from the same world seed as the islands around them: quay
 
 ## Controls
 
-You take the helm with **Space**. While the helm is active, the pointer is locked for turret aiming. On foot, the pointer is locked for mouse look instead. Open a panel or press Space again to free the pointer. After alt-tab, click the game canvas or press Space to take control back. **Settings → Controls** in the main menu and pause menu uses the same bindings.
+You take the helm with **Space**. While the helm is active the pointer locks for turret aiming; on foot it locks for mouse look instead. Open any panel, or press Space again, to free the pointer. If you alt-tab, click the game canvas or press Space to take control back. **Settings → Controls** in the main menu and pause menu shows the same bindings.
 
 | Input | Action |
 | --- | --- |

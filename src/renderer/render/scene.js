@@ -99,7 +99,7 @@ export async function createScene(container) {
   // in render() so it can never be sailed out of. Kept out of the fog: fogging
   // the sky with a colour sampled from the sky is a flat grey screen.
   const skyDome = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), createSkyNodeMaterial())
-  skyDome.scale.setScalar(camera.far * 0.4)
+  skyDome.scale.setScalar(camera.far * 0.95)
   skyDome.renderOrder = -1000
   skyDome.frustumCulled = false
   scene.add(skyDome)

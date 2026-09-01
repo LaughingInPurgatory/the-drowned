@@ -121,8 +121,14 @@ const SPIRE_CHANCE = 0.048
 // that is the stair-stepped horizon silhouette, and no shader fixes it. At 192
 // the outline reads as a coastline. ~19k vertices per island; main.js keeps
 // about thirty resident, so this is well inside budget.
-const RINGS = 128
+const RINGS = 160
 const SEGMENTS = 256
+/**
+ * Radial ring packing exponent. Must stay identical between the mesh builders
+ * and the analytic sampler (`meshGroundY`) or the faceted surface and
+ * islandTerrainYAt disagree and feet/vegetation float above visible ground.
+ */
+const RING_T = 1.25
 /** Rings of underwater shelf beyond the coast, so no edge stands proud. */
 const SHELF_RINGS = 6
 /**
@@ -146,6 +152,47 @@ const SKIRT_DEPTH = SEA_MAX_AMPLITUDE + 14
 const COAST_FOOT_Y = -SEA_MAX_AMPLITUDE - 2
 /** Outer land band (in ring parameter 0..1) forced into the steep coastal bank. */
 const COAST_BANK_FROM = 0.86
+
+/** Value noise hash for relief and terrain functions. */
+function reliefHash(x, y, s) {
+  const v = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453
+  return v - Math.floor(v)
+}
+
+function reliefNoise(x, y, s) {
+  const ix = Math.floor(x)
+  const iy = Math.floor(y)
+  const fx = x - ix
+  const fy = y - iy
+  const ux = fx * fx * (3 - 2 * fx)
+  const uy = fy * fy * (3 - 2 * fy)
+  const a = reliefHash(ix, iy, s)
+  const b = reliefHash(ix + 1, iy, s)
+  const c = reliefHash(ix, iy + 1, s)
+  const d = reliefHash(ix + 1, iy + 1, s)
+  return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy
+}
+
+/** Multi-octave value noise for organic 2D relief. */
+function reliefFbm(x, y, s, octaves = 3) {
+  let f = 1
+  let amp = 1
+  let sum = 0
+  let norm = 0
+  for (let o = 0; o < octaves; o++) {
+    sum += amp * reliefNoise(x * f, y * f, s + o * 17.3)
+    norm += amp
+    f *= 1.85
+    amp *= 0.52
+  }
+  return sum / norm
+}
+
+/** smoothstep, clamped. */
+function smooth01(x, a, b) {
+  const t = Math.max(0, Math.min(1, (x - a) / (b - a || 1e-6)))
+  return t * t * (3 - 2 * t)
+}
 
 /**
  * Where a coastline sits between a shelving beach and a sheer cliff.
@@ -181,33 +228,19 @@ function makeCliffField(rng, landform, archetype) {
   }
   // Erosion: gullies, chimneys and notches cut into the face itself.
   const notchSeed = rng() * 100
-  const notchAmp = landform === 'atoll' ? 0 : range(rng, 0.5, 1)
+  const notchAmp = landform === 'atoll' ? 0 : range(rng, 0.3, 0.7)
   const field = (theta) => {
     let v = bias
     for (const w of waves) v += w.amp * Math.sin(theta * w.freq + w.phase)
     return Math.max(0, Math.min(1, v))
   }
   field.notch = (theta) => {
-    // Sharp, irregular vertical cuts — sea caves and gullies rather than a
-    // smooth wall. Only bites where there is a cliff to bite into.
-    //
-    // Every bearing harmonic in this file is capped by the mesh. SEGMENTS is
-    // 192, so a term in sin(theta * k) gets 192/k samples per cycle and needs
-    // eight of them to survive. k = 41 got 4.7 — the field was aliasing, and
-    // since this term is applied in the coastal bank where the rings pack
-    // tightest, what it produced was a band of alternating triangles round the
-    // waterline of every island. Nothing shaded it; it was the shape.
-    const a = Math.sin(theta * 17 + notchSeed)
-    const b = Math.sin(theta * 23 - notchSeed * 1.7)
-    const c = Math.sin(theta * 7 + notchSeed * 0.3)
+    // Natural broad gullies and inlets without high-frequency saw-tooth spikes.
+    const a = Math.sin(theta * 4 + notchSeed)
+    const b = Math.sin(theta * 6 - notchSeed * 1.5)
+    const c = Math.sin(theta * 2 + notchSeed * 0.4)
     const v = a * 0.5 + b * 0.32 + c * 0.18
-    // Smooth onset, not a clamped subtraction. `max(0, v - 0.45)` starts the
-    // cut at full gradient the instant it opens, and because the depth is then
-    // ramped linearly across the bank the result has two dead-straight edges —
-    // a machined wedge taken out of the cliff top. Eroded rock does not have
-    // straight edges, and a persistent axis-aligned notch in the same place in
-    // every frame reads as an authoring bug rather than as geology.
-    return smooth01(v, 0.32, 0.86) * 0.5 * notchAmp
+    return smooth01(v, 0.38, 0.85) * 0.35 * notchAmp
   }
   return field
 }
@@ -299,9 +332,12 @@ function makeHeightField(rng, landform) {
   }
 
   const noiseSeed = rng() * 1000
-  const roughness = range(rng, 0.03, 0.1)
-  const detail = (r, theta) =>
-    Math.sin(theta * 7 + noiseSeed) * Math.cos(r * 9 + noiseSeed) * roughness * (1 - r)
+  const roughness = range(rng, 0.03, 0.08)
+  const detail = (r, theta) => {
+    const x = r * Math.cos(theta)
+    const z = r * Math.sin(theta)
+    return (reliefFbm(x * 2.5, z * 2.5, noiseSeed % 97, 3) - 0.5) * roughness * 1.5 * (1 - r)
+  }
 
   if (landform === 'ridge') {
     // A long spine: tall along one axis, falling away to either side.
@@ -1114,68 +1150,6 @@ function paintTerrainWeights({
   color.needsUpdate = true
 }
 
-/**
- * Value noise in island-local, normalised coordinates.
- *
- * Everything else in the height field is a function of `(r, theta)`, and that
- * is why an island reads as a lathe-turned dome however many harmonics are
- * stacked on it: a radial field has no way to put a spur here and a hollow
- * twenty metres to the left of it. This is the cheapest thing that does.
- *
- * Arguments stay inside about ±13 (the disc is ±1.2 and the top octave scales
- * by ~11), so the sine hash has plenty of fractional phase left — unlike the
- * shader-side hashes, which had to be wrapped because world XZ reaches 2e4.
- */
-function reliefHash(x, y, s) {
-  const v = Math.sin(x * 127.1 + y * 311.7 + s * 74.7) * 43758.5453
-  return v - Math.floor(v)
-}
-
-function reliefNoise(x, y, s) {
-  const ix = Math.floor(x)
-  const iy = Math.floor(y)
-  const fx = x - ix
-  const fy = y - iy
-  const ux = fx * fx * (3 - 2 * fx)
-  const uy = fy * fy * (3 - 2 * fy)
-  const a = reliefHash(ix, iy, s)
-  const b = reliefHash(ix + 1, iy, s)
-  const c = reliefHash(ix, iy + 1, s)
-  const d = reliefHash(ix + 1, iy + 1, s)
-  return (a + (b - a) * ux) * (1 - uy) + (c + (d - c) * ux) * uy
-}
-
-/**
- * Multi-octave value noise, 0..1.
- *
- * The frequency ceiling is the mesh, not taste. SEGMENTS is 192, so the
- * coarsest vertex spacing — angular, at the rim — is 2π/192 ≈ 0.033 of the
- * radius. Three octaves at lacunarity 1.85 from a base of 1.9 puts the top
- * octave at 6.5 cycles per radius, i.e. a 0.154 wavelength and four and a half
- * samples across it. Anything faster stops being relief and becomes a zigzag
- * along the ring grid — the same failure that put a band of bright diamonds
- * round every waterline when a bearing harmonic went to 41.
- */
-function reliefFbm(x, y, s, octaves = 3) {
-  let f = 1
-  let amp = 1
-  let sum = 0
-  let norm = 0
-  for (let o = 0; o < octaves; o++) {
-    sum += amp * reliefNoise(x * f, y * f, s + o * 17.3)
-    norm += amp
-    f *= 1.85
-    amp *= 0.52
-  }
-  return sum / norm
-}
-
-/** smoothstep, clamped. */
-function smooth01(x, a, b) {
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a || 1e-6)))
-  return t * t * (3 - 2 * t)
-}
-
 export function buildIslandTerrainMesh(body) {
   const { archetype, surfaces, landform, radius, height, heightAt, cliffAt } = getIslandProfile(body)
 
@@ -1187,9 +1161,7 @@ export function buildIslandTerrainMesh(body) {
   const meadowSurface =
     archetype === 'scrub' || surfaces.body.tex === 'grass' || surfaces.crown.tex === 'grass'
 
-  // Land rings are denser near the coast (nonlinear t) so the bank that waves
-  // actually hit is not a handful of huge flat triangles. Outer land is forced
-  // into a steep bank that ends under mean water, then a short shelf dives away.
+  // Land rings are distributed smoothly across the island with subtle packing at coast
   const rings = RINGS
   const shelfRings = SHELF_RINGS
   const total = rings + shelfRings
@@ -1202,9 +1174,8 @@ export function buildIslandTerrainMesh(body) {
   const heights = []
   for (let i = 0; i <= total; i++) {
     const onLand = i <= rings
-    // Pack samples toward the waterline: t rises slowly at first, then packs.
     const u = onLand ? i / rings : 1
-    const t = onLand ? 1 - Math.pow(1 - u, 1.65) : 1
+    const t = onLand ? 1 - Math.pow(1 - u, RING_T) : 1
     const shelfK = onLand ? 0 : (i - rings) / shelfRings
     const rr = t + shelfK * shelfReach
     for (let s = 0; s <= SEGMENTS; s++) {
@@ -1320,8 +1291,8 @@ export function buildIslandMesh(body) {
 /** Cheap distant stand-in: same height field, few triangles, no props. */
 export function buildIslandLodMesh(body) {
   const { archetype, landform, radius, height, heightAt, cliffAt } = getIslandProfile(body)
-  const rings = 24
-  const segs = 48
+  const rings = 64
+  const segs = 128
   const positions = []
   const uvs = []
   const colors = []
@@ -1332,7 +1303,7 @@ export function buildIslandLodMesh(body) {
   for (let i = 0; i <= rings + 2; i++) {
     const onLand = i <= rings
     const u = onLand ? i / rings : 1
-    const t = onLand ? 1 - Math.pow(1 - u, 1.65) : 1
+    const t = onLand ? 1 - Math.pow(1 - u, RING_T) : 1
     const shelfK = onLand ? 0 : (i - rings) / 2
     const rr = t + shelfK * 0.04
     for (let s = 0; s <= segs; s++) {
@@ -1440,18 +1411,18 @@ function buildSeaStacks(rng, radius, height, heightAt, landform, cliffAt) {
  * Sits with its base at y = 0 so the caller only has to sink the foot.
  */
 function stackGeometry(rng, width, height) {
-  const sides = 9 + Math.floor(rng() * 5)
-  const rings = 12
+  const sides = 20 + Math.floor(rng() * 8)
+  const rings = 24
   const lean = range(rng, 0.02, 0.12)
   const leanDir = rng() * Math.PI * 2
   // Per-bearing profile so the column is not a lathe.
   const lobes = []
-  for (let i = 0; i < 3; i++) {
-    lobes.push({ freq: 1 + Math.floor(rng() * 3), phase: rng() * Math.PI * 2, amp: range(rng, 0.1, 0.3) })
+  for (let i = 0; i < 4; i++) {
+    lobes.push({ freq: 1 + Math.floor(rng() * 4), phase: rng() * Math.PI * 2, amp: range(rng, 0.08, 0.22) })
   }
   // Per-bed radius so harder layers stand proud.
   const beds = []
-  for (let i = 0; i <= rings; i++) beds.push(range(rng, 0.86, 1.14))
+  for (let i = 0; i <= rings; i++) beds.push(range(rng, 0.92, 1.08))
 
   const positions = []
   const indices = []
@@ -1459,7 +1430,7 @@ function stackGeometry(rng, width, height) {
     const v = i / rings
     // Taper, with an undercut notch where the swell works at it.
     const taper = 1 - Math.pow(v, 1.6) * range(rng, 0.35, 0.7)
-    const undercut = 1 - 0.3 * Math.exp(-Math.pow((v - 0.08) / 0.07, 2))
+    const undercut = 1 - 0.28 * Math.exp(-Math.pow((v - 0.08) / 0.07, 2))
     const y = v * height
     const cx = Math.cos(leanDir) * lean * height * v * v
     const cz = Math.sin(leanDir) * lean * height * v * v
@@ -1467,7 +1438,8 @@ function stackGeometry(rng, width, height) {
       const theta = (s / sides) * Math.PI * 2
       let k = 1
       for (const l of lobes) k += l.amp * Math.sin(theta * l.freq + l.phase + v * 1.5)
-      const r = width * taper * undercut * beds[i] * Math.max(0.35, k)
+      const crag = 1 + (Math.sin(theta * 6 + v * 14) + Math.cos(theta * 11 - v * 7)) * 0.035
+      const r = width * taper * undercut * beds[i] * Math.max(0.35, k) * crag
       positions.push(cx + Math.cos(theta) * r, y, cz + Math.sin(theta) * r)
     }
   }
@@ -1667,7 +1639,7 @@ function meshGroundY(r, theta, height, heightAt, landform = 'dome') {
   const sectorHalf = Math.PI / SEGMENTS
   const sectorMid = (segment + 0.5) / SEGMENTS * tau
   const chordScale = Math.cos(sectorHalf) / Math.cos(bearing - sectorMid)
-  const ringT = (index) => 1 - Math.pow(1 - index / RINGS, 1.65)
+  const ringT = (index) => 1 - Math.pow(1 - index / RINGS, RING_T)
   const ringRadius = (index) => ringT(index) * chordScale
   if (rr >= ringRadius(RINGS)) return COAST_FOOT_Y
   let ring = 0

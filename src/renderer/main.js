@@ -4218,6 +4218,11 @@ function warmScenePipelines() {
         warmCamera.updateMatrixWorld(true)
         await renderer.compileAsync(scene, warmCamera)
         if (i === 0) {
+          try {
+            weatherFx.preload(renderer)
+          } catch {
+            /* */
+          }
           sessionWorldReady = true
           markFirstView()
         }
@@ -5372,6 +5377,7 @@ async function startSessionInner(newGameState, { enterFlightMode = false } = {})
   }
   try {
     preloadHitImpactFx(renderer, scene, camera)
+    weatherFx.preload(renderer)
   } catch {
     /* non-fatal */
   }
@@ -6584,6 +6590,41 @@ const RADAR_MAX_ASTEROID_ROCKS = 48
 const _radarShipPos = new THREE.Vector3()
 const _radarRel = new THREE.Vector3()
 const _radarQuatInv = new THREE.Quaternion()
+const _radarContactPool = []
+let _radarContactPoolCount = 0
+const _radarContactsArray = []
+const _radarRockNearPool = []
+let _radarRockNearCount = 0
+const _radarNearScratch = []
+
+function allocRadarContact(x, y, z, kind, targeted) {
+  let c = _radarContactPool[_radarContactPoolCount]
+  if (!c) {
+    c = { x: 0, y: 0, z: 0, kind: '', targeted: false }
+    _radarContactPool.push(c)
+  }
+  _radarContactPoolCount++
+  c.x = x
+  c.y = y
+  c.z = z
+  c.kind = kind
+  c.targeted = targeted
+  return c
+}
+
+function allocRadarRock(wp, d, i, rockTargeted) {
+  let r = _radarRockNearPool[_radarRockNearCount]
+  if (!r) {
+    r = { wp: null, d: 0, i: 0, rockTargeted: false }
+    _radarRockNearPool.push(r)
+  }
+  _radarRockNearCount++
+  r.wp = wp
+  r.d = d
+  r.i = i
+  r.rockTargeted = rockTargeted
+  return r
+}
 
 /**
  * Heading-up radar: contacts rotate with the ship while the compass labels
@@ -6594,7 +6635,7 @@ function pushRadarContact(contacts, worldPos, kind, maxRange = RADAR_RANGE, targ
   _radarRel.fromArray(worldPos).sub(_radarShipPos)
   if (_radarRel.length() > maxRange) return false
   _radarRel.applyQuaternion(_radarQuatInv)
-  contacts.push({ x: _radarRel.x, y: _radarRel.y, z: _radarRel.z, kind, targeted: !!targeted })
+  contacts.push(allocRadarContact(_radarRel.x, _radarRel.y, _radarRel.z, kind, !!targeted))
   return true
 }
 
@@ -6602,7 +6643,10 @@ function computeRadarContacts() {
   const ship = gameState.player.ship
   _radarShipPos.fromArray(ship.position)
   _radarQuatInv.fromArray(ship.quaternion).invert()
-  const contacts = []
+  _radarContactPoolCount = 0
+  _radarRockNearCount = 0
+  _radarContactsArray.length = 0
+  const contacts = _radarContactsArray
   const t = currentTarget
 
   // Ships / NPCs (neutral yellow, hostile red) — one hostility context for all.
@@ -6633,7 +6677,7 @@ function computeRadarContacts() {
     if (body.kind === 'wreckField') {
       const rocks = getAsteroidRocks(body)
       if (!rocks?.length) continue
-      const near = []
+      _radarNearScratch.length = 0
       for (let i = 0; i < rocks.length; i++) {
         if (!isRockAlive(gameState, body.id, i)) continue
         const wp = asteroidWorldPosition(body, rocks[i])
@@ -6644,17 +6688,22 @@ function computeRadarContacts() {
         )
         const rockTargeted = t?.kind === 'asteroid' && t.fieldId === body.id && t.index === i
         if (d > RADAR_RANGE && !rockTargeted) continue
-        near.push({ wp, d, i, rockTargeted })
+        _radarNearScratch.push(allocRadarRock(wp, d, i, rockTargeted))
       }
-      near.sort((a, b) => a.d - b.d)
+      _radarNearScratch.sort((a, b) => a.d - b.d)
       // Always include locked rock even if beyond the nearest-N cap.
-      const picked = near.slice(0, RADAR_MAX_ASTEROID_ROCKS)
-      if (t?.kind === 'asteroid' && t.fieldId === body.id) {
-        const locked = near.find((n) => n.i === t.index)
-        if (locked && !picked.some((n) => n.i === locked.i)) picked.push(locked)
-      }
-      for (const n of picked) {
+      const pickedCount = Math.min(_radarNearScratch.length, RADAR_MAX_ASTEROID_ROCKS)
+      let lockedIncluded = false
+      for (let k = 0; k < pickedCount; k++) {
+        const n = _radarNearScratch[k]
+        if (n.rockTargeted) lockedIncluded = true
         pushRadarContact(contacts, n.wp, 'asteroid', Infinity, n.rockTargeted)
+      }
+      if (!lockedIncluded && t?.kind === 'asteroid' && t.fieldId === body.id) {
+        const locked = _radarNearScratch.find((n) => n.i === t.index)
+        if (locked) {
+          pushRadarContact(contacts, locked.wp, 'asteroid', Infinity, locked.rockTargeted)
+        }
       }
       continue
     }
@@ -8590,7 +8639,8 @@ function animate() {
 
   // Campaign clock tracks real time while not on the pause menu (asteroids, etc.).
   if (!paused) {
-    advanceGameClock(gameState)
+    gameState.simTime = (gameState.simTime ?? 0) + dt
+    gameState.simClockOriginMs = Date.now() - gameState.simTime * 1000
     // Every 4 sim-hours, reshuffle spatial anomalies galaxy-wide.
     if (gameState.galaxy) {
       const { refreshed } = tickGalaxyAnomalies(gameState.galaxy, gameState.simTime)

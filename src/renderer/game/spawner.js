@@ -398,17 +398,16 @@ const PIRATE_CHANCE = 0.25
 // so this stays decoupled from the galaxy/system shape.
 const ALIEN_MAX_CHANCE = 0.4
 
-/** Random point near the player, clear of body shells (and the sun). */
+/** Random point near the player on the water surface, clear of body shells. */
 function pickSpawnPositionNear(rng, playerPosition, bodies = null) {
   let position = null
   for (let attempt = 0; attempt < 48; attempt++) {
     const dist = range(rng, MIN_SPAWN_DISTANCE, MAX_SPAWN_DISTANCE)
     const theta = rng() * Math.PI * 2
-    const phi = Math.acos(2 * rng() - 1)
     const candidate = [
-      playerPosition[0] + dist * Math.sin(phi) * Math.cos(theta),
-      playerPosition[1] + dist * Math.cos(phi) * 0.3,
-      playerPosition[2] + dist * Math.sin(phi) * Math.sin(theta)
+      playerPosition[0] + dist * Math.sin(theta),
+      0,
+      playerPosition[2] + dist * Math.cos(theta)
     ]
     if (!positionOverlapsBodies(candidate, bodies ?? [])) {
       position = candidate
@@ -419,7 +418,7 @@ function pickSpawnPositionNear(rng, playerPosition, bodies = null) {
     position = clearPositionOfBodies(
       [
         playerPosition[0] + MAX_SPAWN_DISTANCE,
-        playerPosition[1],
+        0,
         playerPosition[2]
       ],
       bodies ?? []

@@ -27,6 +27,9 @@ export default defineConfig({
     resolve: {
       dedupe: ['three']
     },
+    css: {
+      postcss: {}
+    },
     build: {
       rollupOptions: {
         input: resolve('src/renderer/index.html')

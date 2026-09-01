@@ -2,23 +2,42 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   waveHeight,
+  waveHeightVisible,
   waveNormal,
   snapToSea,
   SEA_MAX_AMPLITUDE,
+  SEA_MAX_CREST,
   SEA_COMPILED,
   SEA_DETAIL_SLOPE,
-  seaParamAt
+  SEA_TIME_SCALE,
+  crestSharpen
 } from './sea.js'
 
 test('waveHeight is deterministic for the same inputs', () => {
   assert.equal(waveHeight(120, -40, 3.5), waveHeight(120, -40, 3.5))
 })
 
-test('waveHeight stays within the summed amplitude', () => {
+test('waveHeight stays within the sharpened crest bound', () => {
+  // Crest sharpening pulls peaks up toward SEA_MAX_CREST; troughs can still
+  // reach the raw -SEA_MAX_AMPLITUDE. So the bound is the sharpened max.
   for (let i = 0; i < 400; i++) {
     const h = waveHeight(i * 37.1, i * -19.7, i * 0.83)
-    assert.ok(Math.abs(h) <= SEA_MAX_AMPLITUDE + 1e-9, `height ${h} exceeded ${SEA_MAX_AMPLITUDE}`)
+    assert.ok(Math.abs(h) <= SEA_MAX_CREST + 1e-9, `height ${h} exceeded ${SEA_MAX_CREST}`)
   }
+})
+
+test('crest sharpening is monotonic and never lifts troughs', () => {
+  for (let i = 0; i < 200; i++) {
+    const h = (i / 100 - 1) * SEA_MAX_AMPLITUDE
+    const s = crestSharpen(h)
+    assert.ok(s >= h - 1e-9, `sharpening lowered ${h}`)
+    if (h <= 0) assert.ok(Math.abs(s - h) < 1e-9, `trough ${h} was moved`)
+  }
+  // A full crest sharpens toward (1 + k) * A.
+  assert.ok(
+    Math.abs(crestSharpen(SEA_MAX_AMPLITUDE) - SEA_MAX_CREST) < 1e-9,
+    'max crest must reach SEA_MAX_CREST'
+  )
 })
 
 test('waveHeight actually moves with time', () => {
@@ -63,37 +82,73 @@ test('snapToSea tolerates an entity with no velocity array', () => {
   assert.equal(buoy.position[1], waveHeight(10, 10, 1))
 })
 
-test('the table the ocean shader reads reproduces waveHeight exactly', () => {
-  // SEA_COMPILED is the shared band: render/oceanNodeMaterial.js sums these
-  // same numbers on the GPU, and waveHeight sums them here for buoyancy. This
-  // re-derives the hull sample straight off the exported table, so any edit
-  // that leaves the two summing different things fails before a boat visibly
-  // hovers over the water.
-  const fromTable = (x, z, t) => {
-    const q = seaParamAt(x, z, t)
-    return SEA_COMPILED.reduce(
-      (h, w) => h + w.bAmp * Math.sin((w.dx * q.x + w.dz * q.z) * w.k - t * w.omega),
-      0
+test('buoyancy and visible surfaces reconstruct exactly from the shared table', () => {
+  // SEA_COMPILED is the shared band. `waveHeight` (hull buoyancy) sums `bAmp`
+  // — short chop faded — while the ocean shader's vertex stage displaces the
+  // full `amp` spectrum, and `waveHeightVisible` is its CPU twin (wake, spray
+  // and floating structures ride it). Each CPU function is re-derived straight
+  // off the exported table, so any edit that changes what either of them sums
+  // — or a component whose `amp`/`bAmp` the shader would read differently —
+  // fails before a boat visibly hovers or sinks in the water you can see.
+  const fromTable = (x, z, t) => ({
+    buoyancy: crestSharpen(
+      SEA_COMPILED.reduce(
+        (h, w) => h + w.bAmp * Math.sin((w.dx * x + w.dz * z) * w.k - t * w.omega),
+        0
+      )
+    ),
+    visible: crestSharpen(
+      SEA_COMPILED.reduce(
+        (h, w) => h + w.amp * Math.sin((w.dx * x + w.dz * z) * w.k - t * w.omega),
+        0
+      )
     )
-  }
+  })
   for (const [x, z, t] of [[0, 0, 0], [412, -88, 6.25], [-3300, 1750, 40]]) {
+    const re = fromTable(x, z, t)
     assert.ok(
-      Math.abs(fromTable(x, z, t) - waveHeight(x, z, t)) < 1e-12,
-      `shader table and buoyancy disagree at ${x},${z},${t}`
+      Math.abs(re.buoyancy - waveHeight(x, z, t)) < 1e-12,
+      `buoyancy table and waveHeight disagree at ${x},${z},${t}`
+    )
+    assert.ok(
+      Math.abs(re.visible - waveHeightVisible(x, z, t)) < 1e-12,
+      `visible table and waveHeightVisible disagree at ${x},${z},${t}`
     )
   }
+
+  // The fade is a deliberate split, not a coincidence: every component is
+  // faded (bAmp <= amp), the short end is faded hard, and the two surfaces
+  // genuinely differ somewhere — otherwise a hull drifting from the visible
+  // water could never be detected, and the wake's foam would sit on the wrong
+  // surface.
+  let fadedCount = 0
+  for (const w of SEA_COMPILED) {
+    assert.ok(w.bAmp <= w.amp + 1e-12, `${w.len}m component: buoyancy above visible amp`)
+    assert.ok(w.bAmp > 0, `${w.len}m component: buoyancy amplitude must be positive`)
+    if (w.bAmp < w.amp - 1e-9) fadedCount++
+  }
+  assert.ok(fadedCount >= 1, 'no component is buoyancy-faded — split is gone')
+  // Somewhere the two surfaces genuinely differ (the sin phases are irrational,
+  // so a finite scan is enough) — otherwise a hull drifting from the visible
+  // water could never be detected, and the wake's foam would sit on the wrong
+  // surface.
+  let differ = false
+  for (let i = 1; i <= 40 && !differ; i++) {
+    differ = waveHeightVisible(i * 13.7, i * 7.9, i * 0.31) !== waveHeight(i * 13.7, i * 7.9, i * 0.31)
+  }
+  assert.ok(differ, 'visible and buoyancy are identical everywhere — fade is inert')
 })
 
 test('the shared band carries every product the shader needs, finite', () => {
-  assert.ok(SEA_COMPILED.length >= 8, 'spectrum lost components')
+  assert.ok(SEA_COMPILED.length >= 4, 'spectrum lost components')
   for (const w of SEA_COMPILED) {
-    for (const key of ['len', 'dx', 'dz', 'k', 'omega', 'amp', 'qa', 'ak', 'qak', 'bAmp']) {
+    for (const key of ['len', 'dx', 'dz', 'k', 'omega', 'amp', 'ak', 'bAmp']) {
       assert.ok(Number.isFinite(w[key]), `${key} is not finite`)
     }
     // Unit bearing — the shader relies on this to build tangents.
     assert.ok(Math.abs(Math.hypot(w.dx, w.dz) - 1) < 1e-12)
     // Deep-water dispersion, not a hardcoded speed.
-    assert.ok(Math.abs(w.omega - Math.sqrt(9.81 * w.k)) < 1e-9)
+    assert.ok(Math.abs(w.omega - Math.sqrt(9.81 * w.k) * SEA_TIME_SCALE) < 1e-9)
   }
 })
 
@@ -105,7 +160,7 @@ test('the shader-only detail band contributes slope but never height', () => {
     assert.equal(w.amp, undefined, 'detail components must not carry an amplitude')
     assert.ok(w.slope > 0 && w.slope < 0.2, 'detail slope out of sane range')
     assert.ok(Math.abs(Math.hypot(w.dx, w.dz) - 1) < 1e-12)
-    assert.ok(Math.abs(w.omega - Math.sqrt(9.81 * w.k)) < 1e-9)
+    assert.ok(Math.abs(w.omega - Math.sqrt(9.81 * w.k) * SEA_TIME_SCALE) < 1e-9)
   }
   // Total added slope stays well under the point where normals invert.
   const total = SEA_DETAIL_SLOPE.reduce((s, w) => s + w.slope, 0)

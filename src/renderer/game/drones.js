@@ -636,7 +636,7 @@ function lookQuat(dir) {
   const sy = Math.sin(yaw * 0.5)
   const cp = Math.cos(pitch * 0.5)
   const sp = Math.sin(pitch * 0.5)
-  const q = [sy * cp, cy * sp, sy * sp, cy * cp]
+  const q = [cy * sp, sy * cp, -sy * sp, cy * cp]
   if (!Number.isFinite(q[0] + q[1] + q[2] + q[3])) return [0, 0, 0, 1]
   return q
 }

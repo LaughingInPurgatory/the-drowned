@@ -523,9 +523,10 @@ export function createSkyNodeMaterial() {
     })
 
     // --- 8. Below the waterline -------------------------------------------
-    // The sea covers this on screen, but the PMREM bake samples it for the
-    // underside of every hull. Dull, not black, and following the time of day.
-    c.assign(mix(uHorizon.mul(0.22), c, smoothstep(-0.14, 0.02, elev)))
+    // Seamlessly blend into the exact horizon / fog color so the sky never cuts off
+    // or shows a dark band before or at the sea horizon line.
+    const belowWater = smoothstep(float(-0.35), float(0.0), elev)
+    c.assign(mix(uHorizon, c, belowWater))
 
     return c
   })()
